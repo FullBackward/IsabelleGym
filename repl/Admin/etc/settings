@@ -1,0 +1,2 @@
+# -*- shell-script -*- :mode=shellscript:
+ISABELLE_REPL_ADMIN_HOME="$COMPONENT"

@@ -1,0 +1,6 @@
+(* :mode=isabelle-options: *)
+
+section "REPL/Admin"
+
+option repl_admin_prefix : string = ""
+  -- "line prefix for output of arguments"
