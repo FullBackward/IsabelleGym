@@ -2,6 +2,10 @@
 
 A comprehensive agent interface system for Isabelle/HOL theorem proving with integrated support for Monte Carlo Tree Search (MCTS), reinforcement learning, and training data collection. The project is based on unpublished work by Milan Tom from the University of Cambridge, and updated by Zijing Li from the University of Edinburgh.
 
+##
+
+This is a working branch by Xuanwei Ren from the University of Edinburgh on improving previous version of IsabelleGym.
+
 ## Overview
 
 This system provides a unified interface for developing and deploying theorem proving agents in the IsabelleGym environment. It features multi-session support, training data collection, proof visualization, and seamless integration with various proving strategies.
