@@ -1,6 +1,6 @@
 # IsabelleGym Agent System
 
-A comprehensive agent interface system for Isabelle/HOL theorem proving with integrated support for Monte Carlo Tree Search (MCTS), reinforcement learning, and training data collection.
+A comprehensive agent interface system for Isabelle/HOL theorem proving with integrated support for Monte Carlo Tree Search (MCTS), reinforcement learning, and training data collection. The project is based on unpublished work by Milan Tom from the University of Cambridge, and updated by Zijing Li from the University of Edinburgh.
 
 ## Overview
 
