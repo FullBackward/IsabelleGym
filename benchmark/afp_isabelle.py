@@ -6,7 +6,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from .afp_samples import AFP_SESSIONS
+from benchmark.afp_samples import AFP_SESSIONS
 
 default_timings_save_location = Path(__file__).parent / "isabelle_afp_timings.csv"
 parser = argparse.ArgumentParser(description="AFP Isabelle benchmark tool")

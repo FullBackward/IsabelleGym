@@ -8,7 +8,7 @@ from tqdm import tqdm
 
 from gym.isabelle_gym import IsabelleGym
 
-from .afp_samples import AFP_SESSIONS
+from benchmark.afp_samples import AFP_SESSIONS
 
 default_timings_save_location = Path(__file__).parent / "isabelle_gym_afp_timings.csv"
 

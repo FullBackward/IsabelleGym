@@ -125,21 +125,44 @@ class IsabelleClient:
         return self._get_active_backend().vector_step(isar_strings)
 
     def cleanup(self) -> None:
-        """Cleans up the Scala REPL"""
-        if (
-            self.repl_backend_gateway_process_init
-            and not self.repl_backend_gateway_process.has_terminated()
-        ):
-            if self.use_multi_session:
-                for session_id in list(self.sessions.keys()):
-                    self.close_session(session_id)
-            else:
+        """Cleans up the Scala REPL with proper shutdown sequence"""
+    
+        if not (self.repl_backend_gateway_process_init 
+                and not self.repl_backend_gateway_process.has_terminated()):
+            return
+    
+        print("[Cleanup] Starting Isabelle cleanup sequence...")
+    
+        # Step 1: Close all sessions/backends gracefully
+        if self.use_multi_session:
+            print(f"[Cleanup] Closing {len(self.sessions)} sessions...")
+            for session_id in list(self.sessions.keys()):
                 try:
-                    self.repl_backend.exit()
-                except:
-                    pass
-            
+                    self.close_session(session_id)
+                    print(f"  ✓ Closed session: {session_id}")
+                except Exception as e:
+                    print(f"  ⚠ Error closing session {session_id}: {e}")
+        else:
+            print("[Cleanup] Closing backend...")
+            try:
+                self.repl_backend.reset()
+                print("  ✓ Backend exited")
+            except Exception as e:
+                print(f"  ⚠ Error closing backend: {e}")
+    
+        # Step 2: CRITICAL - Give backends time to cleanup
+        print("[Cleanup] Waiting for backends to finish cleanup...")
+        time.sleep(0.5)  # 500ms grace period
+    
+        # Step 3: Terminate gateway process
+        print("[Cleanup] Terminating gateway process...")
+        try:
             self.repl_backend_gateway_process.terminate()
+            print("  ✓ Gateway terminated")
+        except Exception as e:
+            print(f"  ⚠ Gateway termination warning: {e}")
+    
+        print("[Cleanup] Cleanup complete")
 
     def get_cache_stats(self) -> dict:
         """Returns the cache statistics."""
@@ -234,10 +257,10 @@ class IsabelleClient:
             self.current_session_id = None
         
         session_info = self.sessions.pop(session_id)
-        try:
-            session_info['backend'].exit()
-        except:
-            pass
+        #try:
+        #    session_info['backend'].exit()
+        #except:
+        #    pass
         
         print(f"close Session: {session_id}")
         return True

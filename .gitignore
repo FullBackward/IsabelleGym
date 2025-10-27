@@ -249,3 +249,19 @@ isabelle/Admin/jenkins/ci-extras/target/
 
 # Isabelle Mercurial
 isabelle/.hg/dirstate
+
+# Archive of Formal Proofs (AFP)
+afp
+
+# Ignore temp files
+**/*(temp)
+**/*(temp)/
+**/*(temp).*
+**/*timings*.*
+
+# Ignore build artifacts from Metals and Bloop
+.metals/
+.metals/*
+.bloop/
+project/metals.sbt
+metals.sbt

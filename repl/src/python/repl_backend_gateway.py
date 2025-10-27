@@ -216,20 +216,44 @@ class ReplBackendGatewayProcess:
     
     def terminate(self) -> None:
         """
-        Terminate the Scala REPL gateway and the gateway process, ensuring child
-        processes are also killed.
-        """
-        self.gateway.shutdown()
-
-        pgid = os.getpgid(self.process.pid)
-        os.killpg(pgid, signal.SIGTERM)
-
+    Gracefully terminate the Scala REPL gateway.
+    
+    FIXED: Proper shutdown sequence without process group signals
+    """
+    
+        # Step 1: Shutdown Py4J gateway (tells Scala we're done)
+        try:
+            self.gateway.shutdown()
+            print("✓ Gateway shutdown initiated")
+        except Exception as e:
+            print(f"⚠ Gateway shutdown warning: {e}")
+    
+        # Step 2: Give Isabelle time to cleanup gracefully
+        # This is CRITICAL - Isabelle needs time to cleanup threads
+        time.sleep(0.5)  # 500ms for graceful cleanup
+    
+        # Step 3: Politely ask process to terminate (SIGTERM to process, not group)
+        try:
+            self.process.terminate()  # Sends SIGTERM to single process
+            print("✓ Terminate signal sent to gateway process")
+        except Exception as e:
+            print(f"⚠ Terminate warning: {e}")
+    
+        # Step 4: Wait for graceful shutdown (with timeout)
         wait_start_time = time.time()
-        while time.time() - wait_start_time < 1:
+        wait_timeout = 3.0  # Increased from 1s to 3s
+    
+        while time.time() - wait_start_time < wait_timeout:
             if self.process.poll() is not None:
+                print(f"✓ Gateway process exited cleanly after {time.time() - wait_start_time:.2f}s")
                 return
             time.sleep(0.1)
-
-        print("Gateway process refused to terminate. Forcefully killing...")
-        os.killpg(pgid, signal.SIGKILL)
-        self.process.wait(timeout=1)
+    
+        # Step 5: Force kill only if graceful shutdown failed
+        print(f"⚠ Gateway process did not exit after {wait_timeout}s, force killing...")
+        try:
+            self.process.kill()  # SIGKILL to single process
+            self.process.wait(timeout=2)
+            print("✓ Gateway process force killed")
+        except Exception as e:
+            print(f"⚠ Force kill warning: {e}")

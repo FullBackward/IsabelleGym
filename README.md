@@ -10,6 +10,28 @@ This is a working branch by Xuanwei Ren from the University of Edinburgh on impr
 
 This system provides a unified interface for developing and deploying theorem proving agents in the IsabelleGym environment. It features multi-session support, training data collection, proof visualization, and seamless integration with various proving strategies.
 
+## Requirements
+
+- Python 3.8+
+- JVM 17+
+- Isabelle/HOL system
+- IsabelleGym environment
+- Optional: Visualization dependencies for enhanced display
+
+## File Structure
+
+```
+gym/
+├── isabelle_agent_interface.py    # Main agent interface
+├── mcts_agent.py                  # MCTS implementation
+├── training_data_system.py        # Data collection system
+├── proof_visualizer.py            # Visualization tools
+├── isabelle_gym.py               # Core gym interface
+└── success_checker.py            # Tactic success verification
+
+```
+The original IsabelleGym project which is the foundation of this project can be found from IsabelleGym.zip, also with the thesis.
+
 ## Deployment
 ### 1. Use install.sh
 chmod +x install.sh
@@ -158,24 +180,30 @@ Interactive proof state visualization and session management.
   - Session summary generation
   - Data export to JSON format
 
-## File Structure
+## LRU and Session Pool Mechanism
+tbc
 
-```
-gym/
-├── isabelle_agent_interface.py    # Main agent interface
-├── mcts_agent.py                  # MCTS implementation
-├── training_data_system.py        # Data collection system
-├── proof_visualizer.py            # Visualization tools
-├── isabelle_gym.py               # Core gym interface
-└── success_checker.py            # Tactic success verification
+## Performance Benchmark
 
-```
-The original IsabelleGym project which is the foundation of this project can be found from IsabelleGym.zip, also with the thesis.
-## Requirements
+Due to the nature of the session-based design of IsabelleGym, the performance benchmark is separated into two parts: proving performance, to measure the cpu time used for process; loading performance, to measure the average loading time of a single session.
 
-- Python 3.8+
-- JVM 17+
-- Isabelle/HOL system
-- IsabelleGym environment
-- Optional: Visualization dependencies for enhanced display
+### Process Benchmark
+The previous work only provided benchmark for process time on selected theories from Archieve of Formal Proves (AFP).
 
+These benchmarks are ran in docker on a Macbook Air with Apple M2 chip with resources of 8 CPUs and 12GB memory. **All benchmarks are average of three independent tests. All figures are rounded up to cloest integer.** _If CPU overheating or Out Of Memory (OOM) problem occours, the figure can double or triple._
+
+| Theory               | Average Process Time (s) |
+| -------------------- | ------------------------ |
+| FOL_Harrison         | 77                       |
+| Finite_Map_Extras    | 16                       |
+| Finite_Automata_HF   | 18                       |
+
+### Loading Benchmark
+In the last iteration of IsabelleGym, LRU cache was implemented. In this benchmark, we put the CPU time of a single generation of IsabelleGym session and the generation of three sessions through: independent generation, simple session pool and LRU cache.
+
+| Theory                              | Process Time (s) | Average Time per session (s) |
+| ----------------------------------- | ---------------- | ---------------------------- |
+| Single generation (1 session)       | 58               | 58                           |
+| Independent generation (3 sessions) | 185              | 62                           |
+| Simple Session Pool (3 sessions)    | 60               | 20                           |
+| LRU Cache (3 sessions)              | 60               | 20                           |
