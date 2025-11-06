@@ -83,7 +83,11 @@ class IsabelleGym:
 
     def step(self, isar_string: str) -> ReplResult:
         """Adds the given Isar string to the current theory."""
-        return self.isabelle_client.isar_snippet(isar_string)
+        #if(isar_string.strip() == ""):
+            #return ReplResult()
+        result = self.isabelle_client.isar_snippet(isar_string)
+        #print(result.separated_output, result.total_output)
+        return result
 
     def open_subgoals(self) -> list[str]:
         """Returns the list of currently open subgoals."""

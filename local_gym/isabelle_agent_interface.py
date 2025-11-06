@@ -7,10 +7,10 @@ from typing import List, Optional, Dict, Any, Tuple, Union
 from enum import Enum
 
 
-from gym.isabelle_gym import IsabelleGym
-from gym.success_checker import is_tactic_successful, is_syntax_successful, get_error_message
+from local_gym.isabelle_gym import IsabelleGym
+from local_gym.success_checker import is_tactic_successful, is_syntax_successful, get_error_message
 
-
+"""
 try:
     from gym.proof_visualizer import ProofVisualizer, TacticResult
     from gym.training_data_system import TrainingDataCollector
@@ -22,6 +22,12 @@ except ImportError:
     TrainingDataCollector = None
     VISUALIZATION_AVAILABLE = False
     TRAINING_DATA_AVAILABLE = False
+"""
+
+from local_gym.proof_visualizer import ProofVisualizer, TacticResult
+#from gym.training_data_system import TrainingDataCollector
+VISUALIZATION_AVAILABLE = True
+#TRAINING_DATA_AVAILABLE = False
 
 
 class ProofStrategy(Enum):
@@ -222,8 +228,8 @@ class IsabelleAgent(ABC):
         
         # training data collector
         self.training_collector = None
-        if TRAINING_DATA_AVAILABLE:
-            self.training_collector = TrainingDataCollector(agent_name)
+        #if TRAINING_DATA_AVAILABLE:
+        #    self.training_collector = TrainingDataCollector(agent_name)
     
     @abstractmethod
     def recommend_tactic(self, 
@@ -284,6 +290,7 @@ class IsabelleAgent(ABC):
             if not is_syntax_successful(initial_result):
                 error_msg = f"Failed to start theorem: {get_error_message(initial_result)}"
                 if visualizer:
+                    visualizer.display_tactics_history()
                     visualizer.end_session(success=False)
                 return self._create_failure_result(start_time, error_msg, 0, 0)
             
@@ -291,6 +298,7 @@ class IsabelleAgent(ABC):
             if not initial_subgoals:
                 error_msg = "No subgoals found after theorem statement"
                 if visualizer:
+                    visualizer.display_tactics_history()
                     visualizer.end_session(success=False)
                 return self._create_failure_result(start_time, error_msg, 0, 0)
             
@@ -312,18 +320,21 @@ class IsabelleAgent(ABC):
                 if time.time() - start_time > timeout:
                     error_msg = f"Proof timeout after {timeout}s"
                     if visualizer:
+                        visualizer.display_tactics_history()
                         visualizer.end_session(success=False)
                     return self._create_timeout_result(start_time, step, context, error_msg)
                 
                 if context.is_complete:
                     self.total_proofs_succeeded += 1
                     if visualizer:
+                        visualizer.display_tactics_history()
                         visualizer.end_session(success=True)
                     return self._create_success_result(start_time, step, context, session_info)
                 
                 if context.proof_depth >= max_depth:
                     error_msg = f"Maximum proof depth {max_depth} reached"
                     if visualizer:
+                        visualizer.display_tactics_history()
                         visualizer.end_session(success=False)
                     return self._create_failure_result(start_time, error_msg, step, context.proof_depth)
                 
@@ -337,6 +348,7 @@ class IsabelleAgent(ABC):
                 if target_goal_id < 0:
                     error_msg = "No available goals to work on"
                     if visualizer:
+                        visualizer.display_tactics_history()
                         visualizer.end_session(success=False)
                     return self._create_failure_result(start_time, error_msg, step, context.proof_depth)
                 
@@ -349,6 +361,7 @@ class IsabelleAgent(ABC):
                 if not tactic:
                     error_msg = "No more tactics available"
                     if visualizer:
+                        visualizer.display_tactics_history()
                         visualizer.end_session(success=False)
                     return self._create_failure_result(start_time, error_msg, step, context.proof_depth)
                 
@@ -407,6 +420,7 @@ class IsabelleAgent(ABC):
         except Exception as e:
             error_msg = f"Unexpected error during proof: {str(e)}"
             if visualizer:
+                visualizer.display_tactics_history()
                 visualizer.end_session(success=False)
             return self._create_failure_result(start_time, error_msg, 0, 0)
     

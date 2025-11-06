@@ -1,4 +1,4 @@
-from gym.isabelle_gym import IsabelleGym
+from local_gym.isabelle_gym import IsabelleGym
 
 from .multi_agent_isabelle_gym import MultiAgentIsabelleGym
 

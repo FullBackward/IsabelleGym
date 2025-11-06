@@ -3,7 +3,7 @@
 import atexit
 import time
 
-from .repl_backend_gateway import EnvStateID, ReplBackendGatewayProcess, ReplResult
+from .repl_backend_gateway import EnvStateID, ReplBackendGatewayProcess, ReplResult, Outputs
 
 
 class IsabelleClient:
@@ -70,6 +70,8 @@ class IsabelleClient:
 
     def isar_snippet(self, isar_string: str) -> ReplResult:
         """Adds the given Isar string to the current theory."""
+        if(isar_string.strip() == ""):
+            return ReplResult(Outputs("", ""), "Empty input")
         return self._get_active_backend().step(isar_string)
 
     def get_current_thy_name(self) -> str:

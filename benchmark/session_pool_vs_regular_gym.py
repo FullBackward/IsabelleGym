@@ -4,8 +4,8 @@ import sys
 import time
 from pathlib import Path
 
-from gym.isabelle_gym import IsabelleGym
-from gym.session_pool import FastIsabelleGym
+from local_gym.isabelle_gym import IsabelleGym
+from local_gym.session_pool import FastIsabelleGym
 
 default_timings_save_location = Path(__file__).parent / "isabelle_fast_gym_timings.csv"
 

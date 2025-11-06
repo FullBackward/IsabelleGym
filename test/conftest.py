@@ -3,7 +3,7 @@
 from typing import Optional
 import pytest
 
-from gym.isabelle_gym import IsabelleGym
+from local_gym.isabelle_gym import IsabelleGym
 from repl.src.python.isabelle_repl import IsabelleRepl
 
 

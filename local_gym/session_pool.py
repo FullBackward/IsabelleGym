@@ -13,7 +13,7 @@ Usage:
 import queue
 import threading
 from typing import Optional
-from gym.isabelle_gym import IsabelleGym
+from local_gym.isabelle_gym import IsabelleGym
 from repl.src.python.repl_backend_gateway import ReplBackendGatewayProcess
 
 # Global resources (shared across all sessions)

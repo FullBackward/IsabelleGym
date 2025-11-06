@@ -9,7 +9,7 @@ from test.test_repl import ReplProgram, assert_repl_program_has_expected_results
 from expecttest import Expect
 from pytest import CaptureFixture
 
-from gym.isabelle_gym import IsabelleGym
+from local_gym.isabelle_gym import IsabelleGym
 from repl.src.python.isabelle_repl import IsabelleRepl, ReplMetaCommand
 
 CommonProgramCommand = list[str]

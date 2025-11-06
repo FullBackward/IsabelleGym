@@ -6,8 +6,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Any
 from enum import Enum
-from gym.isabelle_gym import IsabelleGym
-from gym.isabelle_agent_interface import IsabelleAgent, ProofResult, ProofContext
+from local_gym.isabelle_gym import IsabelleGym
+from local_gym.isabelle_agent_interface import IsabelleAgent, ProofResult, ProofContext
 
 
 class CollaborationMode(Enum):
@@ -180,7 +180,7 @@ class MultiSessionAgentFramework:
     
     def _create_proof_context(self, subgoals: List[str]):
         """Create ProofContext for agent use"""
-        from gym.isabelle_agent_interface import ProofContext
+        from local_gym.isabelle_agent_interface import ProofContext
         return ProofContext(
             subgoals=subgoals,
             priorities=[1.0] * len(subgoals),

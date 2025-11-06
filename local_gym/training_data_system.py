@@ -6,9 +6,9 @@ from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Set, Union
-from gym.isabelle_agent_interface import IsabelleAgent, ProofContext, ProofResult
-from gym.isabelle_gym import IsabelleGym
-from gym.success_checker import is_syntax_successful, get_error_message
+from local_gym.isabelle_agent_interface import IsabelleAgent, ProofContext, ProofResult
+from local_gym.isabelle_gym import IsabelleGym
+from local_gym.success_checker import is_syntax_successful, get_error_message
 
 @dataclass
 class TacticInvocation:

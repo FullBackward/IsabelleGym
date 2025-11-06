@@ -192,18 +192,56 @@ The previous work only provided benchmark for process time on selected theories 
 
 These benchmarks are ran in docker on a Macbook Air with Apple M2 chip with resources of 8 CPUs and 12GB memory. **All benchmarks are average of three independent tests. All figures are rounded up to cloest integer.** _If CPU overheating or Out Of Memory (OOM) problem occours, the figure can double or triple._
 
-| Theory               | Average Process Time (s) |
-| -------------------- | ------------------------ |
-| FOL_Harrison         | 77                       |
-| Finite_Map_Extras    | 16                       |
-| Finite_Automata_HF   | 18                       |
+| Theory             | Effective Lines | Average Process Time (s) |
+| ------------------ | --------------- | ------------------------ |
+| FOL_Harrison       | 2869            | 77                       |
+| Finite_Map_Extras  | 650             | 16                       |
+| Finite_Automata_HF | 1116            | 18                       |
 
 ### Loading Benchmark
 In the last iteration of IsabelleGym, LRU cache was implemented. In this benchmark, we put the CPU time of a single generation of IsabelleGym session and the generation of three sessions through: independent generation, simple session pool and LRU cache.
 
-| Theory                              | Process Time (s) | Average Time per session (s) |
-| ----------------------------------- | ---------------- | ---------------------------- |
-| Single generation (1 session)       | 58               | 58                           |
-| Independent generation (3 sessions) | 185              | 62                           |
-| Simple Session Pool (3 sessions)    | 60               | 20                           |
-| LRU Cache (3 sessions)              | 60               | 20                           |
+| Theory                  | Sessions   | Process Time (s) | Average Time per session (s) |
+| ------------------------| ---------- | ---------------- | ---------------------------- |
+| Single generation       | 1          | 58               | 58                           |
+| Independent generation  | 3          | 185              | 62                           |
+| Simple Session Pool     | 3          | 60               | 20                           |
+| LRU Cache               | 3          | 60               | 20                           |
+
+## Current issues
+- Isabelle directory for docker is overwrote by Mount
+  - Solved, redirected isabelle dir
+- Close & cleanup procedure crashed.
+  - Solved, but error message from Isabelle itself cannot be removed.
+- LRU efficiency benchmark script does not exist.
+  - Solved, created and benchmark recorded
+- AFP components not added
+  - In progress, creating afp init script
+- Due to missing component, process benchmark is not recreated
+  - In progress
+- Sledgehammer function missing
+  - Unsolved
+- Repl Backend does not support other imports
+  - Unsolved, need to refine repo backend create functions
+- This guy wrote a circular import, how?
+  - Unsolved
+
+### New design, workflow from install to use
+1. Run docker/install.sh
+  - Has isabelle, pip ready
+2. Download afp, add afp via afp_init.py
+  - Has afp as component ready
+3. Start server/gym, double option avaliable
+
+### Server idea
+1. Server start with 1 default HOL.Main sessions in session pool
+2. Server has shared local import memory for .thy artifacts
+3. Server take new request from clients with header: theory name, imports, strategy
+  - Strategies includes: single session, multi-collaberate, multi-competitive
+
+## Priority
+- Session thy
+- Server side whole proof verification
+- Implement and documentation
+- Bugs above
+- Scala level optimisation on isabelle heap sharing

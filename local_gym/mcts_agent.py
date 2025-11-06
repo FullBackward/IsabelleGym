@@ -6,9 +6,9 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any
-from gym.isabelle_agent_interface import IsabelleAgent, ProofContext, ProofResult
-from gym.isabelle_gym import IsabelleGym
-from gym.success_checker import is_syntax_successful, get_error_message
+from local_gym.isabelle_agent_interface import IsabelleAgent, ProofContext, ProofResult
+from local_gym.isabelle_gym import IsabelleGym
+from local_gym.success_checker import is_syntax_successful, get_error_message
 
 @dataclass
 class MCTSProofContext(ProofContext):

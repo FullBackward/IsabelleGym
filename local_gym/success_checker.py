@@ -1,7 +1,7 @@
 """ Correct success evaluation helper functions. """
 from typing import List, Optional
 from repl.src.python.repl_backend_gateway import ReplResult
-from gym.isabelle_gym import IsabelleGym
+from local_gym.isabelle_gym import IsabelleGym
 
 def has_error_output(result: ReplResult) -> bool:
     """ check if ReplResult has error output """
