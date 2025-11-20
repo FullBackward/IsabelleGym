@@ -336,7 +336,7 @@ class Session_Manager(show_states: Boolean, enable_cache: Boolean = false, max_c
   def release_session_to_cache(session_data: Session_Data, theories: List[String]): Unit = {
     release_session(session_data, theories)
   }
-  def get_session_with_cache(initial_thys: List[String]): Session_Data = {
+  def get_session_with_cache(initial_thys: List[String], field: String = "HOL"): Session_Data = {
     val key = get_cache_key(initial_thys)
     
     try_get_from_cache(key) match {
@@ -345,13 +345,13 @@ class Session_Manager(show_states: Boolean, enable_cache: Boolean = false, max_c
         session_data 
       case None =>
         println(s"Cache miss for theories: ${key.mkString(", ")}. Creating new session.")
-        val session_data = create_new_session_internal(initial_thys)
+        val session_data = create_new_session_internal(initial_thys, field)
         put_to_cache(key, session_data) 
         session_data
     }
   }
 
-  private def create_new_session_internal(initial_thys: List[String]): Session_Data = {
+  private def create_new_session_internal(initial_thys: List[String], field: String = "HOL"): Session_Data = {
     val session_delay_options_to_minimise =
       List("headless_consolidate_delay", "headless_check_delay", "headless_nodes_status_delay")
     val min_delay = "0.1"
@@ -359,7 +359,7 @@ class Session_Manager(show_states: Boolean, enable_cache: Boolean = false, max_c
       ("show_states", show_states.toString) ::
         session_delay_options_to_minimise.map(option_name => (option_name, min_delay))
     val session_options = session_option_pairs.map { case (name, value) => s"${name}=${value}" }
-    val session_id = Server_Utils.start_session(server_info, server, session_options)
+    val session_id = Server_Utils.start_session(server_info, server, session_options, field)
     running_sessions.change(_ += session_id)
     val session = server.the_session(session_id)
     if (initial_thys.nonEmpty) {
@@ -370,11 +370,11 @@ class Session_Manager(show_states: Boolean, enable_cache: Boolean = false, max_c
     Session_Data(session_id, session)
   }
   
-  def get_new_session(initial_thys: List[String]): Session_Data = {
+  def get_new_session(initial_thys: List[String], field: String = "HOL"): Session_Data = {
     if (enable_cache) {
-      get_session_with_cache(initial_thys)
+      get_session_with_cache(initial_thys, field)
     } else {
-      create_new_session_internal(initial_thys)
+      create_new_session_internal(initial_thys, field)
     }
   }
 

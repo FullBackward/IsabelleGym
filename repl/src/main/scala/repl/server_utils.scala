@@ -42,14 +42,14 @@ object Server_Utils {
       case false => error(s"Failed to stop server ${server_info.name}.")
     }
 
-  def start_session(server_info: Server.Info, server: Server, options: List[String]): UUID.T = {
+  def start_session(server_info: Server.Info, server: Server, options: List[String], field: String = "HOL"): UUID.T = {
 
     val session_start_json = withServerContext(server_info, server) { context =>
 
       val result_cell = Synchronized[Option[JSON.Object.T]](None)
       Isabelle_Thread.fork(name = "session_start") {
         val args = Server_Commands.Session_Start.Args(
-          build = Server_Commands.Session_Build.Args(session = "HOL", options = options))
+          build = Server_Commands.Session_Build.Args(session = field, options = options))
         val (res, entry) =
           Server_Commands.Session_Start.command(
             args, progress = context.progress(), log = context.server.log)

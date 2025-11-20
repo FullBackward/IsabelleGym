@@ -11,6 +11,7 @@ RUN apt-get update && apt-get install -y \
     git \
     tar \
     gzip \
+    htop \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 

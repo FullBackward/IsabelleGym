@@ -223,7 +223,8 @@ In the last iteration of IsabelleGym, LRU cache was implemented. In this benchma
   - Unsolved
 - Repl Backend does not support other imports
   - Unsolved, need to refine repo backend create functions
-- This guy wrote a circular import, how?
+  - Issues: 1. not sure why use_theories from Isabelle is not working. 2. need to a new arguement to pass through start session option on HOL-Analysis. 3. Modify on IsabelleREPL.thy works, but modify on other file doesnt work, need to change the hardcoded parameter.
+- Memory cleanup not working
   - Unsolved
 
 ### New design, workflow from install to use

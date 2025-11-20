@@ -6,7 +6,10 @@ from datasets import load_dataset
 from local_gym.isabelle_gym import IsabelleGym
 from local_gym.isabelle_agent_interface import SimpleIsabelleAgent
 from local_gym.success_checker import is_syntax_successful, get_error_message, get_output_message
+from pathlib import Path
 
+DIR_ROOT = Path(__file__).parent.parent
+thys = DIR_ROOT / "repl" / "thys"
 
 def miniF2F_init():
     """Load miniF2F dataset"""
@@ -16,14 +19,16 @@ def miniF2F_init():
 
 class AgentProofDemo:
     def __init__(self, example_count: int = 5):
-        self.gym = IsabelleGym(initial_thys=["Complex_Main"])
+        #print(thys.__str__() + "/Complex_Main_init")
+        self.gym = IsabelleGym(initial_thys=["Complex_Main_init"])
         self.e_n = example_count
         
         self.gym.enter_thy("Demo")
         print("Initializing Isabelle with Complex_Main...")
         self.gym.step('theory Demo imports Complex_Main begin')
-        
+        print("Initialization complete.")
         self.agent = SimpleIsabelleAgent("BasicAgent")
+        print("Agent initialized.")
         
     def run_demo(self):
         test_data = miniF2F_init()
@@ -55,7 +60,7 @@ class AgentProofDemo:
                 break
             subgoals = self.gym.open_subgoals()
             print(subgoals)
-            result3 = self.gym.step("sledgehammer")
+            result3 = self.gym.step("apply sledgehammer")
             subgoals = self.gym.open_subgoals()
             print(subgoals)
             """
