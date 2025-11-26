@@ -35,7 +35,7 @@ ENV PATH=$ISABELLE_HOME/bin:$PATH
 
 # Global Python deps (no venv)
 RUN python -m pip install --upgrade pip \
- && python -m pip install -e .[dev] watchfiles
+ && python -m pip install -r /app/requirement.txt
 
 RUN chmod +x repl/Admin/init \
     && ./repl/Admin/init

@@ -1,0 +1,17 @@
+py4j
+numpy
+torch
+matplotlib
+tqdm
+
+pre-commit
+pytest
+expecttest
+pytest-cov
+pylint
+isort
+black
+mypy
+
+watchfiles
+fastapi[standard]

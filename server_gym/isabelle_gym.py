@@ -34,6 +34,7 @@ class IsabelleGym:
         enable_memory_management: bool = False,
         shared_cache: bool = False,
         initial_thys: list[str] = None,
+        init_field: str = "HOL",
     ) -> None:
         """Initialize the Isabelle gym environment."""
         self.isabelle_client = IsabelleClient(
@@ -43,14 +44,15 @@ class IsabelleGym:
             enable_memory_management=enable_memory_management,
             shared_cache=shared_cache,
             initial_thys=initial_thys,
+            field=init_field,
         )
         # Placeholder for gym spaces
         pass
 
     # Session management methods
-    def create_session(self, session_id: str, initial_thys: list[str] = None) -> str:
+    def create_session(self, session_id: str, initial_thys: list[str] = None, field:str = "HOL") -> str:
         """Create a new session."""
-        return self.isabelle_client.create_session(session_id, initial_thys)
+        return self.isabelle_client.create_session(session_id, initial_thys, field)
     
     def switch_session(self, session_id: str) -> bool:
         """Switch to the specified session."""
