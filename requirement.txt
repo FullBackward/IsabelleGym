@@ -13,5 +13,8 @@ isort
 black
 mypy
 
+fastapi
+uvicorn
+
 watchfiles
 fastapi[standard]

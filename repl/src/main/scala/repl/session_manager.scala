@@ -234,6 +234,7 @@ class Session_Manager(show_states: Boolean, enable_cache: Boolean = false, max_c
     initial_thys.sorted 
   }
   
+  // ISSUE
   private def try_get_from_cache(key: List[String]): Option[Session_Data] = {
     if (!enable_cache) return None
     
@@ -243,7 +244,7 @@ class Session_Manager(show_states: Boolean, enable_cache: Boolean = false, max_c
       cache.get(key) match {
         case Some(queue) if queue.nonEmpty =>
 
-          val cached_session = queue.head 
+          val cached_session = queue.head // get but does not remove
           session_data = Some(cached_session)
           lru_order.change(lru => { lru.put(key, System.currentTimeMillis()); lru })
           cache
@@ -279,6 +280,7 @@ class Session_Manager(show_states: Boolean, enable_cache: Boolean = false, max_c
     }
   }
 
+  // ISSUE 
   private def evict_if_needed(): Unit = {
     if (!enable_cache) return
     

@@ -44,3 +44,5 @@
 
 #### Agent operations
 
+design choice
+对比Kimina server

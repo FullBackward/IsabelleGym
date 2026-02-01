@@ -109,7 +109,7 @@ class ReplBackendGatewayProcess:
             "Failed to get the Scala REPL backend from the gateway process."
         )
     
-    def get_repl_backend_with_cache(self, show_states: bool, enable_cache: bool) -> ReplBackend:
+    def get_repl_backend_with_cache(self, show_states: bool, enable_cache: bool, field: str) -> ReplBackend:
         """Get the Isabelle REPL object with cache control from the Scala gateway."""
         poll_interval = 0.1
         poll_timeout = 20
@@ -120,7 +120,7 @@ class ReplBackendGatewayProcess:
             try:
                 repl_backend: ReplBackend = (
                     self.gateway.jvm.repl.ReplBackendGateway.get_repl_backend_with_cache(
-                        show_states, enable_cache
+                        show_states, enable_cache, field
                     )
                 )
                 return repl_backend
@@ -172,7 +172,7 @@ class ReplBackendGatewayProcess:
             "Failed to get the Scala REPL backend from the gateway process."
         )
     
-    def get_repl_backend_with_initial_theories(self, show_states: bool, enable_cache: bool, max_cache_size: int, enable_memory_management: bool, initial_thys: py4j.java_collections.JavaList[str]) -> ReplBackend:
+    def get_repl_backend_with_initial_theories(self, show_states: bool, enable_cache: bool, max_cache_size: int, enable_memory_management: bool, initial_thys: py4j.java_collections.JavaList[str], field: str) -> ReplBackend:
         """Get the Isabelle REPL object with custom initial theories from the Scala gateway."""
         poll_interval = 0.1
         poll_timeout = 20
@@ -183,7 +183,7 @@ class ReplBackendGatewayProcess:
             try:
                 repl_backend: ReplBackend = (
                     self.gateway.jvm.repl.ReplBackendGateway.get_repl_backend_with_initial_theories(
-                        show_states, enable_cache, max_cache_size, enable_memory_management, initial_thys
+                        show_states, enable_cache, max_cache_size, enable_memory_management, initial_thys, field
                     )
                 )
                 return repl_backend
@@ -193,7 +193,7 @@ class ReplBackendGatewayProcess:
             "Failed to get the Scala REPL backend from the gateway process."
         )
     
-    def get_repl_backend_with_shared_cache(self, show_states: bool, enable_cache: bool, max_cache_size: int, enable_memory_management: bool, initial_thys: py4j.java_collections.JavaList[str]) -> ReplBackend:
+    def get_repl_backend_with_shared_cache(self, show_states: bool, enable_cache: bool, max_cache_size: int, enable_memory_management: bool, initial_thys: py4j.java_collections.JavaList[str], field:str) -> ReplBackend:
         """Get the Isabelle REPL object with shared cache from the Scala gateway."""
         poll_interval = 0.1
         poll_timeout = 20
@@ -204,7 +204,7 @@ class ReplBackendGatewayProcess:
             try:
                 repl_backend: ReplBackend = (
                     self.gateway.jvm.repl.ReplBackendGateway.get_repl_backend_with_shared_cache(
-                        show_states, enable_cache, max_cache_size, enable_memory_management, initial_thys
+                        show_states, enable_cache, max_cache_size, enable_memory_management, initial_thys, field
                     )
                 )
                 return repl_backend

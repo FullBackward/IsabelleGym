@@ -39,7 +39,7 @@ RUN python -m pip install --upgrade pip \
 
 RUN chmod +x repl/Admin/init \
     && ./repl/Admin/init
-
+    && find /root/.isabelle/Isabelle2025/contrib -path "*/etc/settings" -type f -exec sed -i 's/\r$//' {} \;
 
 RUN cd repl \
     && chmod +x gradlew \

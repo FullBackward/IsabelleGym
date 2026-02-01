@@ -35,6 +35,8 @@ class IsabelleClient:
         if self.thy_init is None:
             raise RuntimeError("Failed to initialize ThyInit: init.thy file not found.")
         
+        print(initial_thys)
+
         if initial_thys is None:
             initial_thys = ["$ISABELLE_REPL_HOME/thys/IsabelleREPL"]
         else:
@@ -55,7 +57,7 @@ class IsabelleClient:
             self.use_multi_session = True
             self.sessions = {}
             self.current_session_id = None
-            self.create_session("default", initial_thys)
+            #self.create_session("default", initial_thys)
         else:
 
             self.repl_backend = self.repl_backend_gateway_process.get_repl_backend_with_initial_theories(

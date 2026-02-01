@@ -2,9 +2,9 @@ from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 
 class SessionCreateRequest(BaseModel):
-    theories: Optional[List[str]] = None
+    theories: List[str] | None = None
     enable_cache: bool = True
-    session_name: Optional[str] = None
+    session_name: str | None = None
 
 
 class SessionResponse(BaseModel):
@@ -21,8 +21,8 @@ class CommandRequest(BaseModel):
 
 class CommandResponse(BaseModel):
     success: bool
-    output: Optional[str] = None
-    error: Optional[str] = None
+    output: str | None = None
+    error: str | None = None
     subgoals: List[str]
     execution_time: float
 

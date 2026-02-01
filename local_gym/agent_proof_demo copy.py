@@ -2,16 +2,9 @@
 Fixed miniF2F Demo with proper theory imports
 """
 
-from datasets import load_dataset
 from local_gym.isabelle_gym import IsabelleGym
 from local_gym.isabelle_agent_interface import SimpleIsabelleAgent
 from local_gym.success_checker import is_syntax_successful, get_error_message, get_output_message
-
-
-def miniF2F_init():
-    """Load miniF2F dataset"""
-    dataset = load_dataset("wellecks/minif2f_isabelle")
-    return dataset["test"]
 
 
 class AgentProofDemo:

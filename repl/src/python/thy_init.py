@@ -12,7 +12,7 @@ filepath = thys_pool_dir / "init.thy"
 thys_pool = ["Analysis_init", "Complex_Main_init", "Pure_init"]
 
 class ThyInit:
-    def __init__(self, init_filepath = filepath) -> Optional[None]:
+    async def __init__(self, init_filepath = filepath) -> Optional[None]:
         self.filepath = filepath
         try:
             with open(self.filepath, 'r') as f:
@@ -31,14 +31,14 @@ class ThyInit:
         quoted_theories = [f'"{theory}"' for theory in thys]
         return " ".join(quoted_theories)
     
-    def generate_thy_file(self, thys: List[str], filename: str) -> str:
+    async def generate_thy_file(self, thys: List[str], filename: str) -> str:
         """Generates the content of an Isabelle theory file that imports the given theories."""
         imports_str = self.format_thys(thys)
         content = self.template.replace("[thys]", imports_str)
         content = content.replace("[filename]", filename)
         return content
     
-    def gen_file(self, filename:str, thys: List[str]) -> Success | Failure:
+    async def gen_file(self, filename:str, thys: List[str]) -> Success | Failure:
         """Writes the generated theory file to the specified output path."""
         for thy in thys:
             if thy in thys_pool:
