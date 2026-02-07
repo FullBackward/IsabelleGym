@@ -6,7 +6,7 @@ from pathlib import Path
 from re import S
 from typing import Optional
 
-from gym.isabelle_gym import IsabelleGym
+from local_gym.isabelle_gym import IsabelleGym
 
 # 0 represents the empty tile
 IntBoard = list[int]

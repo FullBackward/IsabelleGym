@@ -4,12 +4,16 @@ import isabelle._
 
 type EnvStateID = Long
 
-class Repl_Session(session_manager: Session_Manager, initial_thys: List[String] = List("$ISABELLE_REPL_HOME/IsabelleREPL")) {
-  private val helper_thy = "$ISABELLE_REPL_HOME/IsabelleREPL"
+class Repl_Session(session_manager: Session_Manager, initial_thys: List[String] = List("$ISABELLE_REPL_HOME/thys/IsabelleREPL"), field: String = "HOL") {
+  //private val helper_thy = "$ISABELLE_REPL_HOME/thys/IsabelleREPL"
+  private val helper_thy = initial_thys.headOption.getOrElse("$ISABELLE_REPL_HOME/thys/IsabelleREPL")
 
   private var session_thys: Map[String, Thy_Info] = Map.empty
+
+  private var current_field: String = field
+
   private var session_data: Session_Data =
-    session_manager.get_new_session(initial_thys)
+    session_manager.get_new_session(initial_thys, field)
   private var current_thy_info: Option[Thy_Info] = None
 
   private var initial_theories: List[String] = initial_thys
@@ -159,7 +163,7 @@ class Repl_Session(session_manager: Session_Manager, initial_thys: List[String] 
     }
 
   def reset_with_cache(): Unit = {
-    val new_session_data = session_manager.get_new_session(initial_theories)
+    val new_session_data = session_manager.get_new_session(initial_theories, current_field)
     
     session_thys = Map.empty
     current_thy_info = None

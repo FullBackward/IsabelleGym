@@ -3,7 +3,9 @@
 import atexit
 import time
 
-from .repl_backend_gateway import EnvStateID, ReplBackendGatewayProcess, ReplResult
+from .repl_backend_gateway import EnvStateID, ReplBackendGatewayProcess, ReplResult, Outputs
+from .thy_init import ThyInit
+from .operation import Success, Failure
 
 
 class IsabelleClient:
@@ -17,6 +19,7 @@ class IsabelleClient:
         enable_memory_management: bool = False,
         shared_cache: bool = False,
         initial_thys: list[str] = None,
+        field: str = "HOL"
     ) -> None:
         """Initialize the Isabelle client."""
         self.repl_backend_gateway_process = ReplBackendGatewayProcess()
@@ -27,9 +30,18 @@ class IsabelleClient:
         self.max_cache_size = max_cache_size
         self.enable_memory_management = enable_memory_management
         self.shared_cache = shared_cache
+        self.thy_init = ThyInit()
+        self.main_session_field = field
+        if self.thy_init is None:
+            raise RuntimeError("Failed to initialize ThyInit: init.thy file not found.")
         
+        print(initial_thys)
+
         if initial_thys is None:
-            initial_thys = ["$ISABELLE_REPL_HOME/IsabelleREPL"]
+            initial_thys = ["$ISABELLE_REPL_HOME/thys/IsabelleREPL"]
+        else:
+            initial_thys = ["$ISABELLE_REPL_HOME/thys/" + self.thy_init.gen_file("main", initial_thys).data]
+        
         
         self.initial_thys = initial_thys
         
@@ -39,17 +51,17 @@ class IsabelleClient:
         
         if shared_cache:
             self.repl_backend = self.repl_backend_gateway_process.get_repl_backend_with_shared_cache(
-                show_states, enable_cache, max_cache_size, enable_memory_management, java_list
+                show_states, enable_cache, max_cache_size, enable_memory_management, java_list, self.main_session_field
             )
 
             self.use_multi_session = True
             self.sessions = {}
             self.current_session_id = None
-            self.create_session("default", initial_thys)
+            #self.create_session("default", initial_thys)
         else:
 
-            self.repl_backend = self.repl_backend_gateway_process.get_repl_backend_with_memory_management(
-                show_states, enable_cache, max_cache_size, enable_memory_management
+            self.repl_backend = self.repl_backend_gateway_process.get_repl_backend_with_initial_theories(
+                show_states, enable_cache, max_cache_size, enable_memory_management, java_list, self.main_session_field
             )
             self.use_multi_session = False
             self.sessions = None
@@ -70,6 +82,8 @@ class IsabelleClient:
 
     def isar_snippet(self, isar_string: str) -> ReplResult:
         """Adds the given Isar string to the current theory."""
+        if(isar_string.strip() == ""):
+            return ReplResult(Outputs("", ""), "Empty input")
         return self._get_active_backend().step(isar_string)
 
     def get_current_thy_name(self) -> str:
@@ -125,21 +139,51 @@ class IsabelleClient:
         return self._get_active_backend().vector_step(isar_strings)
 
     def cleanup(self) -> None:
-        """Cleans up the Scala REPL"""
-        if (
-            self.repl_backend_gateway_process_init
-            and not self.repl_backend_gateway_process.has_terminated()
-        ):
-            if self.use_multi_session:
-                for session_id in list(self.sessions.keys()):
-                    self.close_session(session_id)
-            else:
+        """Cleans up the Scala REPL with proper shutdown sequence"""
+    
+        if not (self.repl_backend_gateway_process_init 
+                and not self.repl_backend_gateway_process.has_terminated()):
+            return
+    
+        print("[Cleanup] Starting Isabelle cleanup sequence...")
+    
+        # Step 1: Close all sessions/backends gracefully
+        if self.use_multi_session:
+            print(f"[Cleanup] Closing {len(self.sessions)} sessions...")
+            for session_id in list(self.sessions.keys()):
                 try:
-                    self.repl_backend.exit()
-                except:
-                    pass
-            
+                    self.close_session(session_id)
+                    print(f"  ✓ Closed session: {session_id}")
+                except Exception as e:
+                    print(f"  ⚠ Error closing session {session_id}: {e}")
+        else:
+            print("[Cleanup] Closing backend...")
+            try:
+                self.repl_backend.reset()
+                print("  ✓ Backend exited")
+            except Exception as e:
+                print(f"  ⚠ Error closing backend: {e}")
+            if len(self.thy_init.created_files) != 0:
+                result = self.thy_init.cleanup("main")
+                if result.__class__ != Success:
+                    print(f"  ⚠ Error cleaning up main theory file: {result.err}")
+                else:
+                    print("  ✓ Main theory files cleaned up")
+
+    
+        # Step 2: CRITICAL - Give backends time to cleanup
+        print("[Cleanup] Waiting for backends to finish cleanup...")
+        time.sleep(0.5)  # 500ms grace period
+    
+        # Step 3: Terminate gateway process
+        print("[Cleanup] Terminating gateway process...")
+        try:
             self.repl_backend_gateway_process.terminate()
+            print("  ✓ Gateway terminated")
+        except Exception as e:
+            print(f"  ⚠ Gateway termination warning: {e}")
+    
+        print("[Cleanup] Cleanup complete")
 
     def get_cache_stats(self) -> dict:
         """Returns the cache statistics."""
@@ -156,13 +200,15 @@ class IsabelleClient:
             return self.repl_backend.get_cache_status()
 
     # only available in multi-session mode
-    def create_session(self, session_id: str, initial_thys: list[str] = None) -> str:
+    def create_session(self, session_id: str, initial_thys: list[str] = None, field: str = "HOL") -> str:
         """create a new Session"""
         if not self.use_multi_session:
             raise RuntimeError("create_session is only available in multi-session mode")
         
         if initial_thys is None:
             initial_thys = self.initial_thys
+        else:
+            initial_thys = ["$ISABELLE_REPL_HOME/thys/" + self.thy_init.gen_file(session_id, initial_thys).data]
         
         java_list = self.repl_backend_gateway_process.gateway.jvm.java.util.ArrayList()
         for thy in initial_thys:
@@ -170,7 +216,7 @@ class IsabelleClient:
         
         # use shared cache in multi-session mode
         new_backend = self.repl_backend_gateway_process.get_repl_backend_with_shared_cache(
-            self.show_states, self.enable_cache, self.max_cache_size, self.enable_memory_management, java_list
+            self.show_states, self.enable_cache, self.max_cache_size, self.enable_memory_management, java_list, field
         )
         
         self.sessions[session_id] = {
@@ -234,10 +280,13 @@ class IsabelleClient:
             self.current_session_id = None
         
         session_info = self.sessions.pop(session_id)
-        try:
-            session_info['backend'].exit()
-        except:
-            pass
+        result = self.thy_init.cleanup(session_id)
+        if not result.__class__ == Success:
+            print(f"Warning: Failed to cleanup theory file for session {session_id}: {result.err}")
+        #try:
+        #    session_info['backend'].exit()
+        #except:
+        #    pass
         
         print(f"close Session: {session_id}")
         return True

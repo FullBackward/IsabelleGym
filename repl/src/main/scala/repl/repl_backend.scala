@@ -5,9 +5,9 @@ import scala.jdk.CollectionConverters._
 
 import scala.collection.mutable
 
-class ReplBackend(show_states: Boolean, enable_cache: Boolean = false, max_cache_size: Int = 10, enable_memory_management: Boolean = true, initial_thys: List[String] = List("$ISABELLE_REPL_HOME/IsabelleREPL"), session_manager: Option[Session_Manager] = None) {
+class ReplBackend(show_states: Boolean, enable_cache: Boolean = false, max_cache_size: Int = 10, enable_memory_management: Boolean = true, initial_thys: List[String] = List("$ISABELLE_REPL_HOME/thys/IsabelleREPL"), session_manager: Option[Session_Manager] = None, field: String = "HOL") {
   private val session_manager_instance = session_manager.getOrElse(new Session_Manager(show_states, enable_cache, max_cache_size, enable_memory_management))
-  private var repl_session = new Repl_Session(session_manager_instance, initial_thys)
+  private var repl_session = new Repl_Session(session_manager_instance, initial_thys, field)
 
   def current_thy_name_string: String = repl_session.current_thy_name_string
 

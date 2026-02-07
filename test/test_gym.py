@@ -6,7 +6,7 @@ from typing import Any
 
 from expecttest import Expect, assert_expected_inline
 
-from gym.isabelle_gym import IsabelleGym
+from local_gym.isabelle_gym import IsabelleGym
 
 GymProgramCommand = list[Any]
 GymProgram = list[GymProgramCommand]

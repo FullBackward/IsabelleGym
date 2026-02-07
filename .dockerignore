@@ -1,46 +1,50 @@
-.venv/
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
+# Python
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
 .Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
+**/.pytest_cache/
 *.egg-info/
-.installed.cfg
-*.egg
+dist/
+build/
 
+# Logs
+logs/
+*.log
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDEs
 .vscode/
 .idea/
 *.swp
 *.swo
 
+# OS
 .DS_Store
 Thumbs.db
 
-.git/
-.gitignore
+# Docker
+**/.dockerignore
 
-Dockerfile
-docker-compose.yml
-.dockerignore
+# Isabelle/Build artifacts
+**/.isabelle/
+**/Isabelle2025*/
+*.jar
+repl/build/
+repl/.gradle/
 
-*.log
+# Node (if any)
+**/node_modules/
 
-.pytest_cache/
-.coverage
-htmlcov/
+# Git
+**/.git
 
-.env
-.env.local
-node_modules/
+# Temporary files
+*.tmp
+*.bak
+*~
