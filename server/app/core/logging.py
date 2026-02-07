@@ -1,9 +1,9 @@
 import logging
 import os
-from isort import file 
+from server.app.core.config import Logging
 
 logger = logging.getLogger("isabellegym")
-logger.setLevel(logging.DEBUG)
+logger.setLevel(getattr(logging, Logging.LOG_LEVEL))
 
 formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
 
@@ -11,8 +11,7 @@ console = logging.StreamHandler()
 console.setFormatter(formatter)
 logger.addHandler(console)
 
-log_dir = 'logs'
-os.makedirs(log_dir, exist_ok=True)  # Create logs/ if it doesn't exist
-file_handler = logging.FileHandler(os.path.join(log_dir, 'server.log'))
+os.makedirs(Logging.LOG_DIR, exist_ok=True)
+file_handler = logging.FileHandler(os.path.join(Logging.LOG_DIR, Logging.LOG_FILE))
 file_handler.setFormatter(formatter)
 logger.addHandler(file_handler)
