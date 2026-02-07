@@ -1,8 +1,11 @@
 from enum import Enum
 import time
+
+from fastapi import HTTPException
 from server_gym.success_checker import is_syntax_successful, get_error_message
 from typing import List, Dict, Any
 from server.app.api.v1.schemas.API_models import CommandResponse, ProofStateResponse, StateCheckpoint
+from server.local_gym.session_pool import return_backend # type: ignore
 
 class SessionStatus(str, Enum):
     ACTIVE = "active"
