@@ -10,7 +10,8 @@ import threading
 from repl.src.python.repl_backend_gateway import ReplBackendGatewayProcess
 from repl.src.python.thy_init import ThyInit
 from server.app.services.session import _Isabelle_Session, SessionStatus
-from server.app.core import Server
+from server.app.core.config import Server
+from server.app.core.logging import logger
 
 # Global resources (shared across all sessions)
 _gateway_lock = threading.Lock()
@@ -21,22 +22,27 @@ _gateway_lock = threading.Lock()
 class SessionManager:
     """Manages all active Isabelle sessions"""
 
-    async def __init__(self, idle_timeout: float = 300, pool_size: int = Server.DEFAULT_POOL_SIZE, initial_sessions: int = 4):
+    def __init__(self, idle_timeout: float = 300, pool_size: int = Server.DEFAULT_POOL_SIZE, initial_sessions: int = 4):
         self.idle_timeout = idle_timeout
         self._cleanup_task: Optional[asyncio.Task] = None
-        self.thyinit = await ThyInit()
+        self.thyinit = None
+        self.gateway = None
         self.LRU: Dict[uuid.UUID, _Isabelle_Session] = {}
         self.pool_size = pool_size
         self.initial_sessions = initial_sessions
+
+    async def initialize(self):
+        self.thyinit = ThyInit()
+        self._ensure_gateway()
     
     def _ensure_gateway(self):
         """Ensure gateway process is running (only created once)"""
     
         with _gateway_lock:
             if self.gateway is None:
-                print("Starting shared Isabelle gateway...")
+                logger.info("Starting shared Isabelle gateway...")
                 self.gateway = ReplBackendGatewayProcess()
-                print("✓ Gateway ready")
+                logger.info("✓ Gateway ready")
 
     async def _create_session(
         self,
@@ -47,7 +53,7 @@ class SessionManager:
         if initial_thys is None:
             initial_thys = ["$ISABELLE_REPL_HOME/thys/IsabelleREPL"]
         else:
-            initial_thys = await ["$ISABELLE_REPL_HOME/thys/" + self.thy_init.gen_file("main", initial_thys).data]
+            initial_thys = ["$ISABELLE_REPL_HOME/thys/" + self.thyinit.gen_file("main", initial_thys).data]
         session_id = uuid.uuid4()
         # Create backend (reuses existing gateway!)
         backend = self.gateway.get_repl_backend_with_initial_theories(
@@ -65,10 +71,10 @@ class SessionManager:
         )
         
         self.LRU_update(session)
-        print(f"Created session {session_id}")
+        logger.info(f"Created session {session_id}")
         return session
     
-    async def init_sessions(self) -> None:
+    def init_sessions(self) -> None:
         self._ensure_gateway()
 
     def LRU_update(self, session: _Isabelle_Session) -> None:
@@ -80,7 +86,7 @@ class SessionManager:
             oldest_session = self.LRU[oldest_session_id]
             oldest_session.__exit__()
             del self.LRU[oldest_session_id]
-            print(f"Evicted session {oldest_session_id} due to LRU policy")
+            logger.info(f"Evicted session {oldest_session_id} due to LRU policy")
 
     def _get_session(self, session_id: str) -> _Isabelle_Session:
         """Get session by ID"""
@@ -100,7 +106,7 @@ class SessionManager:
             session = self.LRU[session_id]
             session.close()
             del self.LRU[session_id]
-            print(f"Closed session {session_id}")
+            logger.info(f"Closed session {session_id}")
             return True
         return False
     
@@ -130,11 +136,11 @@ class SessionManager:
                 ]
                 
                 for sid in idle_sessions:
-                    print(f"Closing idle session {sid}")
+                    logger.info(f"Closing idle session {sid}")
                     self.close_session(sid)
                     
             except Exception as e:
-                print(f"Error in cleanup task: {e}")
+                logger.error(f"Error in cleanup task: {e}")
     
     def start_cleanup_task(self):
         """Start the background cleanup task"""
@@ -143,6 +149,6 @@ class SessionManager:
     
     def shutdown(self):
         """Shutdown all sessions"""
-        print("Shutting down all sessions...")
+        logger.info("Shutting down all sessions...")
         for session_id in list(self.LRU.keys()):
             self.close_session(session_id)

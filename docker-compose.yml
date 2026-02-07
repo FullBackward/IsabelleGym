@@ -1,32 +1,12 @@
-#services:
-#  isabelle-gym:
-#    build: .
-#    container_name: isabelle-gym
-#    volumes:
-#      - .:/app
-#      - isabelle_user_data:/root/.isabelle
-#    environment:
-#      - ISABELLE_HOME=/app/isabelle
-#      - PYTHONPATH=/app
-#    working_dir: /app
-#    stdin_open: true
-#    tty: true
-#    command: bash
-
-#volumes:
-#  isabelle_user_data: 
-
 services:
   isabelle-gym:
     platform: linux/amd64
     build:
       context: .
-      # If you use buildx, you can also specify:
-      # args:
-      #   - TARGETARCH=amd64
     container_name: isabelle-gym
     volumes:
       - .:/app
+      - ./logs:/app/logs                    # ADD HERE (under volumes in services)
       - isabelle_user_data:/root/.isabelle
     environment:
       - ISABELLE_HOME=/opt/isabelle
@@ -36,7 +16,7 @@ services:
     tty: true
     ports:
       - "8000:8000"
-    command: bash
+    command: python -m uvicorn server.app.main:app --host 0.0.0.0 --port 8000
 
 volumes:
-  isabelle_user_data:
+  isabelle_user_data:                      

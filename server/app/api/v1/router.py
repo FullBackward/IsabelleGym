@@ -2,6 +2,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from .schemas.API_models import *
 from datetime import datetime
 import time
+from server.app.services.session_manager import SessionManager
+from server.app.core.logging import logger
 
 router = APIRouter()
 
@@ -15,7 +17,7 @@ async def root(session_manager = Depends(get_session_manager)):
         "service": "IsabelleGym Server",
         "version": "1.0.0",
         "status": "running",
-        "active_sessions": len(session_manager.sessions),
+        "active_sessions": len(session_manager.LRU),
         "timestamp": datetime.now().isoformat()
     }
 
@@ -25,7 +27,7 @@ async def health_check(session_manager = Depends(get_session_manager)):
     """Health check endpoint"""
     return {
         "status": "healthy",
-        "active_sessions": len(session_manager.sessions),
+        "active_sessions": len(session_manager.LRU),
         "timestamp": time.time()
     }
 
@@ -36,7 +38,7 @@ async def health_check(session_manager = Depends(get_session_manager)):
 async def create_session(request: SessionCreateRequest, session_manager = Depends(get_session_manager)):
     """Create a new Isabelle proving session"""
     try:
-        print(request.theories)
+        logger.info(f"Creating session with theories: {request.theories}")
         if request.theories is []:
             request.theories = None
 
@@ -208,6 +210,6 @@ async def get_session_stats(session_id: str, session_manager = Depends(get_sessi
         "checkpoints_saved": len(session.checkpoints)
     }
 
-from server.app.api.v1 import router as ws_router
+from server.app.api.v1.ws import router as ws_router
 
 router.include_router(ws_router)

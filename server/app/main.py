@@ -4,19 +4,22 @@ from fastapi.middleware.cors import CORSMiddleware
 from server.app.services.session_manager import SessionManager
 from datetime import datetime
 import time
+from server.app.core.logging import logger
+from server.app.middleware import LoggerMiddleware
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Load the ML model
     """Initialize background tasks on startup"""
-    print("Starting IsabelleGym Server...")
+    logger.info("Starting IsabelleGym Server...")
     app.state.session_manager = SessionManager(idle_timeout=600)
+    await app.state.session_manager.initialize()
     app.state.session_manager.start_cleanup_task()
     yield
     # Clean up the ML models and release the resources
     """Cleanup on shutdown"""
-    print("Shutting down IsabelleGym Server...")
+    logger.info("Shutting down IsabelleGym Server...")
     app.state.session_manager.shutdown()
 
 app = FastAPI(
@@ -35,6 +38,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.add_middleware(LoggerMiddleware)
+
+
 from server.app.api.v1.router import router as api_router
 
 app.include_router(api_router)
@@ -42,8 +48,8 @@ app.include_router(api_router)
 if __name__ == "__main__":
     import uvicorn
     
-    print("Starting IsabelleGym Server...")
-    print("API documentation will be available at: http://localhost:8000/docs")
+    logger.info("Starting IsabelleGym Server...")
+    logger.info("API documentation will be available at: http://localhost:8000/docs")
     
     uvicorn.run(
         app,

@@ -12,7 +12,7 @@ filepath = thys_pool_dir / "init.thy"
 thys_pool = ["Analysis_init", "Complex_Main_init", "Pure_init"]
 
 class ThyInit:
-    async def __init__(self, init_filepath = filepath) -> Optional[None]:
+    def __init__(self, init_filepath = filepath) -> Optional[None]:
         self.filepath = filepath
         try:
             with open(self.filepath, 'r') as f:

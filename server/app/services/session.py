@@ -2,6 +2,7 @@ from enum import Enum
 import time
 from server_gym.success_checker import is_syntax_successful, get_error_message
 from typing import List, Dict, Any
+from server.app.api.v1.schemas.API_models import CommandResponse, ProofStateResponse, StateCheckpoint
 
 class SessionStatus(str, Enum):
     ACTIVE = "active"
