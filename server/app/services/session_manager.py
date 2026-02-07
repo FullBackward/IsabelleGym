@@ -1,6 +1,7 @@
 
 import uuid
-from typing import List, Optional, Dict, Any
+from collections import OrderedDict
+from typing import List, Optional, Any, Dict, Union
 import asyncio
 
 #from server_gym.isabelle_gym import IsabelleGym
@@ -21,13 +22,25 @@ _gateway_lock = threading.Lock()
 class SessionManager:
     """Manages all active Isabelle sessions"""
 
-    async def __init__(self, idle_timeout: float = 300, pool_size: int = Server.DEFAULT_POOL_SIZE, initial_sessions: int = 4):
+    def __init__(self, idle_timeout: float = 300, pool_size: int = Server.DEFAULT_POOL_SIZE, initial_sessions: int = 4):
         self.idle_timeout = idle_timeout
-        self._cleanup_task: Optional[asyncio.Task] = None
-        self.thyinit = await ThyInit()
-        self.LRU: Dict[uuid.UUID, _Isabelle_Session] = {}
         self.pool_size = pool_size
-        self.initial_sessions = initial_sessions
+
+        self.gateway: Optional[ReplBackendGatewayProcess] = None
+        self.thy_init: Optional[ThyInit] = None
+
+        self._lru: "OrderedDict[uuid.UUID, _Isabelle_Session]" = OrderedDict()
+
+        self._lock = threading.Lock()
+
+        self._cleanup_task: Optional[asyncio.Task] = None
+
+    async def startup(self) -> None:
+        """Call once from FastAPI lifespan/startup."""
+        self._ensure_gateway()
+        # ThyInit in your code appears awaitable; keep it async here
+        if self.thy_init is None:
+            self.thy_init = await ThyInit()
     
     def _ensure_gateway(self):
         """Ensure gateway process is running (only created once)"""
@@ -36,7 +49,12 @@ class SessionManager:
             if self.gateway is None:
                 print("Starting shared Isabelle gateway...")
                 self.gateway = ReplBackendGatewayProcess()
-                print("✓ Gateway ready")
+                print("Gateway ready")
+    
+    def _normalize_session_id(self, session_id: Union[str, uuid.UUID]) -> uuid.UUID:
+        if isinstance(session_id, uuid.UUID):
+            return session_id
+        return uuid.UUID(session_id)
 
     async def _create_session(
         self,
@@ -47,7 +65,7 @@ class SessionManager:
         if initial_thys is None:
             initial_thys = ["$ISABELLE_REPL_HOME/thys/IsabelleREPL"]
         else:
-            initial_thys = await ["$ISABELLE_REPL_HOME/thys/" + self.thy_init.gen_file("main", initial_thys).data]
+            initial_thys = ["$ISABELLE_REPL_HOME/thys/" + self.thy_init.gen_file("main", initial_thys).data]
         session_id = uuid.uuid4()
         # Create backend (reuses existing gateway!)
         backend = self.gateway.get_repl_backend_with_initial_theories(
@@ -78,7 +96,7 @@ class SessionManager:
             # Evict least recently used session
             oldest_session_id = min(self.LRU, key=lambda k: self.LRU[k].last_activity)
             oldest_session = self.LRU[oldest_session_id]
-            oldest_session.__exit__()
+            oldest_session.close()
             del self.LRU[oldest_session_id]
             print(f"Evicted session {oldest_session_id} due to LRU policy")
 

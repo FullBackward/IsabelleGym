@@ -37,6 +37,26 @@ Issue solved by:
 ### Rewrite isabelle client using repl backend
 The current isabelle_client class is overstaffed, too many methods designed for local MCTS and interface purpose. These methods and implementation are not ideal for implementing server. Thus, a new client/session pool using existing repl backend is needed.
 
+## Challenges
+### Scalable and iterable file structure for server
+This is trivial, not suitable to write about
+
+### Concurrency-safe and predictablility of session manager
+This should be the main focus on challenges
+
+### Protocol between Python end and Scala end, and how it is optimised in Isabelle's end
+
+### LRU optimiseation
+Use OrderedDict instead of normal Dict. Every access to session put that session at the tail of the Dict, and the first Dict will be evicted when needed. Normal Dict approach involves scanning and comparision, that takes O(n), but OrderedDict will only take O(1).
+
+The previous iteration of this project uses a sort function to sort the access time of the sessions, which is highly inefficient, and consider it is implemented in Scala end, the management and supervise of the running of the system will be difficult.
+
+Advantages:
+1. Simplier, less likely to have bugs in high concurrency situation 
+2. Does not rely on system time
+3. O(1) vs O(n)
+
+
 ## New design, workflow from install to use
 1. Run docker/install.sh
   - Has isabelle, pip ready
