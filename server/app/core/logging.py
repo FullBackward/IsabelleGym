@@ -1,6 +1,10 @@
 import logging
 import os
 from server.app.core.config import Logging
+import threading
+from logging.handlers import RotatingFileHandler
+
+lock = threading.Lock()
 
 logger = logging.getLogger("isabellegym")
 logger.setLevel(getattr(logging, Logging.LOG_LEVEL))
@@ -12,6 +16,15 @@ console.setFormatter(formatter)
 logger.addHandler(console)
 
 os.makedirs(Logging.LOG_DIR, exist_ok=True)
-file_handler = logging.FileHandler(os.path.join(Logging.LOG_DIR, Logging.LOG_FILE))
+
+file_handler = RotatingFileHandler(
+    os.path.join(Logging.LOG_DIR, Logging.LOG_FILE),
+    maxBytes = Logging.MAX_LOG_SIZE_BYTES,
+    backupCount = 0
+)
+
 file_handler.setFormatter(formatter)
+
+file_handler.createLock()
+
 logger.addHandler(file_handler)

@@ -10,6 +10,7 @@ class Server:
     ENABLE_CACHE: Final = True
 
 class Logging:
-    LOG_DIR: Final = 'logs'
+    LOG_DIR: Final = 'server/app/logs'
     LOG_LEVEL: Final = 'DEBUG'
     LOG_FILE: Final = 'server.log'
+    MAX_LOG_SIZE_BYTES: Final = 10 * 1024 * 1024
