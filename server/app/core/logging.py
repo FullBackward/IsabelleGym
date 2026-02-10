@@ -1,7 +1,6 @@
 import logging
 import os
 from server.app.core.config import Logging
-import threading
 from logging.handlers import RotatingFileHandler
 
 logger = logging.getLogger("isabellegym")
