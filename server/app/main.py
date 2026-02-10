@@ -8,16 +8,12 @@ import time
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Load the ML model
-    """Initialize background tasks on startup"""
-    print("Starting IsabelleGym Server...")
-    app.state.session_manager = SessionManager(idle_timeout=600)
-    app.state.session_manager.start_cleanup_task()
+    sm = SessionManager(idle_timeout=600, pool_size=8)
+    await sm.startup()
+    sm.start_cleanup_task()
+    app.state.session_manager = sm
     yield
-    # Clean up the ML models and release the resources
-    """Cleanup on shutdown"""
-    print("Shutting down IsabelleGym Server...")
-    app.state.session_manager.shutdown()
+    await sm.shutdown()
 
 app = FastAPI(
     title="IsabelleGym Server",
