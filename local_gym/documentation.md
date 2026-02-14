@@ -1,6 +1,5 @@
-# Local Gym API Reference
-
-API documentation for key modules in the `local_gym/` directory.
+# Local Gym Module Documentation
+Documentation for key modules in the `local_gym/` directory.
 
 ---
 
