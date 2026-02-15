@@ -15,18 +15,10 @@ async def root(session_manager = Depends(get_session_manager)):
         "service": "IsabelleGym Server",
         "version": "1.0.0",
         "status": "running",
-        "active_sessions": len(session_manager.sessions),
-        "timestamp": datetime.now().isoformat()
-    }
-
-
-@router.get("/health")
-async def health_check(session_manager = Depends(get_session_manager)):
-    """Health check endpoint"""
-    return {
         "status": "healthy",
-        "active_sessions": len(session_manager.sessions),
-        "timestamp": time.time()
+        "active_sessions": session_manager.get_lru_info().get("active_sessions", 0),
+        "max_pool_size": session_manager.get_lru_info().get("max_pool_size", 0),
+        "timestamp": datetime.now().isoformat()
     }
 
 
@@ -35,30 +27,31 @@ async def health_check(session_manager = Depends(get_session_manager)):
 @router.post("/api/v1/sessions", response_model=SessionResponse)
 async def create_session(request: SessionCreateRequest, session_manager = Depends(get_session_manager)):
     """Create a new Isabelle proving session"""
-    try:
-        print(request.theories)
-        if request.theories is []:
-            request.theories = None
+    if request.theories is None or len(request.theories) == 0:
+        request.theories = None
 
-        session = session_manager.create_session(
-            theories=request.theories,
-            enable_cache=request.enable_cache
-        )
+    session = await session_manager.create_session(
+        theories=request.theories,
+        enable_cache=request.enable_cache
+    )
         
-        return SessionResponse(
-            session_id=session.session_id,
-            created_at=session.created_at,
-            theories=session.theories,
-            status=session.status.value
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    return SessionResponse(
+        session_id=session.session_id,
+        created_at=session.created_at,
+        theories=session.theories,
+        status=session.status.value
+    )
 
 
 @router.get("/api/v1/sessions")
 async def list_sessions(session_manager = Depends(get_session_manager)):
     """List all active sessions"""
-    return {"sessions": session_manager.list_sessions()}
+    sessions = session_manager.list_sessions()
+    if sessions is None or len(sessions) == 0:
+        result = {"No active sessions"}
+    else:
+        result = {"sessions": sessions}
+    return result
 
 
 @router.get("/api/v1/sessions/{session_id}")
@@ -80,12 +73,7 @@ async def get_session_info(session_id: str, session_manager = Depends(get_sessio
 @router.delete("/api/v1/sessions/{session_id}")
 async def close_session(session_id: str, session_manager = Depends(get_session_manager)):
     """Close a session"""
-    success = session_manager.close_session(session_id)
-    
-    if success:
-        return {"message": f"Session {session_id} closed successfully"}
-    else:
-        raise HTTPException(status_code=404, detail="Session not found")
+    session_manager.close_session(session_id)
 
 
 # Proof Interaction Endpoints
@@ -125,15 +113,12 @@ async def get_subgoals(session_id: str, session_manager = Depends(get_session_ma
 async def get_source(session_id: str, session_manager = Depends(get_session_manager)):
     """Get theory source code"""
     session = session_manager.get_session(session_id)
-    
-    try:
-        source_result = session.gym.get_source()
-        return {
-            "source": source_result.total_output(),
-            "theory": session.gym.current_thy
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+
+    source_result = session.gym.get_source()
+    return {
+        "source": source_result.total_output(),
+        "theory": session.gym.current_thy
+    }
 
 
 # State Management Endpoints
@@ -163,14 +148,11 @@ async def rollback(session_id: str, session_manager = Depends(get_session_manage
     """Rollback last command"""
     session = session_manager.get_session(session_id)
     
-    try:
-        result = session.gym.rollback()
-        return {
-            "success": True,
-            "output": result.total_output() if hasattr(result, 'total_output') else None
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    result = session.gym.rollback()
+    return {
+        "success": True,
+        "output": result.total_output() if hasattr(result, 'total_output') else None
+    }
 
 
 # History and Statistics
@@ -207,7 +189,3 @@ async def get_session_stats(session_id: str, session_manager = Depends(get_sessi
         "success_rate": successful / len(session.command_history) if session.command_history else 0,
         "checkpoints_saved": len(session.checkpoints)
     }
-
-from server.app.api.v1 import router as ws_router
-
-router.include_router(ws_router)

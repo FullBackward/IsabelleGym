@@ -1,10 +1,14 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
 from server.app.services.session_manager import SessionManager
-from datetime import datetime
-import time
+from fastapi.responses import JSONResponse
 
+from server.app.errors import (
+    SessionNotFound,
+    SessionStartError,
+    GatewayUnavailable,
+)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -21,6 +25,22 @@ app = FastAPI(
     version="0.0.1",
     lifespan=lifespan
 )
+
+@app.exception_handler(SessionNotFound)
+async def handle_session_not_found(request: Request, exc: SessionNotFound):
+    return JSONResponse(status_code=404, content={"detail": str(exc) or "Session not found"})
+
+@app.exception_handler(GatewayUnavailable)
+async def handle_gateway_unavailable(request: Request, exc: GatewayUnavailable):
+    return JSONResponse(status_code=503, content={"detail": str(exc) or "REPL gateway unavailable"})
+
+@app.exception_handler(SessionStartError)
+async def handle_session_start_error(request: Request, exc: SessionStartError):
+    return JSONResponse(status_code=500, content={"detail": str(exc) or "Session start failed"})
+
+@app.exception_handler(Exception)
+async def handle_uncaught_exception(request: Request, exc: Exception):
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 # Enable CORS
 app.add_middleware(

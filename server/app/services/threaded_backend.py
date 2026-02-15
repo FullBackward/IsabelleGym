@@ -39,5 +39,6 @@ class ThreadedBackend:
                 job.fut.set_exception(e)
 
     def close(self) -> None:
+        self._backend.exit()
         self._stop.set()
         self._t.join(timeout=2.0)

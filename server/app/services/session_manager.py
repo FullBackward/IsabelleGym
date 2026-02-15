@@ -3,26 +3,23 @@ import uuid
 from collections import OrderedDict
 from typing import List, Optional, Any, Dict, Union
 import asyncio
-
-#from server_gym.isabelle_gym import IsabelleGym
-#from server_gym.isabelle_agent_interface import IsabelleAgent, ProofResult
+import time
 
 import threading
 from repl.src.python.repl_backend_gateway import ReplBackendGatewayProcess
 from repl.src.python.thy_init import ThyInit
 from server.app.services.session import _Isabelle_Session, SessionStatus
-from server.app.core import Server
+from server.app.core.config import Server
+from server.app.services.threaded_backend import ThreadedBackend
+from server.app.errors import *
 
 # Global resources (shared across all sessions)
 _gateway_lock = threading.Lock()
 
-#Default parameters
-
-# Session manager: manages all sessions with LRU cache
 class SessionManager:
     """Manages all active Isabelle sessions"""
 
-    def __init__(self, idle_timeout: float = 300, pool_size: int = Server.DEFAULT_POOL_SIZE, initial_sessions: int = 4):
+    def __init__(self, idle_timeout: float = 300, pool_size: int = Server.DEFAULT_POOL_SIZE, initial_sessions: int = Server.INITIAL_SESSIONS):
         self.idle_timeout = idle_timeout
         self.pool_size = pool_size
 
@@ -35,132 +32,223 @@ class SessionManager:
 
         self._cleanup_task: Optional[asyncio.Task] = None
 
-    async def startup(self) -> None:
-        """Call once from FastAPI lifespan/startup."""
-        self._ensure_gateway()
-        # ThyInit in your code appears awaitable; keep it async here
-        if self.thy_init is None:
-            self.thy_init = await ThyInit()
+    # Helpers
+
+    def _where(self, func_name: str) -> str:
+        return f"{__name__}.{self.__class__.__name__}.{func_name}"
     
     def _ensure_gateway(self):
-        """Ensure gateway process is running (only created once)"""
+        where = self._where("_ensure_gateway")
+        try:
+            with _gateway_lock:
+                if self.gateway is None:
+                    self.gateway = ReplBackendGatewayProcess()
+        except Exception as e:
+            raise GatewayUnavailable(f"{where}: failed to start REPL gateway: {e}") from e
     
-        with _gateway_lock:
-            if self.gateway is None:
-                print("Starting shared Isabelle gateway...")
-                self.gateway = ReplBackendGatewayProcess()
-                print("Gateway ready")
-    
+    def _normalize_field(self, field: Optional[str]) -> str:
+        if field is None:
+            return "HOL"
+        f = str(field).strip()
+        if f == "" or f.lower() in {"null", "none", "default"}:
+            return "HOL"
+        return f
+
     def _normalize_session_id(self, session_id: Union[str, uuid.UUID]) -> uuid.UUID:
+        where = self._where("_normalize_session_id")
         if isinstance(session_id, uuid.UUID):
             return session_id
-        return uuid.UUID(session_id)
+        try:
+            return uuid.UUID(str(session_id))
+        except Exception as e:
+            raise SessionError(f"{where}: invalid session_id '{session_id}'") from e
+
+    # Lifecycle
+
+    async def startup(self) -> None:
+        where = self._where("startup")
+        try:
+            self._ensure_gateway()
+        except Exception as e:
+            if isinstance(e, GatewayUnavailable):
+                raise
+            raise GatewayUnavailable(f"{where}: gateway startup failed: {e}") from e
+        try:
+            if self.thy_init is None:
+                self.thy_init = ThyInit()
+        except Exception as e:
+            raise SessionStartError(f"{where}: failed to initialize ThyInit: {e}") from e
+        for i in range(Server.INITIAL_SESSIONS):
+            try:
+                await self._create_session()
+            except Exception as e:
+                if isinstance(e, (GatewayUnavailable, SessionStartError, SessionError)):
+                    raise SessionStartError(f"{where}: failed to pre-start session {i}: {e}") from e
+                raise SessionStartError(f"{where}: failed to pre-start session {i}: {e}") from e
+
+    async def shutdown(self) -> None:
+        if self._cleanup_task is not None:
+            self._cleanup_task.cancel()
+            try:
+                await self._cleanup_task
+            except Exception:
+                pass
+
+        with self._lock:
+            sessions = list(self._lru.values())
+            self._lru.clear()
+
+        for s in sessions:
+            try:
+                s.close()
+            except Exception:
+                pass
+
+        if self.gateway is not None:
+            try:
+                self.gateway.terminate()
+            except Exception:
+                pass
+            self.gateway = None
+        
+        if self.thy_init is not None:
+            try:
+                self.thy_init.cleanup()
+            except Exception:
+                pass
+            self.thy_init = None
+    
+    # Services
 
     async def _create_session(
         self,
-        initial_thys: List[str],
-        field: str
+        initial_thys: List[str] = None,
+        field: str = "HOL"
     ) -> _Isabelle_Session:
-        """Create a new session"""
-        if initial_thys is None:
-            initial_thys = ["$ISABELLE_REPL_HOME/thys/IsabelleREPL"]
-        else:
-            initial_thys = ["$ISABELLE_REPL_HOME/thys/" + self.thy_init.gen_file("main", initial_thys).data]
+        try:
+            if initial_thys is None:
+                initial_thys = ["$ISABELLE_REPL_HOME/thys/IsabelleREPL"]
+            else:
+                initial_thys = ["$ISABELLE_REPL_HOME/thys/" + self.thy_init.gen_file("main", initial_thys).data]
+            java_list = self.gateway.gateway.jvm.java.util.ArrayList()
+            for thy in initial_thys:
+                java_list.add(thy)
+            if field is None or field == "" or str(field).lower() == "null":
+                field = "HOL"
+        except Exception as e:
+            raise RuntimeError(f"{__name__}._create_session: Failed to generate initial thy file: {e}")
         session_id = uuid.uuid4()
-        # Create backend (reuses existing gateway!)
-        backend = self.gateway.get_repl_backend_with_initial_theories(
-            show_states=True,
-            enable_cache=Server.ENABLE_CACHE,
-            enable_memory_management=Server.ENABLE_MEMORY_MANAGEMENT,
-            initial_thys=initial_thys,
-            field=field
-        )
-        session = _Isabelle_Session(
-            session_id=session_id,
-            session_theories=initial_thys,
-            session_field=field,
-            backend=backend
-        )
+
+        try:
+            raw_backend = self.gateway.get_repl_backend_with_initial_theories(
+                show_states=Server.SHOW_STATES,
+                enable_cache=Server.ENABLE_CACHE,
+                max_cache_size=Server.MAX_CACHE_SIZE,
+                enable_memory_management=Server.ENABLE_MEMORY_MANAGEMENT,
+                initial_thys=java_list,
+                field=field
+            )
+        except Exception as e:
+            raise RuntimeError(f"{__name__}._create_session: Failed to create raw backend for session {session_id}: {e}")
+
+        try:
+            backend = ThreadedBackend(raw_backend, name = f"isabelle-{session_id.hex[:8]}")
+        except Exception as e:
+            raise RuntimeError(f"{__name__}._create_session: Failed to create threaded backend for session {session_id}: {e}")
+
+        try:
+            session = _Isabelle_Session(
+                session_id=session_id,
+                session_theories=initial_thys,
+                session_field=field,
+                backend=backend
+            )
+        except Exception as e:
+            backend.close()
+            raise RuntimeError(f"{__name__}._create_session: Failed to create session object for session {session_id}: {e}")
         
-        self.LRU_update(session)
-        print(f"Created session {session_id}")
-        return session
-    
-    async def init_sessions(self) -> None:
-        self._ensure_gateway()
-
-    def LRU_update(self, session: _Isabelle_Session) -> None:
-        """Update LRU cache with session"""
-        self.LRU[session.session_id] = session
-        if len(self.LRU) > self.pool_size:
-            # Evict least recently used session
-            oldest_session_id = min(self.LRU, key=lambda k: self.LRU[k].last_activity)
-            oldest_session = self.LRU[oldest_session_id]
-            oldest_session.close()
-            del self.LRU[oldest_session_id]
-            print(f"Evicted session {oldest_session_id} due to LRU policy")
-
-    def _get_session(self, session_id: str) -> _Isabelle_Session:
-        """Get session by ID"""
-        if session_id not in self.LRU:
-            raise Exception(f"Session {session_id} not found")
-
-        session = self.LRU[session_id]
-
-        if session.status == SessionStatus.CLOSED:
-            raise Exception(f"Session {session_id} is closed")
-        
-        return session
-    
-    def _close_session(self, session_id: str) -> bool:
-        """Close a session"""
-        if session_id in self.LRU:
-            session = self.LRU[session_id]
+        try:
+            with self._lock:
+                self._lru[session_id] = session
+                self._lru.move_to_end(session_id, last=True)
+                self._evict_if_needed_locked()
+        except Exception as e:
             session.close()
-            del self.LRU[session_id]
-            print(f"Closed session {session_id}")
-            return True
-        return False
+            raise RuntimeError(f"{__name__}._create_session: Failed to add session {session_id} to session manager: {e}")
+        
+        return session
+    
+    def _evict_if_needed_locked(self) -> None:
+        while len(self._lru) > self.pool_size:
+            oldest_id, oldest = self._lru.popitem(last=False)
+            try:
+                oldest.close()
+            except Exception:
+                pass
+
+    async def create_session(self, theories: Optional[List[str]] = None, field: str = "default") -> _Isabelle_Session:
+        return await self._create_session(theories, field)
+
+    def get_session(self, session_id: Union[str, uuid.UUID]) -> _Isabelle_Session:
+        sid = self._normalize_session_id(session_id)
+        with self._lock:
+            if sid not in self._lru:
+                raise KeyError(f"Session {sid} not found")
+
+            session = self._lru[sid]
+            if session.status == SessionStatus.CLOSED:
+                raise RuntimeError(f"Session {sid} is closed")
+
+            # bump LRU
+            self._lru.move_to_end(sid, last=True)
+            return session
+
+    def close_session(self, session_id: Union[str, uuid.UUID]) -> None:
+        sid = self._normalize_session_id(session_id)
+        with self._lock:
+            session = self._lru.pop(sid, None)
+        if session is None:
+            raise KeyError(f"Session {sid} not found")
+        session.close()
     
     def list_sessions(self) -> List[Dict[str, Any]]:
-        """List all active sessions"""
-        return [
-            {
-                'session_id': sid,
-                'created_at': session.created_at,
-                'last_activity': session.last_activity,
-                'status': session.status.value,
-                'theories': session.theories,
-                'commands_executed': len(session.command_history)
-            }
-            for sid, session in self.LRU.items()
-        ]
+        with self._lock:
+            return [
+                {
+                    "session_id": str(sid),
+                    "created_at": session.created_at,
+                    "last_activity": session.last_activity,
+                    "status": session.status.value,
+                    "theories": session.theories,
+                    "commands_executed": len(session.command_history),
+                }
+                for sid, session in self._lru.items()
+            ]
+
     
-    async def cleanup_idle_sessions(self):
-        """Periodic task to cleanup idle sessions"""
+    async def cleanup_idle_sessions(self) -> None:
         while True:
-            try:
-                await asyncio.sleep(60)  # Check every minute
-                
-                idle_sessions = [
-                    sid for sid, session in self.LRU.items()
-                    if session.is_idle(self.idle_timeout)
-                ]
-                
-                for sid in idle_sessions:
-                    print(f"Closing idle session {sid}")
-                    self.close_session(sid)
-                    
-            except Exception as e:
-                print(f"Error in cleanup task: {e}")
-    
-    def start_cleanup_task(self):
-        """Start the background cleanup task"""
+            await asyncio.sleep(60)
+
+            now = time.time()
+            to_close: List[uuid.UUID] = []
+
+            with self._lock:
+                for sid, session in list(self._lru.items()):
+                    if session.status != SessionStatus.CLOSED and session.is_idle(self.idle_timeout, now=now):
+                        to_close.append(sid)
+
+            for sid in to_close:
+                self.close_session(sid)
+
+    def start_cleanup_task(self) -> None:
         if self._cleanup_task is None:
             self._cleanup_task = asyncio.create_task(self.cleanup_idle_sessions())
     
-    def shutdown(self):
-        """Shutdown all sessions"""
-        print("Shutting down all sessions...")
-        for session_id in list(self.LRU.keys()):
-            self.close_session(session_id)
+    def get_lru_info(self) -> Dict[str, Any]:
+        with self._lock:
+            return {
+                "active_sessions": len(self._lru),
+                "max_pool_size": self.pool_size,
+            }
+    

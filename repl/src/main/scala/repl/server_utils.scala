@@ -44,25 +44,39 @@ object Server_Utils {
 
   def start_session(server_info: Server.Info, server: Server, options: List[String], field: String = "HOL"): UUID.T = {
 
-    val session_start_json = withServerContext(server_info, server) { context =>
+     val session_start_json = withServerContext(server_info, server) { context =>
 
-      val result_cell = Synchronized[Option[JSON.Object.T]](None)
-      Isabelle_Thread.fork(name = "session_start") {
+    val result_cell = Synchronized[Option[JSON.Object.T]](None)
+    val error_cell  = Synchronized[Option[Throwable]](None)
+
+    Isabelle_Thread.fork(name = "session_start") {
+      try {
         val args = Server_Commands.Session_Start.Args(
-          build = Server_Commands.Session_Build.Args(session = field, options = options))
+          build = Server_Commands.Session_Build.Args(session = field, options = options)
+        )
         val (res, entry) =
           Server_Commands.Session_Start.command(
-            args, progress = context.progress(), log = context.server.log)
-        context.server.add_session(entry)     
-        result_cell.change(_ => Some(res))    
-      }.join()
-      result_cell.value.getOrElse(error("Session start failed"))
+            args, progress = context.progress(), log = context.server.log
+          )
+        context.server.add_session(entry)
+        result_cell.change(_ => Some(res))
+      } catch {
+        case t: Throwable =>
+          error_cell.change(_ => Some(t))
+          Output.error_message(s"Session_Start failed for session='$field' options=${options.mkString(",")}: ${Exn.message(t)}")
+      }
+    }.join()
+
+    error_cell.value match {
+      case Some(t) => error(s"Session start failed for session='$field': ${Exn.message(t)}")
+      case None    => result_cell.value.getOrElse(error("Session start failed (no result and no captured error)"))
     }
-    val session_id = JSON
-      .uuid(session_start_json, "session_id")
-      .getOrElse(error("Unable to retrieve session id."))
-    Output.writeln(s"Started session ${session_id}.")
-    session_id
+  }
+
+  val session_id = JSON.uuid(session_start_json, "session_id")
+    .getOrElse(error("Unable to retrieve session id."))
+  Output.writeln(s"Started session ${session_id}.")
+  session_id
   }
 
   def stop_session(
