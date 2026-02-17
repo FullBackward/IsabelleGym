@@ -3,8 +3,7 @@ from typing import List, Optional, Dict, Any
 
 class SessionCreateRequest(BaseModel):
     theories: List[str] | None = None
-    enable_cache: bool = True
-    session_name: str | None = None
+    field: str | None = None
 
 
 class SessionResponse(BaseModel):

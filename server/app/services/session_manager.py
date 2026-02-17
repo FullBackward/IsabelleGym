@@ -48,10 +48,10 @@ class SessionManager:
     
     def _normalize_field(self, field: Optional[str]) -> str:
         if field is None:
-            return "HOL"
+            return Server.DEFAULT_FIELD
         f = str(field).strip()
         if f == "" or f.lower() in {"null", "none", "default"}:
-            return "HOL"
+            return Server.DEFAULT_FIELD
         return f
 
     def _normalize_session_id(self, session_id: Union[str, uuid.UUID]) -> uuid.UUID:
@@ -67,6 +67,12 @@ class SessionManager:
 
     async def startup(self) -> None:
         where = self._where("startup")
+        if Server.INITIAL_SESSIONS <=0 :
+            if Server.INITIAL_SESSIONS == 0:
+                print(f"{where}: skipping pool pre-warming (INITIAL_SESSIONS=0)")
+            else:
+                Server.INITIAL_SESSIONS = 2
+                print(f"{where}: invalid INITIAL_SESSIONS={Server.INITIAL_SESSIONS}, must be >= 0. Defaulting to 2.")
         try:
             self._ensure_gateway()
         except Exception as e:
@@ -123,7 +129,7 @@ class SessionManager:
     async def _create_session(
         self,
         initial_thys: List[str] = None,
-        field: str = "HOL"
+        field: str = Server.DEFAULT_FIELD
     ) -> _Isabelle_Session:
         try:
             if initial_thys is None:
@@ -134,13 +140,14 @@ class SessionManager:
             for thy in initial_thys:
                 java_list.add(thy)
             if field is None or field == "" or str(field).lower() == "null":
-                field = "HOL"
+                field = Server.DEFAULT_FIELD
         except Exception as e:
             raise RuntimeError(f"{__name__}._create_session: Failed to generate initial thy file: {e}")
         session_id = uuid.uuid4()
 
         try:
-            raw_backend = self.gateway.get_repl_backend_with_initial_theories(
+            raw_backend = await asyncio.to_thread(
+                self.gateway.get_repl_backend_with_initial_theories,
                 show_states=Server.SHOW_STATES,
                 enable_cache=Server.ENABLE_CACHE,
                 max_cache_size=Server.MAX_CACHE_SIZE,
@@ -186,8 +193,11 @@ class SessionManager:
             except Exception:
                 pass
 
-    async def create_session(self, theories: Optional[List[str]] = None, field: str = "default") -> _Isabelle_Session:
-        return await self._create_session(theories, field)
+    async def create_session(self, theories: Optional[List[str]] = None, field: str = Server.DEFAULT_FIELD) -> _Isabelle_Session:
+        try:
+            return await self._create_session(theories, field)
+        except Exception as e:
+            raise SessionStartError(f"{self._where('create_session')}: Failed to create session: {e}") from e
 
     def get_session(self, session_id: Union[str, uuid.UUID]) -> _Isabelle_Session:
         sid = self._normalize_session_id(session_id)
