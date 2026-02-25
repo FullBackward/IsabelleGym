@@ -159,7 +159,7 @@ class IsabelleClient:
         else:
             print("[Cleanup] Closing backend...")
             try:
-                self.repl_backend.reset()
+                self.repl_backend.exit()
                 print("  ✓ Backend exited")
             except Exception as e:
                 print(f"  ⚠ Error closing backend: {e}")
