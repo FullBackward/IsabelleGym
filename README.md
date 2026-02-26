@@ -32,7 +32,7 @@ gym/
 ```
 The original IsabelleGym project which is the foundation of this project can be found from IsabelleGym.zip, also with the thesis.
 
-## Deployment
+## Local IsabelleGym Deployment
 ### 1. Use install.sh
 chmod +x install.sh
 
@@ -42,9 +42,26 @@ chmod +x install.sh
 
 docker-compose up -d
 
-source .venv/bin/activate
+pip install -r requirements.txt
 
 If meeting "Bad component..." problem when compiling scala backend, try creating a empty main file under isabelle/Admin/components path.
+
+## Server Deployment
+### 1. start docker
+in root directory:
+```shell
+docker-compose up -d
+```
+The docker compose up process will download linux version of Isabelle2025 into the container, then compile the Scala scripts with Gradle. This process might take 5 to 10 minutes depending on the internet speed and processing capacity of the host.
+### 2. run server
+#### a) with docker GUI
+inside the container, navigate to Exec tab, which allows you to run bash inside the container
+```shell
+cd server/app
+```
+```shell
+fastapi run main.py
+```
 ## Detailed Information
 ### 1. Agent Interface (`gym/isabelle_agent_interface.py`)
 
