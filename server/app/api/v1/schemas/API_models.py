@@ -1,5 +1,7 @@
-from pydantic import BaseModel
-from typing import List, Optional, Dict, Any
+from typing import Any, Dict, List, Optional
+
+from pydantic import BaseModel, Field
+
 
 class SessionCreateRequest(BaseModel):
     theories: List[str] | None = None
@@ -18,12 +20,31 @@ class CommandRequest(BaseModel):
     timeout: Optional[float] = 30.0
 
 
+class BigStepDiagnosticResponse(BaseModel):
+    stage: str
+    index: int
+    success: bool
+    preview: str | None = None
+    output: str | None = None
+    error: str | None = None
+    execution_time: float
+
+
+class FailureLocationResponse(BaseModel):
+    block_index: int
+    chunk_index: int | None = None
+    preview: str | None = None
+
+
 class CommandResponse(BaseModel):
     success: bool
     output: str | None = None
     error: str | None = None
     subgoals: List[str]
     execution_time: float
+    mode: str | None = None
+    diagnostics: List[BigStepDiagnosticResponse] = Field(default_factory=list)
+    failure_location: FailureLocationResponse | None = None
 
 
 class ProofStateResponse(BaseModel):
@@ -55,3 +76,11 @@ class ProofStatusResponse(BaseModel):
     status: str
     progress: Optional[Dict[str, Any]] = None
     result: Optional[Dict[str, Any]] = None
+
+
+class BigStepTheoryRequest(BaseModel):
+    theory_name: str
+    dependencies: List[str] = Field(default_factory=list)
+    field: str | None = None
+    theory: str
+    timeout: float = 300.0
