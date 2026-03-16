@@ -38,9 +38,11 @@ class BigStepExecuteResult(BaseModel):
     output: Optional[str] = None
     error: Optional[str] = None
     execution_time: float
-    mode: str = "full"
+    subgoals: List[str] = Field(default_factory=list)
+    mode: str = "strict_full"
     diagnostics: List[BigStepDiagnostic] = Field(default_factory=list)
     failure_location: Optional[BigStepFailureLocation] = None
+    theory_verified: bool = False
 
 
 class SessionExecutionError(BaseModel):

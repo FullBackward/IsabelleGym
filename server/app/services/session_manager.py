@@ -1,33 +1,37 @@
+from __future__ import annotations
+
 import asyncio
 import hashlib
 import threading
 import time
 import uuid
 from collections import OrderedDict
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Set, Union
 
 from repl.src.python.repl_backend_gateway import ReplBackendGatewayProcess
 from repl.src.python.thy_init import ThyInit
 from server.app.core.config import Server
+from server.app.core.logging import get_logger, logging_context
 from server.app.errors import GatewayUnavailable, SessionError, SessionStartError
 from server.app.services.session import SessionStatus, _Isabelle_Session
 from server.app.services.threaded_backend import ThreadedBackend
 
-# Global resources (shared across all sessions)
 _gateway_lock = threading.Lock()
+logger = get_logger(__name__)
 
 
 class SessionManager:
-    """Manages all active Isabelle sessions"""
+    """Manages all active Isabelle sessions."""
 
     def __init__(
         self,
-        idle_timeout: float = 300,
+        idle_timeout: float = Server.IDLE_TIMEOUT_SECONDS,
         pool_size: int = Server.DEFAULT_POOL_SIZE,
         initial_sessions: int = Server.INITIAL_SESSIONS,
     ):
         self.idle_timeout = idle_timeout
         self.pool_size = pool_size
+        self.initial_sessions = initial_sessions
 
         self.gateway: Optional[ReplBackendGatewayProcess] = None
         self.thy_init: Optional[ThyInit] = None
@@ -35,6 +39,7 @@ class SessionManager:
         self._lru: "OrderedDict[uuid.UUID, _Isabelle_Session]" = OrderedDict()
         self._lock = threading.Lock()
         self._cleanup_task: Optional[asyncio.Task] = None
+        #self._verified_theories: Dict[str, Set[str]] = {}
 
     def _where(self, func_name: str) -> str:
         return f"{__name__}.{self.__class__.__name__}.{func_name}"
@@ -44,8 +49,11 @@ class SessionManager:
         try:
             with _gateway_lock:
                 if self.gateway is None:
+                    logger.info("starting REPL gateway")
                     self.gateway = ReplBackendGatewayProcess()
+                    logger.info("REPL gateway started")
         except Exception as e:
+            logger.exception("failed to start REPL gateway")
             raise GatewayUnavailable(f"{where}: failed to start REPL gateway: {e}") from e
 
     def _normalize_field(self, field: Optional[str]) -> str:
@@ -87,34 +95,64 @@ class SessionManager:
         dep_key = self.build_dependency_key(theories, field)
         return f"wrap_{dep_key[:16]}"
 
+    def is_theory_verified(self, theory_name: str, theories: Optional[List[str]], field: Optional[str]) -> bool:
+        dep_key = self.build_dependency_key(theories, field)
+        normalized_name = str(theory_name).strip()
+        with self._lock:
+            return normalized_name in self._verified_theories.get(dep_key, set())
+
+    def mark_theory_verified(self, theory_name: str, theories: Optional[List[str]], field: Optional[str]) -> None:
+        dep_key = self.build_dependency_key(theories, field)
+        normalized_name = str(theory_name).strip()
+        with self._lock:
+            bucket = self._verified_theories.setdefault(dep_key, set())
+            bucket.add(normalized_name)
+        logger.info(
+            "marked theory as verified theory_name=%s dependency_key=%s",
+            normalized_name,
+            dep_key[:12],
+        )
+
+    def list_verified_theories(self) -> Dict[str, List[str]]:
+        with self._lock:
+            return {key: sorted(value) for key, value in self._verified_theories.items()}
+
     async def startup(self) -> None:
         where = self._where("startup")
-        if Server.INITIAL_SESSIONS <= 0:
-            if Server.INITIAL_SESSIONS == 0:
-                print(f"{where}: skipping pool pre-warming (INITIAL_SESSIONS=0)")
-            else:
-                Server.INITIAL_SESSIONS = 2
-                print(
-                    f"{where}: invalid INITIAL_SESSIONS={Server.INITIAL_SESSIONS}, must be >= 0. Defaulting to 2."
-                )
+        initial_sessions = self.initial_sessions
+        if initial_sessions < 0:
+            logger.warning("invalid initial_sessions=%s; defaulting to 2", initial_sessions)
+            initial_sessions = Server.INITIAL_SESSIONS
+
+        if initial_sessions == 0:
+            logger.info("skipping pool pre-warming because initial_sessions=0")
+
         try:
             self._ensure_gateway()
         except Exception as e:
             if isinstance(e, GatewayUnavailable):
                 raise
             raise GatewayUnavailable(f"{where}: gateway startup failed: {e}") from e
+
         try:
             if self.thy_init is None:
+                logger.info("initializing ThyInit")
                 self.thy_init = ThyInit()
+                logger.info("ThyInit initialized")
         except Exception as e:
+            logger.exception("failed to initialize ThyInit")
             raise SessionStartError(f"{where}: failed to initialize ThyInit: {e}") from e
-        for i in range(Server.INITIAL_SESSIONS):
+
+        for i in range(initial_sessions):
             try:
+                logger.info("pre-warming session %s/%s", i + 1, initial_sessions)
                 await self._create_session()
             except Exception as e:
+                logger.exception("failed to pre-start session %s", i)
                 raise SessionStartError(f"{where}: failed to pre-start session {i}: {e}") from e
 
     async def shutdown(self) -> None:
+        logger.info("session manager shutdown started")
         if self._cleanup_task is not None:
             self._cleanup_task.cancel()
             try:
@@ -125,26 +163,32 @@ class SessionManager:
         with self._lock:
             sessions = list(self._lru.values())
             self._lru.clear()
+            self._verified_theories.clear()
 
-        for s in sessions:
+        for session in sessions:
             try:
-                s.close()
+                with logging_context(session_id=session.session_id, field=session.field):
+                    logger.info("closing session during shutdown")
+                    session.close()
             except Exception:
-                pass
+                logger.exception("failed to close session during shutdown")
 
         if self.gateway is not None:
             try:
+                logger.info("terminating REPL gateway")
                 self.gateway.terminate()
             except Exception:
-                pass
+                logger.exception("failed to terminate REPL gateway")
             self.gateway = None
 
         if self.thy_init is not None:
             try:
+                logger.info("cleaning up ThyInit")
                 self.thy_init.cleanup()
             except Exception:
-                pass
+                logger.exception("failed to cleanup ThyInit")
             self.thy_init = None
+        logger.info("session manager shutdown finished")
 
     async def _create_session(
         self,
@@ -161,75 +205,97 @@ class SessionManager:
         dependency_key = self.build_dependency_key(dependency_theories, normalized_field)
         wrapper_theory: Optional[str] = None
 
-        try:
-            if not dependency_theories:
-                loaded_theories = ["$ISABELLE_REPL_HOME/thys/IsabelleREPL"]
-            else:
-                wrapper_name = self._build_wrapper_theory_name(dependency_theories, normalized_field)
-                gen_result = self.thy_init.gen_file(wrapper_name, dependency_theories)
-                if not getattr(gen_result, "data", None):
-                    raise RuntimeError(getattr(gen_result, "err", "unknown ThyInit error"))
-                wrapper_theory = f"$ISABELLE_REPL_HOME/thys/{gen_result.data}"
-                loaded_theories = [wrapper_theory]
+        with logging_context(field=normalized_field):
+            try:
+                if not dependency_theories:
+                    loaded_theories = ["$ISABELLE_REPL_HOME/thys/IsabelleREPL"]
+                    logger.info("creating base session with default IsabelleREPL theory")
+                else:
+                    wrapper_name = self._build_wrapper_theory_name(dependency_theories, normalized_field)
+                    logger.info(
+                        "generating wrapper theory wrapper=%s dependency_key=%s theories=%s",
+                        wrapper_name,
+                        dependency_key[:12],
+                        dependency_theories,
+                    )
+                    gen_result = self.thy_init.gen_file(wrapper_name, dependency_theories)
+                    if not getattr(gen_result, "data", None):
+                        raise RuntimeError(getattr(gen_result, "err", "unknown ThyInit error"))
+                    wrapper_theory = f"$ISABELLE_REPL_HOME/thys/{gen_result.data}"
+                    loaded_theories = [wrapper_theory]
 
-            java_list = self.gateway.gateway.jvm.java.util.ArrayList()
-            for thy in loaded_theories:
-                java_list.add(thy)
-        except Exception as e:
-            raise RuntimeError(f"{where}: failed to generate initial theory file: {e}") from e
+                java_list = self.gateway.gateway.jvm.java.util.ArrayList()
+                for thy in loaded_theories:
+                    java_list.add(thy)
+            except Exception as e:
+                logger.exception("failed to prepare initial theory file")
+                raise RuntimeError(f"{where}: failed to generate initial theory file: {e}") from e
 
-        session_id = uuid.uuid4()
+            session_id = uuid.uuid4()
 
-        try:
-            raw_backend = await asyncio.to_thread(
-                self.gateway.get_repl_backend_with_initial_theories,
-                show_states=Server.SHOW_STATES,
-                enable_cache=Server.ENABLE_CACHE,
-                max_cache_size=Server.MAX_CACHE_SIZE,
-                enable_memory_management=Server.ENABLE_MEMORY_MANAGEMENT,
-                initial_thys=java_list,
-                field=normalized_field,
+            try:
+                logger.info("creating raw backend for session_id=%s", session_id)
+                raw_backend = await asyncio.to_thread(
+                    self.gateway.get_repl_backend_with_initial_theories,
+                    show_states=Server.SHOW_STATES,
+                    enable_cache=Server.ENABLE_CACHE,
+                    max_cache_size=Server.MAX_CACHE_SIZE,
+                    enable_memory_management=Server.ENABLE_MEMORY_MANAGEMENT,
+                    initial_thys=java_list,
+                    field=normalized_field,
+                )
+            except Exception as e:
+                logger.exception("failed to create raw backend for session_id=%s", session_id)
+                raise RuntimeError(f"{where}: failed to create raw backend for session {session_id}: {e}") from e
+
+            try:
+                backend = ThreadedBackend(raw_backend, name=f"isabelle-{session_id.hex[:8]}")
+            except Exception as e:
+                logger.exception("failed to create threaded backend for session_id=%s", session_id)
+                raise RuntimeError(f"{where}: failed to create threaded backend for session {session_id}: {e}") from e
+
+            try:
+                session = _Isabelle_Session(
+                    session_id=session_id,
+                    session_theories=dependency_theories,
+                    loaded_theories=loaded_theories,
+                    dependency_key=dependency_key,
+                    wrapper_theory=wrapper_theory,
+                    session_field=normalized_field,
+                    backend=backend,
+                )
+            except Exception as e:
+                backend.close()
+                logger.exception("failed to create session object for session_id=%s", session_id)
+                raise RuntimeError(f"{where}: failed to create session object for session {session_id}: {e}") from e
+
+            try:
+                with self._lock:
+                    self._lru[session_id] = session
+                    self._lru.move_to_end(session_id, last=True)
+                    self._evict_if_needed_locked()
+            except Exception as e:
+                session.close()
+                logger.exception("failed to register session session_id=%s", session_id)
+                raise RuntimeError(f"{where}: failed to add session {session_id} to session manager: {e}") from e
+
+            logger.info(
+                "session created session_id=%s dependency_key=%s wrapper_theory=%s",
+                session_id,
+                dependency_key[:12],
+                wrapper_theory,
             )
-        except Exception as e:
-            raise RuntimeError(f"{where}: failed to create raw backend for session {session_id}: {e}") from e
-
-        try:
-            backend = ThreadedBackend(raw_backend, name=f"isabelle-{session_id.hex[:8]}")
-        except Exception as e:
-            raise RuntimeError(f"{where}: failed to create threaded backend for session {session_id}: {e}") from e
-
-        try:
-            session = _Isabelle_Session(
-                session_id=session_id,
-                session_theories=dependency_theories,
-                loaded_theories=loaded_theories,
-                dependency_key=dependency_key,
-                wrapper_theory=wrapper_theory,
-                session_field=normalized_field,
-                backend=backend,
-            )
-        except Exception as e:
-            backend.close()
-            raise RuntimeError(f"{where}: failed to create session object for session {session_id}: {e}") from e
-
-        try:
-            with self._lock:
-                self._lru[session_id] = session
-                self._lru.move_to_end(session_id, last=True)
-                self._evict_if_needed_locked()
-        except Exception as e:
-            session.close()
-            raise RuntimeError(f"{where}: failed to add session {session_id} to session manager: {e}") from e
-
-        return session
+            return session
 
     def _evict_if_needed_locked(self) -> None:
         while len(self._lru) > self.pool_size:
-            _, oldest = self._lru.popitem(last=False)
+            oldest_id, oldest = self._lru.popitem(last=False)
             try:
-                oldest.close()
+                with logging_context(session_id=oldest_id, field=oldest.field):
+                    logger.info("evicting LRU session because pool is full")
+                    oldest.close()
             except Exception:
-                pass
+                logger.exception("failed to close evicted session session_id=%s", oldest_id)
 
     async def create_session(
         self,
@@ -239,6 +305,7 @@ class SessionManager:
         try:
             return await self._create_session(theories, field)
         except Exception as e:
+            logger.exception("create_session failed")
             raise SessionStartError(f"{self._where('create_session')}: Failed to create session: {e}") from e
 
     def get_session(self, session_id: Union[str, uuid.UUID]) -> _Isabelle_Session:
@@ -260,7 +327,9 @@ class SessionManager:
             session = self._lru.pop(sid, None)
         if session is None:
             raise KeyError(f"Session {sid} not found")
-        session.close()
+        with logging_context(session_id=sid, field=session.field):
+            logger.info("closing session")
+            session.close()
         return True
 
     def list_sessions(self) -> List[Dict[str, Any]]:
@@ -277,6 +346,7 @@ class SessionManager:
                     "dependency_key": session.dependency_key,
                     "field": session.field,
                     "commands_executed": len(session.command_history),
+                    "verified_theories": sorted(self._verified_theories.get(session.dependency_key or "", set())),
                 }
                 for sid, session in self._lru.items()
             ]
@@ -293,15 +363,19 @@ class SessionManager:
                         to_close.append(sid)
 
             for sid in to_close:
+                logger.info("closing idle session session_id=%s", sid)
                 self.close_session(sid)
 
     def start_cleanup_task(self) -> None:
         if self._cleanup_task is None:
+            logger.info("starting idle session cleanup task")
             self._cleanup_task = asyncio.create_task(self.cleanup_idle_sessions())
 
     def get_lru_info(self) -> Dict[str, Any]:
         with self._lock:
+            total_verified = sum(len(v) for v in self._verified_theories.values())
             return {
                 "active_sessions": len(self._lru),
                 "max_pool_size": self.pool_size,
+                "verified_theories": total_verified,
             }

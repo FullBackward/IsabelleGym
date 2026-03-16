@@ -20,16 +20,6 @@ class CommandRequest(BaseModel):
     timeout: Optional[float] = 30.0
 
 
-class BigStepDiagnosticResponse(BaseModel):
-    stage: str
-    index: int
-    success: bool
-    preview: str | None = None
-    output: str | None = None
-    error: str | None = None
-    execution_time: float
-
-
 class FailureLocationResponse(BaseModel):
     block_index: int
     chunk_index: int | None = None
@@ -43,8 +33,10 @@ class CommandResponse(BaseModel):
     subgoals: List[str]
     execution_time: float
     mode: str | None = None
-    diagnostics: List[BigStepDiagnosticResponse] = Field(default_factory=list)
+    diagnostics: List[Any] = Field(default_factory=list)
     failure_location: FailureLocationResponse | None = None
+    theory_verified: bool = False
+    theory_already_verified: bool = False
 
 
 class ProofStateResponse(BaseModel):

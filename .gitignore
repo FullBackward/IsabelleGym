@@ -265,3 +265,7 @@ afp
 .bloop/
 project/metals.sbt
 metals.sbt
+
+**/qIsabelle/**
+**/HOL corpus/*.thy
+**/HOL corpus/**/
