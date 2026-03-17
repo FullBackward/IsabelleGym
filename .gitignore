@@ -268,4 +268,5 @@ metals.sbt
 
 **/qIsabelle/**
 **/HOL corpus/*.thy
+**/HOL corpus/*.ML
 **/HOL corpus/**/
