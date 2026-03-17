@@ -95,28 +95,6 @@ class SessionManager:
         dep_key = self.build_dependency_key(theories, field)
         return f"wrap_{dep_key[:16]}"
 
-    def is_theory_verified(self, theory_name: str, theories: Optional[List[str]], field: Optional[str]) -> bool:
-        dep_key = self.build_dependency_key(theories, field)
-        normalized_name = str(theory_name).strip()
-        with self._lock:
-            return normalized_name in self._verified_theories.get(dep_key, set())
-
-    def mark_theory_verified(self, theory_name: str, theories: Optional[List[str]], field: Optional[str]) -> None:
-        dep_key = self.build_dependency_key(theories, field)
-        normalized_name = str(theory_name).strip()
-        with self._lock:
-            bucket = self._verified_theories.setdefault(dep_key, set())
-            bucket.add(normalized_name)
-        logger.info(
-            "marked theory as verified theory_name=%s dependency_key=%s",
-            normalized_name,
-            dep_key[:12],
-        )
-
-    def list_verified_theories(self) -> Dict[str, List[str]]:
-        with self._lock:
-            return {key: sorted(value) for key, value in self._verified_theories.items()}
-
     async def startup(self) -> None:
         where = self._where("startup")
         initial_sessions = self.initial_sessions
@@ -163,7 +141,6 @@ class SessionManager:
         with self._lock:
             sessions = list(self._lru.values())
             self._lru.clear()
-            self._verified_theories.clear()
 
         for session in sessions:
             try:
@@ -346,7 +323,7 @@ class SessionManager:
                     "dependency_key": session.dependency_key,
                     "field": session.field,
                     "commands_executed": len(session.command_history),
-                    "verified_theories": sorted(self._verified_theories.get(session.dependency_key or "", set())),
+                    "verified_theories": session.verified_theories
                 }
                 for sid, session in self._lru.items()
             ]
@@ -373,9 +350,7 @@ class SessionManager:
 
     def get_lru_info(self) -> Dict[str, Any]:
         with self._lock:
-            total_verified = sum(len(v) for v in self._verified_theories.values())
             return {
                 "active_sessions": len(self._lru),
                 "max_pool_size": self.pool_size,
-                "verified_theories": total_verified,
             }

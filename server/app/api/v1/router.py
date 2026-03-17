@@ -43,7 +43,6 @@ async def root(session_manager=Depends(get_session_manager)):
         "status": "healthy",
         "active_sessions": lru.get("active_sessions", 0),
         "max_pool_size": lru.get("max_pool_size", 0),
-        "verified_theories": lru.get("verified_theories", 0),
         "timestamp": datetime.now().isoformat(),
     }
 
@@ -251,20 +250,6 @@ async def execute_big_step(request: BigStepTheoryRequest, session_manager=Depend
             _preview(request.theory, Logging.THEORY_PREVIEW_CHARS),
         )
 
-        if session_manager.is_theory_verified(request.theory_name, request.dependencies, request.field):
-            logger.info("big-step skipped because theory is already verified theory_name=%s", request.theory_name)
-            return CommandResponse(
-                success=True,
-                output=f"Theory '{request.theory_name}' is already verified for this dependency context.",
-                error=None,
-                subgoals=[],
-                execution_time=0.0,
-                mode="verified_cache",
-                diagnostics=[],
-                theory_verified=True,
-                theory_already_verified=True,
-            )
-
         available_sessions = [
             info
             for info in session_manager.list_sessions()
@@ -287,9 +272,6 @@ async def execute_big_step(request: BigStepTheoryRequest, session_manager=Depend
                 request.timeout,
             )
 
-            if getattr(result, "success", False):
-                session_manager.mark_theory_verified(request.theory_name, request.dependencies, request.field)
-
             logger.info(
                 "big-step finished success=%s mode=%s theory_verified=%s diagnostics=%s",
                 getattr(result, "success", False),
@@ -308,7 +290,6 @@ async def execute_big_step(request: BigStepTheoryRequest, session_manager=Depend
                 diagnostics=getattr(result, "diagnostics", []) or [],
                 failure_location=getattr(result, "failure_location", None),
                 theory_verified=bool(getattr(result, "theory_verified", False)),
-                theory_already_verified=False,
             )
 
 

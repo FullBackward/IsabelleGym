@@ -57,6 +57,7 @@ class _Isabelle_Session:
 
         self.command_history: List[Dict[str, Any]] = []
         self.checkpoints: Dict[int, float] = {}
+        self.verified_theories: List[str] = []
 
         self._closed = False
         self.entered_thy = ""
@@ -225,7 +226,9 @@ class _Isabelle_Session:
                 restore_errors.append(f"failed to re-enter previous theory '{previous_theory}': {exc}")
 
         if restore_errors:
+            logger.error("state restore encountered issues: %s", "; ".join(restore_errors))
             return "; ".join(restore_errors)
+        logger.info("state restored successfully after big-step failure")
         return None
 
     def execute_command(self, command: str, timeout: float = 30.0) -> SmallStepExecuteResult:
@@ -365,6 +368,12 @@ class _Isabelle_Session:
                     "success": True,
                     "subgoals_count": 0,
                 }
+            )
+            self.verified_theories.append(theory_name)
+            logger.info(
+                "big-step command finished theory_name=%s execution_time=%s",
+                theory_name,
+                round(execution_time, 3),
             )
             return BigStepExecuteResult(
                 success=True,

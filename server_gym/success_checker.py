@@ -1,7 +1,7 @@
 """ Correct success evaluation helper functions. """
 from typing import List, Optional
 from repl.src.python.repl_backend_gateway import ReplResult
-from local_gym.isabelle_gym import IsabelleGym
+#from local_gym.isabelle_gym import IsabelleGym
 
 
 def get_raw_error_output(result: ReplResult) -> str:
@@ -68,13 +68,12 @@ def is_proof_progress(before_subgoals: List[str], after_subgoals: List[str]) -> 
 
     return False
 
-
+"""
 def is_tactic_successful(
     gym: IsabelleGym,
     result: ReplResult,
     before_subgoals: Optional[List[str]] = None,
 ) -> bool:
-    """ check if tactic execution is truly successful """
 
     if not is_syntax_successful(result):
         return False
@@ -84,7 +83,7 @@ def is_tactic_successful(
 
     after_subgoals = gym.open_subgoals()
     return is_proof_progress(before_subgoals, after_subgoals)
-
+"""
 
 def get_error_message(result: ReplResult) -> str:
     """ get error message from ReplResult """
@@ -103,9 +102,8 @@ def get_output_message(result: ReplResult) -> str:
     except Exception:
         return ""
 
-
+"""
 class SuccessResult:
-    """ wrap ReplResult """
     def __init__(
         self,
         result: ReplResult,
@@ -121,12 +119,11 @@ class SuccessResult:
         return is_tactic_successful(self.gym, self.result, self.before_subgoals)
 
     def separated_output(self):
-        """proxy separated_output method"""
         return self.result.separated_output()
 
     def total_output(self):
-        """proxy total_output method"""
         return self.result.total_output()
 
     def __str__(self):
         return str(self.result)
+"""

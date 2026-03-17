@@ -267,6 +267,6 @@ project/metals.sbt
 metals.sbt
 
 **/qIsabelle/**
-**/HOL corpus/*.thy
-**/HOL corpus/*.ML
-**/HOL corpus/**/
+**/HOL_corpus/**/*.thy
+**/HOL_corpus/**/*.ML
+**/HOL_corpus/**/**/

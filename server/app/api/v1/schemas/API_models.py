@@ -36,7 +36,6 @@ class CommandResponse(BaseModel):
     diagnostics: List[Any] = Field(default_factory=list)
     failure_location: FailureLocationResponse | None = None
     theory_verified: bool = False
-    theory_already_verified: bool = False
 
 
 class ProofStateResponse(BaseModel):
