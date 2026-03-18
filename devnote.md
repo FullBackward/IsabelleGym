@@ -85,4 +85,11 @@ theory Seq imports Main begin datatype 'a seq = Empty | Seq 'a "'a seq" fun conc
 
 theory Algebra imports Sylow Chinese_Remainder Zassenhaus Galois_Connection Generated_Fields Free_Abelian_Groups Divisibility Embedded_Algebras IntRing Sym_Groups Exact_Sequence Polynomials Algebraic_Closure Left_Coset SimpleGroups SndIsomorphismGrp begin
 
+Windows:\
+python process.py --analysis-dir .\HOL_corpus\raw --target .\HOL_corpus\raw --output-dir .\HOL_corpus\processed
+
+Linux:\
 python evaluation/server_benchmark.py --corpus evaluation/HOL_corpus/processed --server-host localhost --server-port 8000 --step bigstep --max-workers 10 --batch-size 8 --output ./outputs/bigstep_results.json
+
+Windows:\
+python evaluation/server_benchmark.py --corpus .\HOL_corpus\processed --server-host localhost --server-port 8000 --step bigstep --max-workers 10 --batch-size 8 --output .\outputs\bigstep_results.json

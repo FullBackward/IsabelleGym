@@ -15,59 +15,36 @@
 #$ISABELLE components -u "$REPO_ROOT/repl"
 
 #!/usr/bin/env bash
+#!/usr/bin/env bash
 set -euo pipefail
 
-# Resolve paths
 SCRIPT_DIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
-ROOT=""${SCRIPT_DIR}/../../../""
-REPO_ROOT="${ROOT}/app/"
+ROOT="${SCRIPT_DIR}/../../../"
+REPO_ROOT="${ROOT}/app"
+ISABELLE="${ROOT}/opt/isabelle/bin/isabelle"
 
-# Isabelle installed outside the bind mount (Option B)
-ISABELLE="$ROOT/opt/isabelle/bin/isabelle"
-
-# Sanity checks
-if [[ ! -x "$ISABELLE" ]]; then
-  echo "Error: Isabelle not found at $ISABELLE"
-  echo "Make sure your Dockerfile installs it to /opt/isabelle and PATH/ISABELLE_HOME are set."
-  exit 1
-fi
-if [[ ! -d "$REPO_ROOT/repl" ]]; then
-  echo "Error: repo root not detected at $REPO_ROOT (expected to find repl/)."
-  exit 1
-fi
-
-fix_crlf_file() {
-  local f="$1"
-  [[ -f "$f" ]] && sed -i 's/\r$//' "$f" || true
+fix_settings_tree() {
+  local dir="$1"
+  [[ -d "$dir" ]] || return 0
+  find "$dir" -path '*/etc/settings' -type f -exec sed -i 's/\r$//' {} \;
 }
 
-# Fix any settings in your repo first (if you ship contrib components there)
-find "$REPO_ROOT" -path '*/etc/settings' -type f -print0 2>/dev/null | xargs -0 -r sed -i 's/\r$//'
+ISABELLE_IDENTIFIER="$(ISABELLE_COMPONENTS='' "$ISABELLE" getenv -b ISABELLE_IDENTIFIER 2>/dev/null || echo Isabelle2025-2)"
+CONTRIB_DIR="${HOME}/.isabelle/${ISABELLE_IDENTIFIER}/contrib"
 
-# --- Determine HOME USER dir and Isabelle identifier WITHOUT loading components
-# This avoids tripping over broken ~/.isabelle/*/contrib/*/etc/settings
-ISABELLE_IDENTIFIER="$( ISABELLE_COMPONENTS='' "$ISABELLE" getenv -b ISABELLE_IDENTIFIER )" || ISABELLE_IDENTIFIER='Isabelle2025'
-ISABELLE_HOME_USER="${HOME}/.isabelle"
+# Fix any repo-side settings
+fix_settings_tree "$REPO_ROOT"
 
-# Fix previously registered (broken) contrib settings under ~/.isabelle/<id>/contrib
-CONTRIB_DIR="${ISABELLE_HOME_USER}/${ISABELLE_IDENTIFIER}/contrib"
-fix_crlf_file "${CONTRIB_DIR}/py4j-0.10.9.9/etc/settings"
-fix_crlf_file "${CONTRIB_DIR}/spliff_2.13-0.8.0/etc/settings"
+# Fix stale user contrib settings before using components
+fix_settings_tree "$CONTRIB_DIR"
 
-# --- Now it is safe to call Isabelle with components enabled ---
+"$ISABELLE" components -u "$REPO_ROOT/repl/Admin"
+"$ISABELLE" component_py4j
+"$ISABELLE" component_spliff
 
-# Update components from Admin (group braces with || to avoid precedence bugs)
-"$ISABELLE" components -u "$REPO_ROOT/repl/Admin" \
-  || { echo "Warning: Failed to update Admin component"; exit 1; }
+# IMPORTANT: fix newly created contrib settings again
+fix_settings_tree "$CONTRIB_DIR"
 
-# (Optional) register your custom helpers if you use them
-"$ISABELLE" component_py4j \
-  || { echo "Warning: Failed to register py4j component"; exit 1; }
-"$ISABELLE" component_spliff \
-  || { echo "Warning: Failed to register spliff component"; exit 1; }
+"$ISABELLE" components -u "$REPO_ROOT/repl"
 
-# Update components from repl
-"$ISABELLE" components -u "$REPO_ROOT/repl" \
-  || { echo "Warning: Failed to update repl component"; exit 1; }
-
-echo "Init done. REPO_ROOT=$REPO_ROOT  ISABELLE=$ISABELLE"
+echo "Init done. REPO_ROOT=$REPO_ROOT  ISABELLE=$ISABELLE  ID=$ISABELLE_IDENTIFIER"

@@ -7,10 +7,10 @@ class API:
 
 
 class Server:
-    DEFAULT_POOL_SIZE: Final = 8
+    DEFAULT_POOL_SIZE: Final = 16
     ENABLE_MEMORY_MANAGEMENT: Final = True
     ENABLE_CACHE: Final = False
-    INITIAL_SESSIONS: Final = 2
+    INITIAL_SESSIONS: Final = 8
     MAX_CACHE_SIZE: Final = 1
     SHOW_STATES: Final = False
     DEFAULT_FIELD: Final = "HOL"
