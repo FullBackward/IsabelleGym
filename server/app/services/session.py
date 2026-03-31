@@ -10,6 +10,7 @@ from server.app.core.config import Logging
 from server.app.core.logging import get_logger, logging_context
 from server.app.errors import SessionError
 from server.app.services.threaded_backend import ThreadedBackend
+from server.app.services.theory_parsing import extract_theory_name
 from server_gym.success_checker import (
     get_error_message,
     get_raw_error_output,
@@ -162,10 +163,7 @@ class _Isabelle_Session:
         )
 
     def _extract_declared_theory_name(self, theory_text: str) -> Optional[str]:
-        match = re.search(r"\btheory\s+([A-Za-z0-9_'.-]+)\b", theory_text)
-        if match:
-            return match.group(1)
-        return None
+        return extract_theory_name(theory_text)
 
     def _split_complete_theory(self, theory_text: str) -> Tuple[str, str, str]:
         """
@@ -251,7 +249,10 @@ class _Isabelle_Session:
 
             try:
                 success = is_syntax_successful(result)
-                subgoals = self.open_subgoals(timeout=timeout)
+                if not(command == "end" or command == "end\n"):
+                    subgoals = self.open_subgoals(timeout=timeout)
+                else:
+                    subgoals = []
 
                 self.command_history.append(
                     {

@@ -16,6 +16,9 @@ from server.app.errors import GatewayUnavailable, SessionError, SessionStartErro
 from server.app.services.session import SessionStatus, _Isabelle_Session
 from server.app.services.threaded_backend import ThreadedBackend
 
+from pathlib import Path
+from server.app.services.build_verify import BuildVerifier
+
 _gateway_lock = threading.Lock()
 logger = get_logger(__name__)
 
@@ -39,7 +42,14 @@ class SessionManager:
         self._lru: "OrderedDict[uuid.UUID, _Isabelle_Session]" = OrderedDict()
         self._lock = threading.Lock()
         self._cleanup_task: Optional[asyncio.Task] = None
-        #self._verified_theories: Dict[str, Set[str]] = {}
+
+        # add this here
+        self.build_verifier = BuildVerifier(
+            isabelle_bin="isabelle",
+            max_concurrent_builds=max(1, pool_size // 2),
+            build_jobs_per_request=1,
+            temp_parent=Path("/tmp"),
+        )
 
     def _where(self, func_name: str) -> str:
         return f"{__name__}.{self.__class__.__name__}.{func_name}"
@@ -263,6 +273,25 @@ class SessionManager:
                 wrapper_theory,
             )
             return session
+
+    async def verify_big_step_build(
+        self,
+        *,
+        theory_name: str,
+        theory: str,
+        dependencies: Optional[List[str]],
+        field: Optional[str],
+        timeout: float,
+    ):
+        normalized_field = self._normalize_field(field)
+        normalized_deps = self._normalize_theories(dependencies)
+        return await self.build_verifier.verify(
+            theory_name=theory_name,
+            theory_text=theory,
+            dependencies=normalized_deps,
+            field=normalized_field,
+            timeout=timeout,
+        )
 
     def _evict_if_needed_locked(self) -> None:
         while len(self._lru) > self.pool_size:

@@ -12,6 +12,31 @@ THEORY_HEADER_RE = re.compile(
     re.DOTALL,
 )
 
+# Remove whole lines like:
+#   text \<open>See \<^cite>\<open>"dugundji"\<close>.\<close>
+#
+# Narrow rule:
+# - line starts with Isabelle command `text`
+# - line contains `\<^cite>`
+# - remove the whole line including its trailing newline
+CITE_ANTIQUOT_RE = re.compile(
+    r'\\<\^cite>\\<open>"[^"\n]+"' r'\\<close>'
+)
+
+LATEX_LINE_RE = re.compile(
+    r'(?m)^[ \t]*\\<\^latex>\\<open>.*?\\<close>[ \t]*(?:\n|$)'
+)
+
+
+def sanitize_theory_text_for_baseline(text: str) -> str:
+    """
+    Remove documentation-only antiquotations that can fail in a temporary
+    benchmark session lacking the original bibliography/document context.
+    """
+    text = CITE_ANTIQUOT_RE.sub("", text)
+    text = LATEX_LINE_RE.sub("", text)
+    return text
+
 # Matches either:
 #   Foo
 #   "Foo"
@@ -80,8 +105,11 @@ def rewrite_imports_block(imports_block: str, analysis_theories: Set[str]) -> st
 
 def rewrite_theory_text(text: str, analysis_theories: Set[str]) -> str:
     """
-    Rewrite the imports ... begin section of a theory file.
+    Remove problematic citation text lines, then rewrite the imports ... begin
+    section of a theory file.
     """
+    text = sanitize_theory_text_for_baseline(text)
+
     m = THEORY_HEADER_RE.search(text)
     if not m:
         return text
@@ -170,7 +198,6 @@ def main() -> None:
                 print("----- rewritten content -----")
                 print(updated)
                 print("----- end -----")
-            
 
     print(f"\nProcessed {total} theory file(s), changed {changed}.")
 

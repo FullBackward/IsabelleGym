@@ -1,0 +1,67 @@
+\section{Model Context Protocol (MCP): relevance, advantages, and limitations}
+
+The \emph{Model Context Protocol} (MCP) is an open protocol for connecting language-model applications to external tools, resources, and prompts through a common client--server interface. At the protocol level, MCP uses JSON-RPC and currently standardises two main transport styles: \emph{stdio}, where the client launches the server as a subprocess and communicates through standard input/output, and \emph{Streamable HTTP}, where the server is hosted as a remote service. In this sense, MCP is not a theorem-proving protocol by itself; rather, it is a general interoperability layer that can expose a prover, a document store, or a build system to many different AI clients through one uniform abstraction.
+
+For systems such as IsabelleGym Server, MCP is attractive because it separates the \emph{proof engine} from the \emph{agent frontend}. A prover-specific backend can remain responsible for session management, theory loading, and proof execution, while different clients (for example, a desktop assistant, an IDE agent, or a cloud workflow) interact with it through the same tool schema. This improves portability and reduces the need for one-off integrations. MCP also has practical deployment benefits. The official specification still treats stdio as a first-class transport, and the security guidance explicitly notes that stdio can reduce exposure by limiting communication to the launching client. For local research tooling, this makes MCP-based wrapping comparatively lightweight.
+
+The main advantages of MCP are therefore standardisation, modularity, and ecosystem compatibility. First, a single server can be reused across multiple agent frameworks and model providers instead of binding the implementation to one SDK or one vendor-specific tool API. Second, MCP cleanly supports both \emph{local} and \emph{remote} execution: a local stdio server is convenient when the tool needs direct machine access, while a remote HTTP server is more suitable when the service should be shared across users or governed centrally. Third, the surrounding ecosystem has matured quickly enough that MCP integration now brings immediate practical interoperability with coding agents and agent platforms rather than remaining a purely speculative standard. OpenAI Codex supports MCP in both its CLI and IDE extension; Anthropic Claude Code supports stdio, HTTP, and legacy SSE transports; and Gemini CLI explicitly supports both local and remote MCP servers.
+
+However, MCP also has limitations, especially for interactive theorem proving. Its abstraction is centred on \emph{tool invocation}, whereas proof assistants often require long-lived, stateful, and latency-sensitive interaction. A prover session is not merely a stateless function call: it may maintain loaded theories, imported dependencies, cached contexts, and partially executed proof states. As a result, a naive MCP wrapper can become inefficient if each proof step is exposed as an isolated remote tool call. In addition, MCP introduces operational and security concerns that are particularly relevant when tools can read files, invoke builds, or fetch external content. Anthropic’s documentation warns that third-party MCP servers may expose users to prompt-injection risk, and the MCP security guidance likewise emphasises authentication, access control, and transport hardening for HTTP-based deployments.
+
+A useful way to frame this trade-off is that MCP is strongest as an \emph{integration protocol}, not as a replacement for a carefully engineered prover runtime. In other words, the core proving logic, scheduling policy, and state management should still live in a dedicated backend, while MCP can serve as the outer interoperability layer. For IsabelleGym Server, this suggests that an MCP interface would be most natural as a thin adapter over the existing session-oriented server architecture rather than as the primary implementation boundary.
+
+\subsection{Is recent work prioritising the CLI--server model?}
+Recent work suggests a \emph{split trend} rather than a single winner. On the one hand, the local CLI--server pattern is clearly prominent in coding-agent workflows. The MCP specification continues to recommend stdio support, and major coding tools expose MCP through command-line-driven local processes: Codex supports stdio servers started by a command, Claude Code documents local stdio servers as suitable for tools with direct system access, and Gemini CLI is explicitly designed to work with local or remote MCP servers from the terminal. This shows that the CLI-launched local server remains an important default for developer productivity, prototyping, and personal workflows.
+
+On the other hand, recent platform work is strongly pushing toward \emph{remote} MCP servers for production and enterprise use. OpenAI’s current API guidance focuses on remote MCP servers and connectors exposed through the Responses API. Claude Code recommends HTTP for remote MCP servers and describes it as the most widely supported transport for cloud services. Microsoft’s Learn MCP Server is a public remote Streamable HTTP service, and Cloudflare’s recent documentation and product announcements focus on remote MCP deployment, authentication, per-session state, and centralised governance through MCP server portals. Taken together, these sources suggest that current practice is not converging on a purely CLI-based model; instead, it is bifurcating into \emph{local stdio MCP for interactive developer workflows} and \emph{remote HTTP MCP for shared, managed, and enterprise deployments}.
+
+\section{Isabelle}
+
+Isabelle is an interactive theorem prover with a document-oriented execution model. Users work inside theories, where each command extends or transforms the current proof state. For machine learning systems, this execution model is attractive because it exposes a rich notion of intermediate state: a model can observe open subgoals, local proof context, and command feedback after every interaction. At the same time, it makes systems integration difficult. An ML environment must manage long-lived prover processes, maintain consistent theory state, and recover cleanly after failed commands.
+
+For this project, the important point is that Isabelle interaction is naturally stateful. A practical ML interface therefore needs more than a one-off command runner. It needs a persistent notion of session, support for loading theories and imports, and enough control over rollback or checkpointing to allow repeated proof exploration. This observation motivates the move from a local REPL-style interface to a server-client design.
+
+\section{Related works}
+
+There are now several machine-learning-oriented interfaces for interactive theorem provers. In Lean, recent systems typically rely on well-engineered RPC or REPL environments, which makes large-scale training and evaluation comparatively straightforward. Isabelle has fewer standardised interfaces, and the engineering gap between proof generation and proof checking has therefore been more visible.
+
+\subsection{Lean}
+\subsubsection{Kimina-style server deployments}
+A useful reference point is the server-based deployment pattern used by modern Lean systems. The key lesson is not a direct code dependency, but an architectural one: once theorem proving is driven by large models and large experiment queues, the prover should be treated as an infrastructure service rather than as a purely local interactive tool. This project adopts the same architectural lesson for IsabelleGym.
+
+\subsection{Isabelle}
+\subsubsection{PISA and DSP}
+PISA showed that Isabelle can be accessed programmatically from Python and can support automated proof search and corpus extraction. However, PISA is primarily a proof-search interface rather than a session-oriented service layer, and its setup is relatively heavyweight. It is an important predecessor because it established the feasibility of ML--Isabelle interaction, but it does not directly provide the server abstraction needed for scalable multi-client proof checking.
+
+\subsubsection{Amazon AutoCorrode / I/R / I/Q}
+Recent Isabelle tooling has also moved toward external interfaces and remote interaction models. This is relevant because it confirms that infrastructure around Isabelle is now an active research and engineering topic. However, these tools are aimed at somewhat different use cases, such as IDE integration, MCP access, or program verification workflows, rather than providing a drop-in ML environment compatible with IsabelleGym-style proof interaction.
+
+\subsubsection{IsabelleGym}
+\begin{itemize}
+    \item \textbf{IsabelleGym 1.0.}
+    The previous IsabelleGym iteration provided a local Python interface on top of the Isabelle/Scala REPL backend. Its main strength was that it exposed a clean ML-facing API for proof interaction and state inspection. The weakness was deployment: experiments were tied closely to local process management, which made large-scale or multi-client usage awkward.
+
+    \item \textbf{IsabelleGym 2.0 (this project).}
+    This project extends IsabelleGym with a server-side architecture. The contribution is not a new proving algorithm; rather, it is a systems contribution that makes the underlying environment easier to deploy, reuse, and evaluate. The design moves session management into an explicit service layer, introduces dependency-aware session reuse, and adds endpoints for both small-step command execution and big-step whole-theory verification.
+\end{itemize}
+
+theory Cantor imports Main begin
+
+subsection \<open>Mathematical statement and proof\<close>
+
+text \<open>
+  Cantor's Theorem states that there is no surjection from
+  a set to its powerset.  The proof works by diagonalization.  E.g.\ see
+  \<^item> \<^url>\<open>http://mathworld.wolfram.com/CantorDiagonalMethod.html\<close>
+  \<^item> \<^url>\<open>https://en.wikipedia.org/wiki/Cantor's_diagonal_argument\<close>
+\<close>
+
+theorem Cantor: "\<nexists>f :: 'a \<Rightarrow> 'a set. \<forall>A. \<exists>x. A = f x"
+proof
+  assume "\<exists>f :: 'a \<Rightarrow> 'a set. \<forall>A. \<exists>x. A = f x"
+  then obtain f :: "'a \<Rightarrow> 'a set" where *: "\<forall>A. \<exists>x. A = f x" ..
+  let ?D = "{x. x \<notin> f x}"
+  from * obtain a where "?D = f a" by blast
+  moreover have "a \<in> ?D \<longleftrightarrow> a \<notin> f a" by blast
+  ultimately show False by blast
+qed

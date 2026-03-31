@@ -238,59 +238,24 @@ async def get_command_history(session_id: str, limit: int = 50, session_manager=
 
 @router.post("/api/v1/sessions/bigstep", response_model=CommandResponse)
 async def execute_big_step(request: BigStepTheoryRequest, session_manager=Depends(get_session_manager)):
-    dependency_key = session_manager.build_dependency_key(request.dependencies, request.field)
-
-    with logging_context(field=request.field or "default"):
-        logger.info(
-            "big-step request theory_name=%s dependencies=%s timeout=%s dependency_key=%s preview=%s",
-            request.theory_name,
-            request.dependencies,
-            request.timeout,
-            dependency_key[:12],
-            _preview(request.theory, Logging.THEORY_PREVIEW_CHARS),
-        )
-
-        available_sessions = [
-            info
-            for info in session_manager.list_sessions()
-            if info.get("dependency_key") == dependency_key and info.get("field") == (request.field or info.get("field"))
-        ]
-
-        reused = bool(available_sessions)
-        if not available_sessions:
-            session = await session_manager.create_session(theories=request.dependencies, field=request.field)
-        else:
-            available_sessions.sort(key=lambda x: x["last_activity"], reverse=True)
-            session = session_manager.get_session(available_sessions[0]["session_id"])
-
-        with logging_context(session_id=session.session_id):
-            logger.info("big-step session selected reused=%s", reused)
-            result = await asyncio.to_thread(
-                session.big_step,
-                request.theory_name,
-                request.theory,
-                request.timeout,
-            )
-
-            logger.info(
-                "big-step finished success=%s mode=%s theory_verified=%s diagnostics=%s",
-                getattr(result, "success", False),
-                getattr(result, "mode", None),
-                getattr(result, "theory_verified", False),
-                len(getattr(result, "diagnostics", []) or []),
-            )
-
-            return CommandResponse(
-                success=getattr(result, "success", False),
-                output=getattr(result, "output", None),
-                error=getattr(result, "error", None),
-                subgoals=getattr(result, "subgoals", []) or [],
-                execution_time=float(getattr(result, "execution_time", 0.0) or 0.0),
-                mode=getattr(result, "mode", None),
-                diagnostics=getattr(result, "diagnostics", []) or [],
-                failure_location=getattr(result, "failure_location", None),
-                theory_verified=bool(getattr(result, "theory_verified", False)),
-            )
+    result = await session_manager.verify_big_step_build(
+        theory_name=request.theory_name,
+        theory=request.theory,
+        dependencies=request.dependencies,
+        field=request.field,
+        timeout=request.timeout,
+    )
+    return CommandResponse(
+        success=result.success,
+        output=result.output,
+        error=result.error,
+        subgoals=result.subgoals,
+        execution_time=result.execution_time,
+        mode=result.mode,
+        diagnostics=result.diagnostics,
+        failure_location=result.failure_location,
+        theory_verified=result.theory_verified,
+    )
 
 
 @router.get("/api/v1/sessions/{session_id}/stats")

@@ -14,7 +14,7 @@ class Server:
     MAX_CACHE_SIZE: Final = 1
     SHOW_STATES: Final = False
     DEFAULT_FIELD: Final = "HOL"
-    IDLE_TIMEOUT_SECONDS: Final = 600
+    IDLE_TIMEOUT_SECONDS: Final = 1800
 
 
 class Logging:
