@@ -17,7 +17,7 @@ from .schemas.API_models import (
     SessionResponse,
     StateCheckpoint,
 )
-from server.app.core.config import Logging
+from server.app.core.config import API, Logging
 from server.app.core.logging import get_logger, logging_context
 from server.app.dependencies import get_session_manager
 
@@ -41,9 +41,10 @@ async def root(session_manager=Depends(get_session_manager)):
     logger.debug("root health endpoint requested")
     return {
         "service": "IsabelleGym Server",
-        "version": "1.0.0",
+        "version": API.VERSION,
         "status": "healthy",
         "active_sessions": lru.get("active_sessions", 0),
+        "busy_sessions": lru.get("busy_sessions", 0),
         "max_pool_size": lru.get("max_pool_size", 0),
         "timestamp": datetime.now().isoformat(),
     }
@@ -145,6 +146,8 @@ async def get_session_info(session_id: str, session_manager=Depends(get_session_
             "commands_executed": len(session.command_history),
             "checkpoints": len(session.checkpoints),
             "verified_theories": session.verified_theories if hasattr(session, "verified_theories") else [],
+            "in_use": session.in_use,
+            "active_requests": session.active_request_count,
         }
 
 
@@ -152,9 +155,7 @@ async def get_session_info(session_id: str, session_manager=Depends(get_session_
 async def close_session(session_id: str, session_manager=Depends(get_session_manager)):
     with logging_context(session_id=session_id):
         logger.info("closing session")
-        ok = await asyncio.to_thread(session_manager.close_session, session_id)
-        if not ok:
-            raise HTTPException(status_code=404, detail="Session not found")
+        await asyncio.to_thread(session_manager.close_session, session_id)
         logger.info("session closed")
         return {"success": True}
 

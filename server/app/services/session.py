@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import re
+import threading
 import time
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
@@ -63,6 +64,8 @@ class _Isabelle_Session:
 
         self._closed = False
         self.entered_thy = ""
+        self._active_requests = 0
+        self._active_requests_lock = threading.Lock()
         with logging_context(session_id=self.session_id, field=self.field):
             logger.info(
                 "session object initialized dependency_key=%s loaded_theories=%s",
@@ -80,6 +83,25 @@ class _Isabelle_Session:
     def is_idle(self, timeout: float = 300, now: Optional[float] = None) -> bool:
         now = time.time() if now is None else now
         return (now - self.last_activity) > timeout
+
+    @property
+    def in_use(self) -> bool:
+        """True if at least one request is currently being processed."""
+        with self._active_requests_lock:
+            return self._active_requests > 0
+
+    @property
+    def active_request_count(self) -> int:
+        with self._active_requests_lock:
+            return self._active_requests
+
+    def _acquire_request(self) -> None:
+        with self._active_requests_lock:
+            self._active_requests += 1
+
+    def _release_request(self) -> None:
+        with self._active_requests_lock:
+            self._active_requests = max(0, self._active_requests - 1)
 
     def step(self, command: str, timeout: Optional[float] = None):
         if not isinstance(command, str) or command.strip() == "":
@@ -117,9 +139,6 @@ class _Isabelle_Session:
         self.entered_thy = thy_name
         logger.info("entering theory theory_name=%s", thy_name)
         return self._call_backend(lambda: self.backend.raw.enter_thy(thy_name), timeout=timeout)
-
-    def _result_output(self, result) -> Optional[str]:
-        return result.total_output() if hasattr(result, "total_output") else None
 
     def _result_error(self, result) -> Optional[str]:
         return get_error_message(result)
@@ -229,84 +248,89 @@ class _Isabelle_Session:
 
     def execute_command(self, command: str, timeout: float = 30.0) -> SmallStepExecuteResult:
         self.update_activity()
+        self._acquire_request()
         start_time = time.time()
 
-        with logging_context(session_id=self.session_id, field=self.field):
-            logger.info(
-                "small-step command started timeout=%s preview=%s",
-                timeout,
-                preview_text(command, Logging.COMMAND_PREVIEW_CHARS),
-            )
-            try:
-                result = self.step(command, timeout=timeout)
-                execution_time = time.time() - start_time
-            except Exception as e:
-                execution_time = time.time() - start_time
-                logger.exception("small-step backend call failed")
-                raise SessionError(error=str(e), execution_time=execution_time)
-
-            try:
-                success = is_syntax_successful(result)
-                error_message = self._result_error(result)
-                subgoal_error: Optional[str] = None
-                if command == "end" or command == "end\n":
-                    subgoals = []
-                else:
-                    try:
-                        subgoals = self.open_subgoals(timeout=timeout)
-                    except Exception as exc:
-                        subgoals = []
-                        subgoal_error = f"{exc.__class__.__name__}: {exc}"
-                        logger.warning(
-                            "open_subgoals failed after command execution; command_success=%s error=%s",
-                            success,
-                            subgoal_error,
-                        )
-
-                self.command_history.append(
-                    {
-                        "type": "small_step",
-                        "command": command,
-                        "timestamp": start_time,
-                        "success": success,
-                        "subgoal_error": subgoal_error,
-                        "subgoals_count": len(subgoals),
-                    }
-                )
-
+        try:
+            with logging_context(session_id=self.session_id, field=self.field):
                 logger.info(
-                    "small-step command finished success=%s subgoals=%s subgoal_error=%s execution_time=%s",
-                    success,
-                    len(subgoals),
-                    bool(subgoal_error),
-                    round(execution_time, 3),
+                    "small-step command started timeout=%s preview=%s",
+                    timeout,
+                    preview_text(command, Logging.COMMAND_PREVIEW_CHARS),
                 )
-                return SmallStepExecuteResult(
-                    success=success,
-                    output=self._result_output(result),
-                    error=error_message if not success else None,
-                    subgoal_error=subgoal_error,
-                    subgoals=subgoals,
-                    execution_time=execution_time,
-                )
+                try:
+                    result = self.step(command, timeout=timeout)
+                    execution_time = time.time() - start_time
+                except Exception as e:
+                    execution_time = time.time() - start_time
+                    logger.exception("small-step backend call failed")
+                    raise SessionError(error=str(e), execution_time=execution_time)
 
-            except Exception as e:
-                execution_time = time.time() - start_time
-                logger.exception("small-step result processing failed")
-                raise SessionError(error=str(e), execution_time=execution_time)
+                try:
+                    success = is_syntax_successful(result)
+                    error_message = self._result_error(result)
+                    subgoal_error: Optional[str] = None
+                    if command == "end" or command == "end\n":
+                        subgoals = []
+                    else:
+                        try:
+                            subgoals = self.open_subgoals(timeout=timeout)
+                        except Exception as exc:
+                            subgoals = []
+                            subgoal_error = f"{exc.__class__.__name__}: {exc}"
+                            logger.warning(
+                                "open_subgoals failed after command execution; command_success=%s error=%s",
+                                success,
+                                subgoal_error,
+                            )
+
+                    self.command_history.append(
+                        {
+                            "type": "small_step",
+                            "command": command,
+                            "timestamp": start_time,
+                            "success": success,
+                            "subgoal_error": subgoal_error,
+                            "subgoals_count": len(subgoals),
+                        }
+                    )
+
+                    logger.info(
+                        "small-step command finished success=%s subgoals=%s subgoal_error=%s execution_time=%s",
+                        success,
+                        len(subgoals),
+                        bool(subgoal_error),
+                        round(execution_time, 3),
+                    )
+                    return SmallStepExecuteResult(
+                        success=success,
+                        output=self._result_output(result),
+                        error=error_message if not success else None,
+                        subgoal_error=subgoal_error,
+                        subgoals=subgoals,
+                        execution_time=execution_time,
+                    )
+
+                except Exception as e:
+                    execution_time = time.time() - start_time
+                    logger.exception("small-step result processing failed")
+                    raise SessionError(error=str(e), execution_time=execution_time)
+        finally:
+            self._release_request()
 
     def big_step(self, theory_name: str, proof: str, timeout: float = 300.0) -> BigStepExecuteResult:
         self.update_activity()
+        self._acquire_request()
         start_time = time.time()
         checkpoint_id: Optional[int] = None
         output_parts: List[str] = []
 
         try:
-            previous_theory = self.current_thy
-        except Exception:
-            previous_theory = ""
+            try:
+                previous_theory = self.current_thy
+            except Exception:
+                previous_theory = ""
 
-        try:
             declared_name = extract_theory_name(proof)
             if declared_name is None:
                 execution_time = time.time() - start_time
@@ -407,58 +431,72 @@ class _Isabelle_Session:
             if restore_note:
                 failure.error = f"{failure.error} Restore note: {restore_note}"
             return failure
+        finally:
+            self._release_request()
 
     def get_proof_state(self, timeout: float = 30.0) -> ProofState | SessionExecutionError:
         self.update_activity()
+        self._acquire_request()
         start_time = time.time()
 
-        with logging_context(session_id=self.session_id, field=self.field):
-            try:
-                subgoals = self.open_subgoals(timeout=timeout)
-                current_thy = self.current_thy
-                logger.debug("proof state fetched subgoals=%s current_theory=%s", len(subgoals), current_thy)
-                return ProofState(
-                    subgoals=subgoals,
-                    proof_finished=len(subgoals) == 0,
-                    current_theory=current_thy,
-                )
-            except Exception as e:
-                logger.exception("failed to fetch proof state")
-                return SessionExecutionError(error=str(e), execution_time=time.time() - start_time)
+        try:
+            with logging_context(session_id=self.session_id, field=self.field):
+                try:
+                    subgoals = self.open_subgoals(timeout=timeout)
+                    current_thy = self.current_thy
+                    logger.debug("proof state fetched subgoals=%s current_theory=%s", len(subgoals), current_thy)
+                    return ProofState(
+                        subgoals=subgoals,
+                        proof_finished=len(subgoals) == 0,
+                        current_theory=current_thy,
+                    )
+                except Exception as e:
+                    logger.exception("failed to fetch proof state")
+                    return SessionExecutionError(error=str(e), execution_time=time.time() - start_time)
+        finally:
+            self._release_request()
 
     def save_checkpoint(self, timeout: float = 30.0) -> CheckPointInfo | SessionExecutionError:
         self.update_activity()
+        self._acquire_request()
         start_time = time.time()
 
-        with logging_context(session_id=self.session_id, field=self.field):
-            try:
-                checkpoint_id = self.save_state(timeout=timeout)
-                timestamp = time.time()
-                self.checkpoints[checkpoint_id] = timestamp
-                logger.info("checkpoint saved checkpoint_id=%s", checkpoint_id)
-                return CheckPointInfo(checkpoint_id=checkpoint_id, timestamp=timestamp)
-            except Exception as e:
-                logger.exception("failed to save checkpoint")
-                return SessionExecutionError(error=str(e), execution_time=time.time() - start_time)
+        try:
+            with logging_context(session_id=self.session_id, field=self.field):
+                try:
+                    checkpoint_id = self.save_state(timeout=timeout)
+                    timestamp = time.time()
+                    self.checkpoints[checkpoint_id] = timestamp
+                    logger.info("checkpoint saved checkpoint_id=%s", checkpoint_id)
+                    return CheckPointInfo(checkpoint_id=checkpoint_id, timestamp=timestamp)
+                except Exception as e:
+                    logger.exception("failed to save checkpoint")
+                    return SessionExecutionError(error=str(e), execution_time=time.time() - start_time)
+        finally:
+            self._release_request()
 
     def restore_checkpoint(self, checkpoint_id: int, timeout: float = 30.0) -> bool | SessionExecutionError:
         self.update_activity()
+        self._acquire_request()
         start_time = time.time()
 
-        with logging_context(session_id=self.session_id, field=self.field):
-            try:
-                if checkpoint_id not in self.checkpoints:
-                    logger.warning("checkpoint not found checkpoint_id=%s", checkpoint_id)
-                    return SessionExecutionError(
-                        error=f"Checkpoint {checkpoint_id} not found",
-                        execution_time=time.time() - start_time,
-                    )
-                self.restore_state(checkpoint_id, timeout=timeout)
-                logger.info("checkpoint restored checkpoint_id=%s", checkpoint_id)
-                return True
-            except Exception as e:
-                logger.exception("failed to restore checkpoint checkpoint_id=%s", checkpoint_id)
-                return SessionExecutionError(error=str(e), execution_time=time.time() - start_time)
+        try:
+            with logging_context(session_id=self.session_id, field=self.field):
+                try:
+                    if checkpoint_id not in self.checkpoints:
+                        logger.warning("checkpoint not found checkpoint_id=%s", checkpoint_id)
+                        return SessionExecutionError(
+                            error=f"Checkpoint {checkpoint_id} not found",
+                            execution_time=time.time() - start_time,
+                        )
+                    self.restore_state(checkpoint_id, timeout=timeout)
+                    logger.info("checkpoint restored checkpoint_id=%s", checkpoint_id)
+                    return True
+                except Exception as e:
+                    logger.exception("failed to restore checkpoint checkpoint_id=%s", checkpoint_id)
+                    return SessionExecutionError(error=str(e), execution_time=time.time() - start_time)
+        finally:
+            self._release_request()
 
     def close(self):
         if not self._closed:

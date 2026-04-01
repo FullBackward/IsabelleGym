@@ -12,7 +12,7 @@ from repl.src.python.repl_backend_gateway import ReplBackendGatewayProcess
 from repl.src.python.thy_init import ThyInit
 from server.app.core.config import Server
 from server.app.core.logging import get_logger, logging_context
-from server.app.errors import GatewayUnavailable, SessionError, SessionStartError
+from server.app.errors import GatewayUnavailable, PoolExhausted, SessionError, SessionNotFound, SessionStartError
 from server.app.services.session import SessionStatus, _Isabelle_Session
 from server.app.services.threaded_backend import ThreadedBackend
 
@@ -170,8 +170,12 @@ class SessionManager:
 
         if self.thy_init is not None:
             try:
-                logger.info("cleaning up ThyInit")
-                self.thy_init.cleanup()
+                logger.info("cleaning up ThyInit generated files")
+                for filename in list(self.thy_init.created_files):
+                    try:
+                        self.thy_init.cleanup(filename)
+                    except Exception:
+                        logger.exception("failed to cleanup ThyInit file=%s", filename)
             except Exception:
                 logger.exception("failed to cleanup ThyInit")
             self.thy_init = None
@@ -222,15 +226,19 @@ class SessionManager:
 
             try:
                 logger.info("creating raw backend for session_id=%s", session_id)
-                raw_backend = await asyncio.to_thread(
-                    self.gateway.get_repl_backend_with_initial_theories,
-                    show_states=Server.SHOW_STATES,
-                    enable_cache=Server.ENABLE_CACHE,
-                    max_cache_size=Server.MAX_CACHE_SIZE,
-                    enable_memory_management=Server.ENABLE_MEMORY_MANAGEMENT,
-                    initial_thys=java_list,
-                    field=normalized_field,
-                )
+
+                def _create_backend():
+                    with _gateway_lock:
+                        return self.gateway.get_repl_backend_with_initial_theories(
+                            show_states=Server.SHOW_STATES,
+                            enable_cache=Server.ENABLE_CACHE,
+                            max_cache_size=Server.MAX_CACHE_SIZE,
+                            enable_memory_management=Server.ENABLE_MEMORY_MANAGEMENT,
+                            initial_thys=java_list,
+                            field=normalized_field,
+                        )
+
+                raw_backend = await asyncio.to_thread(_create_backend)
             except Exception as e:
                 logger.exception("failed to create raw backend for session_id=%s", session_id)
                 raise RuntimeError(f"{where}: failed to create raw backend for session {session_id}: {e}") from e
@@ -257,10 +265,45 @@ class SessionManager:
                 raise RuntimeError(f"{where}: failed to create session object for session {session_id}: {e}") from e
 
             try:
+                evict_targets: List[Tuple[uuid.UUID, _Isabelle_Session]] = []
                 with self._lock:
                     self._lru[session_id] = session
                     self._lru.move_to_end(session_id, last=True)
-                    self._evict_if_needed_locked()
+                    # Evict excess sessions, but SKIP sessions that are
+                    # actively processing a request.
+                    while len(self._lru) > self.pool_size:
+                        # Walk LRU oldest-first looking for an idle candidate.
+                        candidate_id: Optional[uuid.UUID] = None
+                        for sid in self._lru:
+                            if sid == session_id:
+                                continue  # never evict the one we just created
+                            s = self._lru[sid]
+                            if not s.in_use:
+                                candidate_id = sid
+                                break
+                        if candidate_id is None:
+                            # Every session is in-use — undo our insertion and
+                            # let the caller know the pool is exhausted.
+                            self._lru.pop(session_id, None)
+                            session.close()
+                            raise PoolExhausted(
+                                f"Session pool is full ({self.pool_size} sessions) "
+                                f"and all sessions are actively processing requests. "
+                                f"Try again later or increase ISABELLE_POOL_SIZE."
+                            )
+                        evict_targets.append(
+                            (candidate_id, self._lru.pop(candidate_id))
+                        )
+                # Close evicted sessions OUTSIDE the lock.
+                for oldest_id, oldest in evict_targets:
+                    try:
+                        with logging_context(session_id=oldest_id, field=oldest.field):
+                            logger.info("evicting idle LRU session because pool is full")
+                            oldest.close()
+                    except Exception:
+                        logger.exception("failed to close evicted session session_id=%s", oldest_id)
+            except PoolExhausted:
+                raise  # propagate without wrapping
             except Exception as e:
                 session.close()
                 logger.exception("failed to register session session_id=%s", session_id)
@@ -279,6 +322,7 @@ class SessionManager:
         *,
         theory_name: str,
         theory: str,
+        dependencies: Optional[List[str]] = None,
         field: Optional[str],
         timeout: float,
     ):
@@ -286,19 +330,10 @@ class SessionManager:
         return await self.build_verifier.verify(
             theory_name=theory_name,
             theory_text=theory,
+            dependencies=dependencies,
             field=normalized_field,
             timeout=timeout,
         )
-
-    def _evict_if_needed_locked(self) -> None:
-        while len(self._lru) > self.pool_size:
-            oldest_id, oldest = self._lru.popitem(last=False)
-            try:
-                with logging_context(session_id=oldest_id, field=oldest.field):
-                    logger.info("evicting LRU session because pool is full")
-                    oldest.close()
-            except Exception:
-                logger.exception("failed to close evicted session session_id=%s", oldest_id)
 
     async def create_session(
         self,
@@ -376,11 +411,11 @@ class SessionManager:
         sid = self._normalize_session_id(session_id)
         with self._lock:
             if sid not in self._lru:
-                raise KeyError(f"Session {sid} not found")
+                raise SessionNotFound(f"Session {sid} not found")
 
             session = self._lru[sid]
             if session.status == SessionStatus.CLOSED:
-                raise RuntimeError(f"Session {sid} is closed")
+                raise SessionNotFound(f"Session {sid} is closed")
 
             self._lru.move_to_end(sid, last=True)
             return session
@@ -390,7 +425,7 @@ class SessionManager:
         with self._lock:
             session = self._lru.pop(sid, None)
         if session is None:
-            raise KeyError(f"Session {sid} not found")
+            raise SessionNotFound(f"Session {sid} not found")
         with logging_context(session_id=sid, field=session.field):
             logger.info("closing session")
             session.close()
@@ -410,7 +445,9 @@ class SessionManager:
                     "dependency_key": session.dependency_key,
                     "field": session.field,
                     "commands_executed": len(session.command_history),
-                    "verified_theories": session.verified_theories
+                    "verified_theories": session.verified_theories,
+                    "in_use": session.in_use,
+                    "active_requests": session.active_request_count,
                 }
                 for sid, session in self._lru.items()
             ]
@@ -437,7 +474,9 @@ class SessionManager:
 
     def get_lru_info(self) -> Dict[str, Any]:
         with self._lock:
+            sessions = list(self._lru.values())
             return {
-                "active_sessions": len(self._lru),
+                "active_sessions": len(sessions),
                 "max_pool_size": self.pool_size,
+                "busy_sessions": sum(1 for s in sessions if s.in_use),
             }

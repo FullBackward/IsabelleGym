@@ -8,14 +8,22 @@ class API:
 
 
 class Server:
-    DEFAULT_POOL_SIZE: Final = 16
-    ENABLE_MEMORY_MANAGEMENT: Final = True
-    ENABLE_CACHE: Final = False
-    INITIAL_SESSIONS: Final = 8
-    MAX_CACHE_SIZE: Final = 1
-    SHOW_STATES: Final = False
-    DEFAULT_FIELD: Final = "HOL"
-    IDLE_TIMEOUT_SECONDS: Final = 1800
+    DEFAULT_POOL_SIZE: Final = int(os.getenv("ISABELLE_POOL_SIZE", "24"))
+    ENABLE_MEMORY_MANAGEMENT: Final = os.getenv("ISABELLE_ENABLE_MEMORY_MANAGEMENT", "true").lower() in {
+        "1", "true", "yes", "on",
+    }
+    ENABLE_CACHE: Final = os.getenv("ISABELLE_ENABLE_CACHE", "false").lower() in {
+        "1", "true", "yes", "on",
+    }
+    INITIAL_SESSIONS: Final = int(os.getenv("ISABELLE_INITIAL_SESSIONS", "8"))
+    MAX_CACHE_SIZE: Final = int(os.getenv("ISABELLE_MAX_CACHE_SIZE", "1"))
+    SHOW_STATES: Final = os.getenv("ISABELLE_SHOW_STATES", "false").lower() in {
+        "1", "true", "yes", "on",
+    }
+    DEFAULT_FIELD: Final = os.getenv("ISABELLE_DEFAULT_FIELD", "HOL")
+    IDLE_TIMEOUT_SECONDS: Final = int(os.getenv("ISABELLE_IDLE_TIMEOUT", "1800"))
+    HOST: Final = os.getenv("ISABELLE_SERVER_HOST", "0.0.0.0")
+    PORT: Final = int(os.getenv("ISABELLE_SERVER_PORT", "8000"))
 
 
 class RegularExp:

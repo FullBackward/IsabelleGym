@@ -5,6 +5,12 @@ sig
   val send_local_facts: Toplevel.state -> unit
   val send_global_facts: Toplevel.state -> int -> unit
 
+  (* Tagged variants: prepend "CH:<channel_id>" so the Scala side can
+     route messages to per-backend queues, enabling safe concurrency. *)
+  val send_open_subgoals_tagged: string -> Toplevel.state -> unit
+  val send_local_facts_tagged: string -> Toplevel.state -> unit
+  val send_global_facts_tagged: string -> Toplevel.state -> int -> unit
+
 end;
 
 structure Repl : REPL =
@@ -29,6 +35,10 @@ fun open_subgoals state =
 
 fun send_open_subgoals state =
   open_subgoals state |> \<^scala>\<open>add_open_subgoals\<close> |> ignore
+
+fun send_open_subgoals_tagged channel_id state =
+  let val goals = open_subgoals state
+  in ("CH:" ^ channel_id) :: goals |> \<^scala>\<open>add_open_subgoals\<close> |> ignore end
 
 fun pretty_local_facts verbose ctxt =
   let
@@ -58,6 +68,10 @@ fun local_facts state =
 
 fun send_local_facts state =
   state |> local_facts |> \<^scala>\<open>add_local_facts\<close> |> ignore
+
+fun send_local_facts_tagged channel_id state =
+  let val facts = local_facts state
+  in ("CH:" ^ channel_id) :: facts |> \<^scala>\<open>add_local_facts\<close> |> ignore end
 
 fun global_facts state limit =
   if (Toplevel.is_proof state) then (
@@ -93,8 +107,18 @@ fun send_global_facts state limit =
     \<^scala>\<open>add_global_facts\<close> global_facts |> ignore
   end
 
+fun send_global_facts_tagged channel_id state limit =
+  let
+    val facts = global_facts state limit;
+  in
+    ("CH:" ^ channel_id) :: facts |> \<^scala>\<open>add_global_facts\<close> |> ignore
+  end
+
 end
 
 val send_open_subgoals = Repl.send_open_subgoals;
 val send_local_facts = Repl.send_local_facts;
 val send_global_facts = Repl.send_global_facts;
+val send_open_subgoals_tagged = Repl.send_open_subgoals_tagged;
+val send_local_facts_tagged = Repl.send_local_facts_tagged;
+val send_global_facts_tagged = Repl.send_global_facts_tagged;

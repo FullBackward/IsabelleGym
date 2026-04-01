@@ -9,9 +9,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from server.app.api.v1.router import router as api_router
-from server.app.core.config import Logging
+from server.app.core.config import API, Logging, Server
 from server.app.core.logging import get_logger, reset_logging_context, set_logging_context, setup_logging
-from server.app.errors import GatewayUnavailable, SessionNotFound, SessionStartError
+from server.app.errors import GatewayUnavailable, PoolExhausted, SessionNotFound, SessionStartError
 from server.app.services.session_manager import SessionManager
 
 setup_logging()
@@ -22,7 +22,7 @@ logger = get_logger(__name__)
 async def lifespan(app: FastAPI):
     with_startup = time.time()
     logger.info("application startup initiated")
-    sm = SessionManager(idle_timeout=600, pool_size=8)
+    sm = SessionManager()  # uses Server.IDLE_TIMEOUT_SECONDS, DEFAULT_POOL_SIZE, INITIAL_SESSIONS from config
     try:
         await sm.startup()
         sm.start_cleanup_task()
@@ -47,7 +47,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="IsabelleGym Server",
     description="RESTful API for Isabelle theorem proving",
-    version="0.0.1",
+    version=API.VERSION,
     lifespan=lifespan,
 )
 
@@ -105,6 +105,16 @@ async def handle_session_start_error(request: Request, exc: SessionStartError):
     return JSONResponse(status_code=500, content={"detail": str(exc) or "Session start failed"})
 
 
+@app.exception_handler(PoolExhausted)
+async def handle_pool_exhausted(request: Request, exc: PoolExhausted):
+    logger.warning("pool exhausted on %s: %s", request.url.path, exc)
+    return JSONResponse(
+        status_code=503,
+        content={"detail": str(exc) or "Session pool exhausted"},
+        headers={"Retry-After": "5"},
+    )
+
+
 @app.exception_handler(Exception)
 async def handle_uncaught_exception(request: Request, exc: Exception):
     logger.exception("uncaught exception on %s", request.url.path)
@@ -125,11 +135,11 @@ app.include_router(api_router)
 if __name__ == "__main__":
     import uvicorn
 
-    logger.info("starting IsabelleGym Server on 0.0.0.0:8000")
+    logger.info("starting IsabelleGym Server on %s:%s", Server.HOST, Server.PORT)
     uvicorn.run(
         app,
-        host="0.0.0.0",
-        port=8000,
+        host=Server.HOST,
+        port=Server.PORT,
         log_level=Logging.LOG_LEVEL.lower(),
         log_config=None,
         access_log=False,

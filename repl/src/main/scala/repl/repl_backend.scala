@@ -9,6 +9,11 @@ class ReplBackend(show_states: Boolean, enable_cache: Boolean = false, max_cache
   private val session_manager_instance = session_manager.getOrElse(new Session_Manager(show_states, enable_cache, max_cache_size, enable_memory_management))
   private var repl_session = new Repl_Session(session_manager_instance, initial_thys, field)
 
+  /** Unique channel ID for this backend instance, used to isolate ML
+   *  communication (subgoals, local facts, global facts) from other
+   *  concurrent backends sharing the same JVM process. */
+  val channel_id: String = java.util.UUID.randomUUID().toString.replace("-", "").take(16)
+
   def current_thy_name_string: String = repl_session.current_thy_name_string
 
   def get_cache_status(): String = session_manager_instance.get_cache_status()
@@ -39,11 +44,16 @@ class ReplBackend(show_states: Boolean, enable_cache: Boolean = false, max_cache
     val subgoals =
       if (!repl_session.current_thy_begun) List()
       else {
-        val message = Repl_ML_Communication.waiting_for_subgoals_message {
-          send_ml_command("Repl.send_open_subgoals @{Isar.state}")
-        }
-
-        // repl_session.rollback_last_text_edit()
+        val message = Repl_ML_Communication.waiting_for_subgoals_message(
+          {
+            // The ML side prepends "CH:<channel_id>" so the Scala callback
+            // can route the response to the correct per-backend queue.
+            send_ml_command(
+              s"""Repl.send_open_subgoals_tagged "${channel_id}" @{Isar.state}"""
+            )
+          },
+          channel_id
+        )
         message
       }
     subgoals.asJava
@@ -53,11 +63,14 @@ class ReplBackend(show_states: Boolean, enable_cache: Boolean = false, max_cache
     val local_facts =
       if (!repl_session.current_thy_begun) List()
       else {
-        val message = Repl_ML_Communication.waiting_for_local_facts_message {
-          send_ml_command("Repl.send_local_facts @{Isar.state}")
-        }
-
-        // repl_session.rollback_last_text_edit()
+        val message = Repl_ML_Communication.waiting_for_local_facts_message(
+          {
+            send_ml_command(
+              s"""Repl.send_local_facts_tagged "${channel_id}" @{Isar.state}"""
+            )
+          },
+          channel_id
+        )
         message
       }
     local_facts.asJava
@@ -68,11 +81,14 @@ class ReplBackend(show_states: Boolean, enable_cache: Boolean = false, max_cache
     val global_facts =
       if (!repl_session.current_thy_begun) List()
       else {
-        val message = Repl_ML_Communication.waiting_for_global_facts_message {
-          send_ml_command(s"Repl.send_global_facts @{Isar.state} ${limit}")
-        }
-
-        // repl_session.rollback_last_text_edit()
+        val message = Repl_ML_Communication.waiting_for_global_facts_message(
+          {
+            send_ml_command(
+              s"""Repl.send_global_facts_tagged "${channel_id}" @{Isar.state} ${limit}"""
+            )
+          },
+          channel_id
+        )
         message
       }
     global_facts.asJava
@@ -86,8 +102,6 @@ class ReplBackend(show_states: Boolean, enable_cache: Boolean = false, max_cache
     else {
       send_ml_command("Repl.get_proof_state @{Isar.state}")
       repl_session.output_current_node_results()
-
-      // repl_session.rollback_last_text_edit()
     }
   }
 
@@ -123,8 +137,10 @@ class ReplBackend(show_states: Boolean, enable_cache: Boolean = false, max_cache
     }
   }
 
-  def exit(): Unit =
+  def exit(): Unit = {
+    Repl_ML_Communication.clear_channel(channel_id)
     session_manager_instance.shutdown()
+  }
 
   def save_state(): EnvStateID = repl_session.save_state()
 

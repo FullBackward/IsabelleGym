@@ -43,23 +43,44 @@ class Repl_Result() {
   }
 }
 
+/**
+ * Thread-safe wrapper around Repl_Result using ThreadLocal storage.
+ *
+ * RATIONALE (P0 fix): The previous implementation used a single shared
+ * `var current_result` across the entire JVM.  When two Python sessions
+ * called into the Scala gateway concurrently (via separate ThreadedBackend
+ * worker threads), one session's `reset()` would wipe the result being
+ * accumulated by another session, causing silent output corruption.
+ *
+ * By storing the current result in a ThreadLocal, each worker thread gets
+ * its own isolated Repl_Result instance, which matches the 1-thread-per-
+ * session model enforced by ThreadedBackend on the Python side.
+ */
 object Repl_Output {
-  private var current_result: Repl_Result = _
+  private val thread_local_result: ThreadLocal[Repl_Result] =
+    new ThreadLocal[Repl_Result]()
 
-  def result: Repl_Result = current_result
+  def result: Repl_Result = {
+    val r = thread_local_result.get()
+    if (r == null)
+      throw new IllegalStateException("Result not initialised. Call build_result first.")
+    r
+  }
 
   def reset(): Unit =
-    current_result = new Repl_Result()
+    thread_local_result.set(new Repl_Result())
 
   def add_output(message: String): Unit = {
-    if (current_result == null)
+    val r = thread_local_result.get()
+    if (r == null)
       throw new IllegalStateException("Result not initialised. Call build_result first.")
-    current_result.add_output(message)
+    r.add_output(message)
   }
 
   def add_error(message: String): Unit = {
-    if (current_result == null)
+    val r = thread_local_result.get()
+    if (r == null)
       throw new IllegalStateException("Result not initialised. Call build_result first.")
-    current_result.add_error(message)
+    r.add_error(message)
   }
 }

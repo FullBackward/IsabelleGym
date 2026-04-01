@@ -27,3 +27,9 @@ class SessionStartError(SessionError):
 
 class GatewayUnavailable(SessionError):
     pass
+
+
+class PoolExhausted(SessionError):
+    """Raised when the session pool is full and all sessions are actively
+    processing requests, so no eviction candidate is available."""
+    pass

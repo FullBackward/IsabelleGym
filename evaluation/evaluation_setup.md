@@ -179,7 +179,7 @@ python /mnt/data/isabellegym_artifacts/eval_smallstep_server.py \
   --output smallstep_server_results.json
 ```
 
-python eval_smallstep_server.py --server http://localhost:8000 --corpus HOL_corpus/Examples/processed --field HOL-Analysis --timeout 1200 --output ./runs/smallstep_server/server_smallstep_results_run_1.json --print-steps
+python eval_smallstep_server.py --server http://localhost:8000 --corpus HOL_corpus/Examples/processed --field HOL --timeout 1200 --output ./runs/smallstep_server/worker_8_reuse_true/server_smallstep_results_run_1.json --print-steps
 
 What it measures:
 - session creation time

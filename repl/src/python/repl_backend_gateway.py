@@ -36,8 +36,13 @@ class ReplResult(Protocol):
 
 # pylint: disable=missing-docstring
 class ReplBackend(Protocol):
-    """Protocol for results for the Scala backend."""
+    """Protocol matching the Scala ``repl.ReplBackend`` class.
 
+    Every public method on the Scala side should have an entry here so that
+    static type checkers can catch interface drift early.
+    """
+
+    # --- core session operations ---
     def current_thy_name_string(self) -> str: ...
     def enter_thy(self, input_thy_name: str) -> ReplResult: ...
     def open_subgoals(self) -> py4j.java_collections.JavaList[str]: ...
@@ -51,18 +56,36 @@ class ReplBackend(Protocol):
     def restore_state(self, state_id: EnvStateID) -> bool: ...
     def reset(self) -> ReplResult: ...
     def exit(self) -> None: ...
+
+    # --- cache ---
     def get_cache_status(self) -> str: ...
     def get_cache_stats(self) -> py4j.java_collections.JavaMap[str, int]: ...
+
+    # --- memory management ---
     def get_memory_report(self) -> str: ...
     def get_memory_status(self) -> str: ...
     def can_create_new_session(self) -> bool: ...
     def perform_memory_cleanup(self) -> None: ...
+
+    # --- session health ---
+    def is_session_valid(self) -> bool: ...
+    def recreate_session_if_needed(self) -> None: ...
+
+    # --- vector environment ---
+    def vector_step(self, isar_strings: py4j.java_collections.JavaList[str]) -> ReplResult: ...
+    def vectorise(self, size: int) -> None: ...
+    def scalarise(self, index_to_keep: int) -> None: ...
 
 
 class ReplBackendGatewayProcess:
     """
     Class to manage an instance of the Scala REPL gateway process.
     """
+
+    # Configurable via subclass or monkey-patch; avoids hardcoded magic numbers.
+    POLL_INTERVAL: float = 0.1
+    POLL_TIMEOUT: float = 20.0
+    TERMINATE_WAIT: float = 3.0
 
     def __init__(self) -> None:
         # pylint: disable=consider-using-with, subprocess-popen-preexec-fn
@@ -80,138 +103,133 @@ class ReplBackendGatewayProcess:
                 "Scala REPL gateway process failed to start (stdout is None)."
             )
         port = int(self.process.stdout.readline().strip())
-        # Redirect stdout to the console once the port number is read
-        self.process.stdout = sys.stdout
+        # Close the pipe now that the port has been read — assigning
+        # sys.stdout was a bug (it doesn't redirect the subprocess).
+        self.process.stdout.close()
+        self.process.stdout = None
         self.gateway = JavaGateway(gateway_parameters=GatewayParameters(port=port))
 
     def has_terminated(self) -> bool:
         """Check if the Scala REPL gateway process has terminated."""
         return self.process.poll() is not None
 
+    # ------------------------------------------------------------------
+    # Generic polling helper — all get_repl_backend_* variants delegate
+    # to this to avoid the 6× copy-paste that previously existed.
+    # ------------------------------------------------------------------
+
+    def _poll_gateway(self, method_name: str, *args) -> ReplBackend:
+        """Call a factory method on the Scala ``ReplBackendGateway`` object,
+        retrying on ``Py4JNetworkError`` until the gateway is ready.
+
+        Parameters
+        ----------
+        method_name : name of the static method on ``repl.ReplBackendGateway``
+        *args : positional arguments forwarded to the Scala method
+        """
+        start_time = time.time()
+        while time.time() - start_time < self.POLL_TIMEOUT:
+            if self.has_terminated():
+                raise RuntimeError("Scala REPL gateway process has terminated.")
+            try:
+                factory = getattr(
+                    self.gateway.jvm.repl.ReplBackendGateway, method_name
+                )
+                return factory(*args)
+            except py4j.protocol.Py4JNetworkError:
+                time.sleep(self.POLL_INTERVAL)
+        raise RuntimeError(
+            f"Failed to call ReplBackendGateway.{method_name} "
+            f"within {self.POLL_TIMEOUT}s."
+        )
+
+    # ------------------------------------------------------------------
+    # Public factory methods — signatures match the Scala gateway exactly.
+    #
+    # Scala source of truth:
+    #   repl/src/main/scala/repl/repl_backend_gateway.scala
+    # ------------------------------------------------------------------
+
     def get_repl_backend(self, show_states: bool) -> ReplBackend:
-        """Get the Isabelle REPL object from the Scala gateway."""
-        poll_interval = 0.1
-        poll_timeout = 20
-        start_time = time.time()
-        while time.time() - start_time < poll_timeout:
-            if self.has_terminated():
-                raise RuntimeError("Scala REPL gateway process has terminated.")
-            try:
-                repl_backend: ReplBackend = (
-                    self.gateway.jvm.repl.ReplBackendGateway.get_repl_backend(
-                        show_states
-                    )
-                )
-                return repl_backend
-            except py4j.protocol.Py4JNetworkError:
-                time.sleep(poll_interval)
-        raise RuntimeError(
-            "Failed to get the Scala REPL backend from the gateway process."
+        # Scala: get_repl_backend(show_states: Boolean)
+        return self._poll_gateway("get_repl_backend", show_states)
+
+    def get_repl_backend_with_cache(
+        self, show_states: bool, enable_cache: bool
+    ) -> ReplBackend:
+        # Scala: get_repl_backend_with_cache(show_states: Boolean, enable_cache: Boolean)
+        # NOTE: the old Python version incorrectly passed a `field` arg here.
+        return self._poll_gateway(
+            "get_repl_backend_with_cache", show_states, enable_cache
         )
-    
-    def get_repl_backend_with_cache(self, show_states: bool, enable_cache: bool, field: str) -> ReplBackend:
-        """Get the Isabelle REPL object with cache control from the Scala gateway."""
-        poll_interval = 0.1
-        poll_timeout = 20
-        start_time = time.time()
-        while time.time() - start_time < poll_timeout:
-            if self.has_terminated():
-                raise RuntimeError("Scala REPL gateway process has terminated.")
-            try:
-                repl_backend: ReplBackend = (
-                    self.gateway.jvm.repl.ReplBackendGateway.get_repl_backend_with_cache(
-                        show_states, enable_cache, field
-                    )
-                )
-                return repl_backend
-            except py4j.protocol.Py4JNetworkError:
-                time.sleep(poll_interval)
-        raise RuntimeError(
-            "Failed to get the Scala REPL backend from the gateway process."
+
+    def get_repl_backend_with_full_cache_config(
+        self,
+        show_states: bool,
+        enable_cache: bool,
+        max_cache_size: int,
+        field: str = "HOL",
+    ) -> ReplBackend:
+        # Scala: get_repl_backend_with_full_cache_config(
+        #     show_states, enable_cache, max_cache_size, field: String = "HOL")
+        return self._poll_gateway(
+            "get_repl_backend_with_full_cache_config",
+            show_states, enable_cache, max_cache_size, field,
         )
-    
-    def get_repl_backend_with_full_cache_config(self, show_states: bool, enable_cache: bool, max_cache_size: int) -> ReplBackend:
-        """Get the Isabelle REPL object with full cache configuration from the Scala gateway."""
-        poll_interval = 0.1
-        poll_timeout = 20
-        start_time = time.time()
-        while time.time() - start_time < poll_timeout:
-            if self.has_terminated():
-                raise RuntimeError("Scala REPL gateway process has terminated.")
-            try:
-                repl_backend: ReplBackend = (
-                    self.gateway.jvm.repl.ReplBackendGateway.get_repl_backend_with_full_cache_config(
-                        show_states, enable_cache, max_cache_size
-                    )
-                )
-                return repl_backend
-            except py4j.protocol.Py4JNetworkError:
-                time.sleep(poll_interval)
-        raise RuntimeError(
-            "Failed to get the Scala REPL backend from the gateway process."
+
+    def get_repl_backend_with_memory_management(
+        self,
+        show_states: bool,
+        enable_cache: bool,
+        max_cache_size: int,
+        enable_memory_management: bool,
+        field: str = "HOL",
+    ) -> ReplBackend:
+        # Scala: get_repl_backend_with_memory_management(
+        #     show_states, enable_cache, max_cache_size,
+        #     enable_memory_management, field: String = "HOL")
+        return self._poll_gateway(
+            "get_repl_backend_with_memory_management",
+            show_states, enable_cache, max_cache_size,
+            enable_memory_management, field,
         )
-    
-    def get_repl_backend_with_memory_management(self, show_states: bool, enable_cache: bool, max_cache_size: int, enable_memory_management: bool) -> ReplBackend:
-        """Get the Isabelle REPL object with memory management from the Scala gateway."""
-        poll_interval = 0.1
-        poll_timeout = 20
-        start_time = time.time()
-        while time.time() - start_time < poll_timeout:
-            if self.has_terminated():
-                raise RuntimeError("Scala REPL gateway process has terminated.")
-            try:
-                repl_backend: ReplBackend = (
-                    self.gateway.jvm.repl.ReplBackendGateway.get_repl_backend_with_memory_management(
-                        show_states, enable_cache, max_cache_size, enable_memory_management
-                    )
-                )
-                return repl_backend
-            except py4j.protocol.Py4JNetworkError:
-                time.sleep(poll_interval)
-        raise RuntimeError(
-            "Failed to get the Scala REPL backend from the gateway process."
+
+    def get_repl_backend_with_initial_theories(
+        self,
+        show_states: bool,
+        enable_cache: bool,
+        max_cache_size: int,
+        enable_memory_management: bool,
+        initial_thys: "py4j.java_collections.JavaList[str]",
+        field: str = "HOL",
+    ) -> ReplBackend:
+        # Scala: get_repl_backend_with_initial_theories(
+        #     show_states, enable_cache, max_cache_size,
+        #     enable_memory_management, initial_thys: java.util.List[String],
+        #     field: String = "HOL")
+        return self._poll_gateway(
+            "get_repl_backend_with_initial_theories",
+            show_states, enable_cache, max_cache_size,
+            enable_memory_management, initial_thys, field,
         )
-    
-    def get_repl_backend_with_initial_theories(self, show_states: bool, enable_cache: bool, max_cache_size: int, enable_memory_management: bool, initial_thys: py4j.java_collections.JavaList[str], field: str) -> ReplBackend:
-        """Get the Isabelle REPL object with custom initial theories from the Scala gateway."""
-        poll_interval = 0.1
-        poll_timeout = 20
-        start_time = time.time()
-        while time.time() - start_time < poll_timeout:
-            if self.has_terminated():
-                raise RuntimeError("Scala REPL gateway process has terminated.")
-            try:
-                repl_backend: ReplBackend = (
-                    self.gateway.jvm.repl.ReplBackendGateway.get_repl_backend_with_initial_theories(
-                        show_states, enable_cache, max_cache_size, enable_memory_management, initial_thys, field
-                    )
-                )
-                return repl_backend
-            except py4j.protocol.Py4JNetworkError:
-                time.sleep(poll_interval)
-        raise RuntimeError(
-            "Failed to get the Scala REPL backend from the gateway process."
-        )
-    
-    def get_repl_backend_with_shared_cache(self, show_states: bool, enable_cache: bool, max_cache_size: int, enable_memory_management: bool, initial_thys: py4j.java_collections.JavaList[str], field:str) -> ReplBackend:
-        """Get the Isabelle REPL object with shared cache from the Scala gateway."""
-        poll_interval = 0.1
-        poll_timeout = 20
-        start_time = time.time()
-        while time.time() - start_time < poll_timeout:
-            if self.has_terminated():
-                raise RuntimeError("Scala REPL gateway process has terminated.")
-            try:
-                repl_backend: ReplBackend = (
-                    self.gateway.jvm.repl.ReplBackendGateway.get_repl_backend_with_shared_cache(
-                        show_states, enable_cache, max_cache_size, enable_memory_management, initial_thys, field
-                    )
-                )
-                return repl_backend
-            except py4j.protocol.Py4JNetworkError:
-                time.sleep(poll_interval)
-        raise RuntimeError(
-            "Failed to get the Scala REPL backend from the gateway process."
+
+    def get_repl_backend_with_shared_cache(
+        self,
+        show_states: bool,
+        enable_cache: bool,
+        max_cache_size: int,
+        enable_memory_management: bool,
+        initial_thys: "py4j.java_collections.JavaList[str]",
+        field: str = "HOL",
+    ) -> ReplBackend:
+        # Scala: get_repl_backend_with_shared_cache(
+        #     show_states, enable_cache, max_cache_size,
+        #     enable_memory_management, initial_thys: java.util.List[String],
+        #     field: String = "HOL")
+        return self._poll_gateway(
+            "get_repl_backend_with_shared_cache",
+            show_states, enable_cache, max_cache_size,
+            enable_memory_management, initial_thys, field,
         )
     
     def terminate(self) -> None:

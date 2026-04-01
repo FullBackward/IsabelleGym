@@ -73,12 +73,17 @@ class BuildVerifier:
         *,
         theory_name: str,
         theory_text: str,
+        dependencies: Optional[List[str]] = None,
         field: Optional[str],
         timeout: float,
     ) -> BigStepExecuteResult:
         parent_session = (field or "HOL").strip() or "HOL"
-        dependencies = self.extract_imports(theory_text)
-        deps = normalize_theories(dependencies)
+        # Use explicitly-provided dependencies when available;
+        # fall back to extracting imports from the theory text.
+        if dependencies:
+            deps = normalize_theories(dependencies)
+        else:
+            deps = normalize_theories(self.extract_imports(theory_text))
         dependency_key = build_dependency_key(parent_session, deps)
         theory_hash = stable_theory_hash(parent_session, dependency_key, theory_text)
 
