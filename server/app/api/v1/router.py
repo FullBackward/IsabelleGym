@@ -133,6 +133,7 @@ async def execute_command(session_id: str, request: CommandRequest, session_mana
             success=getattr(result, "success", False),
             output=getattr(result, "output", None),
             error=getattr(result, "error", None),
+            subgoal_error=getattr(result, "subgoal_error", None),
             subgoals=getattr(result, "subgoals", []) or [],
             execution_time=float(getattr(result, "execution_time", 0.0) or 0.0),
         )

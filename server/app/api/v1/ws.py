@@ -86,6 +86,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                             "subgoals": getattr(result, "subgoals", []),
                             "output": getattr(result, "output", None),
                             "error": getattr(result, "error", None),
+                            "warning": getattr(result, "warning", None),
                             "execution_time": getattr(result, "execution_time", None),
                         }
                     )

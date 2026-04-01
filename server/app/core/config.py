@@ -1,5 +1,6 @@
 import os
 from typing import Final
+import re
 
 
 class API:
@@ -15,6 +16,13 @@ class Server:
     SHOW_STATES: Final = False
     DEFAULT_FIELD: Final = "HOL"
     IDLE_TIMEOUT_SECONDS: Final = 1800
+
+
+class RegularExp:
+    IMPORT_RE = re.compile(r'(?ms)\bimports\b(?P<imports>.*?)\bbegin\b')
+    IMPORT_TOKEN_RE = re.compile(r'"[^"]+"|[A-Za-z_][A-Za-z0-9_./-]*')
+    THEORY_RE = re.compile(r'(?ms)^[ \t]*theory\s+(?:"([^"\n]+)"|([A-Za-z0-9_\'.-]+))')
+    
 
 
 class Logging:

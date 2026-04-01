@@ -123,7 +123,7 @@ python /mnt/data/isabellegym_artifacts/eval_bigstep_server.py \
   --output server_bigstep_results.json
 ```
 
-python .\eval_bigstep_server.py --corpus .\HOL_corpus\HOL-Analysis\processed\ --output .\runs\bigstep_server_build\server_build_bigstep_results_run_1.json
+python .\eval_bigstep_server.py --corpus .\HOL_corpus\HOL-Analysis\processed\ --output .\runs\bigstep_server_build\server_build_bigstep_results_run_6.json
 
 What it measures:
 - success / failure per file
@@ -150,7 +150,7 @@ python /mnt/data/isabellegym_artifacts/eval_smallstep_isabellegym.py \
   --output smallstep_isabellegym_results.json
 ```
 
-python ./eval_smallstep_isabellegym.py --repo-root ./local_gym/ --corpus ./HOL_corpus/Examples/processed --output ./runs/smallstep_local_gym/local_isabellegym_smallstep_results_run_1.json --print-steps
+python ./eval_smallstep_isabellegym.py --repo-root ./local_gym/ --corpus ./HOL_corpus/Examples/processed --output ./runs/smallstep_local_gym/local_isabellegym_smallstep_results_run_6.json --print-steps
 
 python ./eval_smallstep_isabellegym.py --repo-root ./local_gym/ --corpus ./HOL_corpus/Examples/tests --output ./runs/smallstep_local_gym/local_isabellegym_smallstep_test.json --print-steps
 
@@ -216,7 +216,7 @@ python /mnt/data/isabellegym_artifacts/eval_smallstep_qisabelle.py \
   --session-name HOL \
   --output smallstep_qisabelle_results.json
 ```
-python .\eval_smallstep_qisabelle.py --qisabelle-root . --corpus .\HOL_corpus\Examples\processed\ --session-name HOL-Examples --output .\runs\smallstep_local_qisabelle\local_qisabelle_smallstep_results_run_1.json
+python ./eval_smallstep_qisabelle.py --qisabelle-root ./ --corpus ../IsabelleGym/evaluation/HOL_corpus/Examples/processed --session-name HOL --port 17000 --output ../IsabelleGym/evaluation/runs/smallstep_local_qisabelle/local_qisabelle_smallstep_results_run_1.json
 
 
 What it measures:

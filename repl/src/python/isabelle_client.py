@@ -2,6 +2,7 @@
 
 import atexit
 import time
+from typing import Optional
 
 from .repl_backend_gateway import EnvStateID, ReplBackendGatewayProcess, ReplResult, Outputs
 from .thy_init import ThyInit
@@ -35,18 +36,14 @@ class IsabelleClient:
         if self.thy_init is None:
             raise RuntimeError("Failed to initialize ThyInit: init.thy file not found.")
         
-        print(initial_thys)
-
-        if initial_thys is None:
-            initial_thys = ["$ISABELLE_REPL_HOME/thys/IsabelleREPL"]
-        else:
-            initial_thys = ["$ISABELLE_REPL_HOME/thys/" + self.thy_init.gen_file("main", initial_thys).data]
-        
-        
-        self.initial_thys = initial_thys
+        self.default_session_theories = self._normalize_theories(initial_thys)
+        self.initial_thys, self.initial_wrapper_name = self._build_loaded_theories(
+            wrapper_name="main",
+            dependency_theories=self.default_session_theories,
+        )
         
         java_list = self.repl_backend_gateway_process.gateway.jvm.java.util.ArrayList()
-        for thy in initial_thys:
+        for thy in self.initial_thys:
             java_list.add(thy)
         
         if shared_cache:
@@ -68,6 +65,38 @@ class IsabelleClient:
             self.current_session_id = None
         
         self.repl_backend_init = True
+
+    def _normalize_theories(self, theories: Optional[list[str]]) -> list[str]:
+        """Normalize dependency theories while preserving the caller's order."""
+        if theories is None:
+            return []
+
+        normalized: list[str] = []
+        for theory in theories:
+            if theory is None:
+                continue
+            value = str(theory).strip()
+            if value:
+                normalized.append(value)
+
+        return normalized
+
+    def _build_loaded_theories(
+        self, wrapper_name: str, dependency_theories: list[str]
+    ) -> tuple[list[str], Optional[str]]:
+        """Resolve raw dependency theories to the actual theory loaded by Isabelle."""
+        if not dependency_theories:
+            return ["$ISABELLE_REPL_HOME/thys/IsabelleREPL"], None
+
+        gen_result = self.thy_init.gen_file(wrapper_name, dependency_theories)
+        if gen_result.__class__ != Success or not getattr(gen_result, "data", None):
+            raise RuntimeError(
+                f"Failed to generate theory wrapper {wrapper_name}: "
+                f"{getattr(gen_result, 'err', 'unknown ThyInit error')}"
+            )
+
+        wrapper_theory = str(gen_result.data)
+        return [f"$ISABELLE_REPL_HOME/thys/{wrapper_theory}"], wrapper_theory
 
     def _get_active_backend(self):
         """get the active backend"""
@@ -163,8 +192,8 @@ class IsabelleClient:
                 print("  ✓ Backend exited")
             except Exception as e:
                 print(f"  ⚠ Error closing backend: {e}")
-            if len(self.thy_init.created_files) != 0:
-                result = self.thy_init.cleanup("main")
+            if self.initial_wrapper_name is not None:
+                result = self.thy_init.cleanup(self.initial_wrapper_name)
                 if result.__class__ != Success:
                     print(f"  ⚠ Error cleaning up main theory file: {result.err}")
                 else:
@@ -204,33 +233,35 @@ class IsabelleClient:
         """create a new Session"""
         if not self.use_multi_session:
             raise RuntimeError("create_session is only available in multi-session mode")
-        
-        if initial_thys is None:
-            initial_thys = self.initial_thys
-        else:
-            initial_thys = ["$ISABELLE_REPL_HOME/thys/" + self.thy_init.gen_file(session_id, initial_thys).data]
-        
+
+        dependency_theories = (
+            self.default_session_theories if initial_thys is None else self._normalize_theories(initial_thys)
+        )
+        loaded_thys, wrapper_name = self._build_loaded_theories(session_id, dependency_theories)
+
         java_list = self.repl_backend_gateway_process.gateway.jvm.java.util.ArrayList()
-        for thy in initial_thys:
+        for thy in loaded_thys:
             java_list.add(thy)
-        
+
         # use shared cache in multi-session mode
         new_backend = self.repl_backend_gateway_process.get_repl_backend_with_shared_cache(
             self.show_states, self.enable_cache, self.max_cache_size, self.enable_memory_management, java_list, field
         )
-        
+
         self.sessions[session_id] = {
             'backend': new_backend,
-            'initial_thys': initial_thys,
+            'session_theories': dependency_theories,
+            'initial_thys': loaded_thys,
+            'wrapper_name': wrapper_name,
             'created_at': time.time()
         }
-        
+
         if self.current_session_id is None:
             self.current_session_id = session_id
-        
-        print(f"create Session: {session_id}, theories: {initial_thys}")
+
+        print(f"create Session: {session_id}, theories: {loaded_thys}")
         return session_id
-    
+
     def switch_session(self, session_id: str) -> bool:
         """switch to the specified Session"""
         if not self.use_multi_session:
@@ -261,6 +292,7 @@ class IsabelleClient:
         result = {}
         for session_id, session_info in self.sessions.items():
             result[session_id] = {
+                'session_theories': session_info['session_theories'],
                 'initial_thys': session_info['initial_thys'],
                 'created_at': session_info['created_at'],
                 'is_current': session_id == self.current_session_id
@@ -280,9 +312,11 @@ class IsabelleClient:
             self.current_session_id = None
         
         session_info = self.sessions.pop(session_id)
-        result = self.thy_init.cleanup(session_id)
-        if not result.__class__ == Success:
-            print(f"Warning: Failed to cleanup theory file for session {session_id}: {result.err}")
+        wrapper_name = session_info.get('wrapper_name')
+        if wrapper_name is not None:
+            result = self.thy_init.cleanup(wrapper_name)
+            if not result.__class__ == Success:
+                print(f"Warning: Failed to cleanup theory file for session {session_id}: {result.err}")
         #try:
         #    session_info['backend'].exit()
         #except:

@@ -3,16 +3,12 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
-import platform
 import re
-import statistics
 import sys
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Optional
-
 
 TOP_LEVEL_KEYWORDS = (
     "lemma", "theorem", "corollary", "proposition", "schematic_goal",
@@ -25,11 +21,12 @@ TOP_LEVEL_KEYWORDS = (
 )
 PROOF_OPENERS = ("proof", "proof -", "proof (")
 PROOF_CLOSERS = ("qed", "by", "done", "oops", "sorry")
-THEORY_RE = re.compile(r'(?ms)^[ \t]*theory\s+(?:"([^"\n]+)"|([A-Za-z0-9_\'.-]+))')
+THEORY_RE = re.compile(r'(?m)^[ \t]*theory[ \t]+(?:"([^"\n]+)"|([A-Za-z0-9_\'.-]+))\b')
 HEADER_RE = re.compile(r"(?s)\btheory\b.*?\bbegin\b")
 END_RE = re.compile(r"\bend\s*$")
 IMPORTS_RE = re.compile(r"(?s)\bimports\b(.*?)\bbegin\b")
 IMPORT_TOKEN_RE = re.compile(r'"[^"]+"|[A-Za-z_][A-Za-z0-9_./-]*')
+PREBEGIN_KEYWORDS_RE = re.compile(r"(?ms)^\s*keywords\b")
 
 
 @dataclass
@@ -47,10 +44,10 @@ class TheoryResult:
     file: str
     theory_name: str
     startup_sec: float
-    wall_time_sec: float
     ok: bool
     total_steps: int
     accepted_steps: int
+    error: Optional[str] = None
     steps: list[StepResult] = field(default_factory=list)
 
 
@@ -59,11 +56,6 @@ def extract_theory_name(text: str) -> Optional[str]:
     if not m:
         return None
     return m.group(1) or m.group(2)
-
-
-def determine_theory_name(thy_file: Path, text: str) -> str:
-    declared = extract_theory_name(text)
-    return declared if declared is not None else thy_file.stem
 
 
 def _starts_with_keyword(line: str, keywords: tuple[str, ...]) -> bool:
@@ -98,14 +90,15 @@ def split_top_level_blocks(body_text: str) -> list[str]:
     return blocks
 
 
-def split_theory(text: str) -> tuple[list[str], str]:
+def split_theory(text: str) -> tuple[str, list[str], str]:
     stripped = text.strip()
     header_match = HEADER_RE.search(stripped)
     end_match = END_RE.search(stripped)
     if not header_match or not end_match:
         raise ValueError("Could not split theory into header/body/end")
+    header = stripped[:header_match.end()].strip()
     body = stripped[header_match.end():end_match.start()].strip()
-    return split_top_level_blocks(body), stripped[end_match.start():end_match.end()].strip()
+    return header, split_top_level_blocks(body), stripped[end_match.start():end_match.end()].strip()
 
 
 def extract_imports(text: str) -> list[str]:
@@ -115,9 +108,17 @@ def extract_imports(text: str) -> list[str]:
     out: list[str] = []
     for token in IMPORT_TOKEN_RE.findall(m.group(1)):
         token = token.strip().strip('"')
-        if token and token not in {"imports", "begin", "theory", "keywords"}:
+        if token and token not in {"imports", "begin"}:
             out.append(token)
-    return sorted(set(out)) or ["Main"]
+    return out or ["Main"]
+
+
+def header_requires_features_not_supported_by_new_theory(header: str) -> Optional[str]:
+    # qIsabelle newTheory only models: theory <name> imports ... begin
+    # It cannot express extra header declarations like custom `keywords`.
+    if PREBEGIN_KEYWORDS_RE.search(header):
+        return "qIsabelle new_theory() cannot reproduce header `keywords` declarations before `begin`"
+    return None
 
 
 def preview(text: str, n: int = 100) -> str:
@@ -125,63 +126,15 @@ def preview(text: str, n: int = 100) -> str:
     return s if len(s) <= n else s[: n - 3] + "..."
 
 
-def safe_mean(values: list[float]) -> Optional[float]:
-    return statistics.mean(values) if values else None
-
-
-def safe_median(values: list[float]) -> Optional[float]:
-    return statistics.median(values) if values else None
-
-
-def percentile(values: list[float], p: float) -> Optional[float]:
-    if not values:
-        return None
-    if len(values) == 1:
-        return values[0]
-    if p <= 0:
-        return min(values)
-    if p >= 100:
-        return max(values)
-
-    xs = sorted(values)
-    rank = (len(xs) - 1) * (p / 100.0)
-    lo = math.floor(rank)
-    hi = math.ceil(rank)
-    if lo == hi:
-        return xs[lo]
-    weight = rank - lo
-    return xs[lo] * (1.0 - weight) + xs[hi] * weight
-
-
-def summarize_metric(values: list[float]) -> dict[str, Optional[float]]:
-    if not values:
-        return {
-            "count": 0,
-            "min": None,
-            "max": None,
-            "mean": None,
-            "median": None,
-            "p90": None,
-            "p95": None,
-        }
-    return {
-        "count": len(values),
-        "min": min(values),
-        "max": max(values),
-        "mean": safe_mean(values),
-        "median": safe_median(values),
-        "p90": percentile(values, 90),
-        "p95": percentile(values, 95),
-    }
-
-
 def main() -> None:
-    ap = argparse.ArgumentParser(
-        description="Benchmark small-step verification via QIsabelle."
-    )
+    ap = argparse.ArgumentParser()
     ap.add_argument("--qisabelle-root", required=True, type=Path)
     ap.add_argument("--corpus", required=True, type=Path)
-    ap.add_argument("--session-name", default="HOL-Analysis")
+    ap.add_argument("--session-name", default="HOL")
+    ap.add_argument("--session-root", action="append", default=[])
+    ap.add_argument("--master-dir", type=Path, default=None)
+    ap.add_argument("--port", type=int, default=17000)
+    ap.add_argument("--only-import-from-session-heap", action="store_true")
     ap.add_argument("--output", type=Path, default=Path("smallstep_qisabelle_results.json"))
     args = ap.parse_args()
 
@@ -193,51 +146,77 @@ def main() -> None:
         raise FileNotFoundError(f"No .thy files found in {args.corpus}")
 
     results: list[TheoryResult] = []
+    t0 = time.perf_counter()
+    session_roots = [Path(p).resolve() for p in args.session_root]
+    master_dir = (args.master_dir.resolve() if args.master_dir else args.corpus.resolve())
 
-    batch_wall_t0 = time.perf_counter()
-    batch_python_cpu_t0 = time.process_time()
-
-    shared_startup_t0 = time.perf_counter()
-    with QIsabelleSession(session_name=args.session_name, session_roots=[]) as session:
-        shared_session_startup_sec = time.perf_counter() - shared_startup_t0
+    with QIsabelleSession(session_name=args.session_name, session_roots=session_roots, port=args.port) as session:
+        startup = time.perf_counter() - t0
 
         for thy_file in files:
             text = thy_file.read_text(encoding="utf-8")
-            theory_name = determine_theory_name(thy_file, text)
-            imports = extract_imports(text)
-            blocks, end_kw = split_theory(text)
+            theory_name = extract_theory_name(text)
+            if not theory_name:
+                results.append(
+                    TheoryResult(
+                        file=str(thy_file),
+                        theory_name=thy_file.stem,
+                        startup_sec=startup,
+                        ok=False,
+                        total_steps=0,
+                        accepted_steps=0,
+                        error="Could not extract theory name",
+                    )
+                )
+                continue
 
-            theory_wall_t0 = time.perf_counter()
+            header, blocks, end_kw = split_theory(text)
+            unsupported = header_requires_features_not_supported_by_new_theory(header)
+            if unsupported:
+                results.append(
+                    TheoryResult(
+                        file=str(thy_file),
+                        theory_name=theory_name,
+                        startup_sec=startup,
+                        ok=False,
+                        total_steps=0,
+                        accepted_steps=0,
+                        error=unsupported,
+                    )
+                )
+                continue
+
+            imports = extract_imports(text)
             step_results: list[StepResult] = []
             ok = True
-
-            t0 = time.perf_counter()
+            theory_error: Optional[str] = None
             try:
                 session.new_theory(
                     theory_name=theory_name,
                     new_state_name=f"{theory_name}_0",
                     imports=imports,
-                    only_import_from_session_heap=False,
+                    master_dir=master_dir,
+                    only_import_from_session_heap=args.only_import_from_session_heap,
                 )
                 current_state = f"{theory_name}_0"
                 next_idx = 1
-                startup = time.perf_counter() - t0
 
                 for kind, command in [("body", b + "\n") for b in blocks] + [("end", end_kw)]:
                     next_state = f"{theory_name}_{next_idx}"
                     next_idx += 1
                     t1 = time.perf_counter()
                     try:
-                        proof_done, goals = session.execute(current_state, command, next_state)
+                        proof_done, _goals = session.execute(current_state, command, next_state)
                         elapsed = time.perf_counter() - t1
                         accepted = True
                         err = None
                         current_state = next_state
                     except Exception as exc:
                         elapsed = time.perf_counter() - t1
-                        proof_done, goals = None, []
+                        proof_done = None
                         accepted = False
                         err = str(exc)
+                        theory_error = err
 
                     step_results.append(
                         StepResult(kind, preview(command), accepted, elapsed, proof_done, err)
@@ -246,68 +225,30 @@ def main() -> None:
                         ok = False
                         break
             except Exception as exc:
-                startup = time.perf_counter() - t0
                 ok = False
-                step_results.append(
-                    StepResult("startup", preview(theory_name), False, 0.0, None, str(exc))
-                )
+                theory_error = str(exc)
 
-            theory_wall = time.perf_counter() - theory_wall_t0
             results.append(
                 TheoryResult(
                     file=str(thy_file),
                     theory_name=theory_name,
                     startup_sec=startup,
-                    wall_time_sec=theory_wall,
                     ok=ok,
                     total_steps=len(step_results),
                     accepted_steps=sum(1 for s in step_results if s.accepted),
+                    error=theory_error,
                     steps=step_results,
                 )
             )
 
-    total_wall_time_sec = time.perf_counter() - batch_wall_t0
-    total_python_cpu_time_sec = time.process_time() - batch_python_cpu_t0
-
-    startup_times = [r.startup_sec for r in results]
-    theory_wall_times = [r.wall_time_sec for r in results]
-    step_elapsed_times = [s.elapsed_sec for r in results for s in r.steps]
-    steps_per_theory = [float(r.total_steps) for r in results]
-    accepted_steps_per_theory = [float(r.accepted_steps) for r in results]
-
     payload = {
         "tool": "qisabelle",
-        "benchmark_kind": "local_smallstep_verification_benchmark",
         "corpus": str(args.corpus),
-        "qisabelle_root": str(args.qisabelle_root),
         "session_name": args.session_name,
-        "shared_session_startup_sec": shared_session_startup_sec,
-        "total_files": len(results),
-        "successes": sum(1 for r in results if r.ok),
-        "failures": sum(1 for r in results if not r.ok),
-        "total_wall_time_sec": total_wall_time_sec,
-        "total_python_cpu_time_sec": total_python_cpu_time_sec,
-        "total_startup_time_sec": sum(startup_times),
-        "total_theory_wall_time_sec": sum(theory_wall_times),
-        "total_step_elapsed_time_sec": sum(step_elapsed_times),
-        "files_per_minute": (len(results) / total_wall_time_sec * 60.0) if total_wall_time_sec > 0 else None,
-        "mean_wall_time_sec_per_file": safe_mean(theory_wall_times),
-        "median_wall_time_sec_per_file": safe_median(theory_wall_times),
-        "mean_startup_sec_per_file": safe_mean(startup_times),
-        "median_startup_sec_per_file": safe_median(startup_times),
-        "mean_step_elapsed_sec": safe_mean(step_elapsed_times),
-        "median_step_elapsed_sec": safe_median(step_elapsed_times),
-        "startup_time_stats_sec": summarize_metric(startup_times),
-        "theory_wall_time_stats_sec": summarize_metric(theory_wall_times),
-        "step_elapsed_time_stats_sec": summarize_metric(step_elapsed_times),
-        "steps_per_theory_stats": summarize_metric(steps_per_theory),
-        "accepted_steps_per_theory_stats": summarize_metric(accepted_steps_per_theory),
-        "environment": {
-            "python_version": sys.version,
-            "platform": platform.platform(),
-            "machine": platform.machine(),
-            "processor": platform.processor(),
-        },
+        "session_roots": [str(p) for p in session_roots],
+        "master_dir": str(master_dir),
+        "theories_attempted": len(results),
+        "theories_completed": sum(1 for r in results if r.ok),
         "results": [
             {
                 **asdict(r),

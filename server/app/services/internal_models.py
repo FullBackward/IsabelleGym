@@ -13,6 +13,7 @@ class SmallStepExecuteResult(BaseModel):
     success: bool
     output: Optional[str] = None
     error: Optional[str] = None
+    subgoal_error: Optional[str] = None
     subgoals: List[str]
     execution_time: float
 

@@ -30,6 +30,7 @@ class CommandResponse(BaseModel):
     success: bool
     output: str | None = None
     error: str | None = None
+    subgoal_error: str | None = None
     subgoals: List[str]
     execution_time: float
     mode: str | None = None

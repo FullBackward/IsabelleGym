@@ -8,11 +8,11 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from server.app.core.logging import get_logger
+from server.app.core.config import RegularExp
 from server.app.services.internal_models import BigStepExecuteResult
 from server.app.services.theory_parsing import extract_theory_name
 
 logger = get_logger(__name__)
-
 
 def normalize_theories(theories: Optional[List[str]]) -> List[str]:
     if not theories:
@@ -73,11 +73,11 @@ class BuildVerifier:
         *,
         theory_name: str,
         theory_text: str,
-        dependencies: Optional[List[str]],
         field: Optional[str],
         timeout: float,
     ) -> BigStepExecuteResult:
         parent_session = (field or "HOL").strip() or "HOL"
+        dependencies = self.extract_imports(theory_text)
         deps = normalize_theories(dependencies)
         dependency_key = build_dependency_key(parent_session, deps)
         theory_hash = stable_theory_hash(parent_session, dependency_key, theory_text)
@@ -96,7 +96,6 @@ class BuildVerifier:
                 result = await self._run_build(
                     theory_name=theory_name,
                     theory_text=theory_text,
-                    dependencies=deps,
                     parent_session=parent_session,
                     dependency_key=dependency_key,
                     timeout=timeout,
@@ -105,13 +104,25 @@ class BuildVerifier:
             if result.success:
                 self._cache[theory_hash] = result
             return result
+        
+    def extract_imports(self, text: str) -> list[str]:
+        m = RegularExp.IMPORT_RE.search(text)
+        if not m:
+            return ["Main"]
+
+        raw = m.group("imports")
+        out: list[str] = []
+        for token in RegularExp.IMPORT_TOKEN_RE.findall(raw):
+            token = token.strip().strip('"')
+            if token and token not in {"imports", "begin", "theory", "keywords"}:
+                out.append(token)
+        return sorted(set(out)) or ["Main"]
 
     async def _run_build(
         self,
         *,
         theory_name: str,
         theory_text: str,
-        dependencies: List[str],
         parent_session: str,
         dependency_key: str,
         timeout: float,

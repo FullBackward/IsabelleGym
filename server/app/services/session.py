@@ -10,13 +10,14 @@ from server.app.core.config import Logging
 from server.app.core.logging import get_logger, logging_context
 from server.app.errors import SessionError
 from server.app.services.threaded_backend import ThreadedBackend
-from server.app.services.theory_parsing import extract_theory_name
 from server_gym.success_checker import (
     get_error_message,
     get_raw_error_output,
     get_raw_output,
     is_syntax_successful,
 )
+
+from server.app.services.theory_parsing import extract_theory_name
 
 from .internal_models import (
     BigStepDiagnostic,
@@ -162,9 +163,6 @@ class _Isabelle_Session:
             execution_time=execution_time,
         )
 
-    def _extract_declared_theory_name(self, theory_text: str) -> Optional[str]:
-        return extract_theory_name(theory_text)
-
     def _split_complete_theory(self, theory_text: str) -> Tuple[str, str, str]:
         """
         Split a complete theory file into:
@@ -249,10 +247,21 @@ class _Isabelle_Session:
 
             try:
                 success = is_syntax_successful(result)
-                if not(command == "end" or command == "end\n"):
-                    subgoals = self.open_subgoals(timeout=timeout)
-                else:
+                error_message = self._result_error(result)
+                subgoal_error: Optional[str] = None
+                if command == "end" or command == "end\n":
                     subgoals = []
+                else:
+                    try:
+                        subgoals = self.open_subgoals(timeout=timeout)
+                    except Exception as exc:
+                        subgoals = []
+                        subgoal_error = f"{exc.__class__.__name__}: {exc}"
+                        logger.warning(
+                            "open_subgoals failed after command execution; command_success=%s error=%s",
+                            success,
+                            subgoal_error,
+                        )
 
                 self.command_history.append(
                     {
@@ -260,20 +269,23 @@ class _Isabelle_Session:
                         "command": command,
                         "timestamp": start_time,
                         "success": success,
+                        "subgoal_error": subgoal_error,
                         "subgoals_count": len(subgoals),
                     }
                 )
 
                 logger.info(
-                    "small-step command finished success=%s subgoals=%s execution_time=%s",
+                    "small-step command finished success=%s subgoals=%s subgoal_error=%s execution_time=%s",
                     success,
                     len(subgoals),
+                    bool(subgoal_error),
                     round(execution_time, 3),
                 )
                 return SmallStepExecuteResult(
                     success=success,
                     output=self._result_output(result),
-                    error=self._result_error(result) if not success else None,
+                    error=error_message if not success else None,
+                    subgoal_error=subgoal_error,
                     subgoals=subgoals,
                     execution_time=execution_time,
                 )
@@ -295,7 +307,7 @@ class _Isabelle_Session:
             previous_theory = ""
 
         try:
-            declared_name = self._extract_declared_theory_name(proof)
+            declared_name = extract_theory_name(proof)
             if declared_name is None:
                 execution_time = time.time() - start_time
                 return self._make_big_step_failure(

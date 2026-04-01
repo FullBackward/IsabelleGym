@@ -14,20 +14,48 @@ from pathlib import Path
 from typing import Optional
 
 
-TOP_LEVEL_KEYWORDS = (
-    "lemma", "theorem", "corollary", "proposition", "schematic_goal",
-    "definition", "fun", "function", "primrec", "inductive", "inductive_set",
-    "coinductive", "abbreviation", "notation", "no_notation", "declare",
-    "context", "locale", "interpretation", "instantiation", "lift_definition",
-    "datatype", "codatatype", "record", "typedef", "class", "instance",
-    "text", "text_raw", "ML", "ML_file", "SML_export", "setup",
-    "method_setup", "termination", "end",
+# Keep command splitting aligned with eval_smallstep_server_1_worker_no_reuse.py
+COMMAND_STARTERS = tuple(
+    sorted(
+        {
+            # document / structure
+            "chapter", "section", "subsection", "subsubsection", "subsubsubsection",
+            "paragraph", "subparagraph", "text", "text_raw",
+            "context", "locale", "interpretation", "sublocale", "experiment",
+            "bundle", "unbundle", "include", "including", "notepad", "named_theorems",
+            # theory / declarations
+            "lemma", "theorem", "corollary", "proposition", "schematic_goal",
+            "definition", "abbreviation", "lemmas", "fun", "function", "primrec",
+            "inductive", "inductive_set", "coinductive", "datatype", "codatatype",
+            "record", "typedef", "class", "instantiation", "instance",
+            "lift_definition", "termination", "consts", "axiomatization",
+            "notation", "no_notation", "adhoc_overloading", "no_adhoc_overloading",
+            "declare", "syntax", "no_syntax", "translations", "no_translations",
+            "typed_print_translation", "print_translation", "parse_translation",
+            "print_ast_translation", "parse_ast_translation",
+            "hide_const", "hide_fact", "hide_type", "hide_class",
+            "term", "typ", "thm", "prop", "value", "values",
+            "print_statement", "find_theorems", "print_theorems",
+            "ML", "ML_file", "SML_export", "setup", "method_setup",
+            # proof commands
+            "proof", "qed", "by", "done", "oops", "sorry", "next",
+            "fix", "assume", "presume", "case", "note", "let", "write",
+            "have", "show", "thus", "hence", "obtain", "guess", "define",
+            "then", "from", "with", "using", "unfolding", "supply",
+            "moreover", "ultimately", "also", "finally",
+            "apply", "apply_end", "subgoal", "defer", "prefer", "back",
+            # structural terminator inside nested contexts
+            "end",
+        },
+        key=lambda s: (-len(s), s),
+    )
 )
-PROOF_OPENERS = ("proof", "proof -", "proof (")
-PROOF_CLOSERS = ("qed", "by", "done", "oops", "sorry")
+
 THEORY_RE = re.compile(r'(?ms)^[ \t]*theory\s+(?:"([^"\n]+)"|([A-Za-z0-9_\'.-]+))')
 HEADER_RE = re.compile(r"(?s)\btheory\b.*?\bbegin\b")
 END_RE = re.compile(r"\bend\s*$")
+IMPORTS_RE = re.compile(r"(?s)\bimports\b(.*?)\bbegin\b")
+IMPORT_TOKEN_RE = re.compile(r'"[^"]+"|[A-Za-z_][A-Za-z0-9_./-]*')
 
 
 @dataclass
@@ -68,6 +96,22 @@ class TheoryResult:
     steps: list[StepResult] = field(default_factory=list)
 
 
+@dataclass
+class LexState:
+    comment_depth: int = 0
+    in_string: bool = False
+    cartouche_depth: int = 0
+    unicode_cartouche_depth: int = 0
+
+    def clear(self) -> bool:
+        return (
+            self.comment_depth == 0
+            and not self.in_string
+            and self.cartouche_depth == 0
+            and self.unicode_cartouche_depth == 0
+        )
+
+
 def extract_theory_name(text: str) -> Optional[str]:
     m = THEORY_RE.search(text)
     if not m:
@@ -78,38 +122,6 @@ def extract_theory_name(text: str) -> Optional[str]:
 def determine_theory_name(thy_file: Path, text: str) -> str:
     declared = extract_theory_name(text)
     return declared if declared is not None else thy_file.stem
-
-
-def _starts_with_keyword(line: str, keywords: tuple[str, ...]) -> bool:
-    stripped = line.strip()
-    return any(re.match(rf"^{re.escape(keyword)}(\b|\s|\(|$)", stripped) for keyword in keywords)
-
-
-def split_top_level_blocks(body_text: str) -> list[str]:
-    text = body_text.replace("\r\n", "\n").replace("\r", "\n").strip()
-    if not text:
-        return []
-    blocks: list[str] = []
-    current: list[str] = []
-    proof_depth = 0
-    for raw_line in text.split("\n"):
-        line = raw_line.rstrip()
-        stripped = line.strip()
-        starts_new_block = bool(current) and proof_depth == 0 and stripped != "" and _starts_with_keyword(stripped, TOP_LEVEL_KEYWORDS)
-        if starts_new_block:
-            block = "\n".join(current).strip()
-            if block:
-                blocks.append(block)
-            current = []
-        current.append(line)
-        if _starts_with_keyword(stripped, PROOF_OPENERS):
-            proof_depth += 1
-        elif _starts_with_keyword(stripped, PROOF_CLOSERS):
-            proof_depth = max(0, proof_depth - 1)
-    block = "\n".join(current).strip()
-    if block:
-        blocks.append(block)
-    return blocks
 
 
 def split_theory(text: str) -> tuple[str, str, str]:
@@ -198,13 +210,138 @@ def is_warning_message(msg: Optional[str]) -> bool:
     return False
 
 
+def _escaped_quote(text: str, idx: int) -> bool:
+    backslashes = 0
+    j = idx - 1
+    while j >= 0 and text[j] == "\\":
+        backslashes += 1
+        j -= 1
+    return (backslashes % 2) == 1
+
+
+def advance_lex_state(state: LexState, text: str, start: int = 0) -> LexState:
+    i = start
+    n = len(text)
+    while i < n:
+        if state.comment_depth > 0:
+            if text.startswith("(*", i):
+                state.comment_depth += 1
+                i += 2
+                continue
+            if text.startswith("*)", i):
+                state.comment_depth -= 1
+                i += 2
+                continue
+            i += 1
+            continue
+
+        if state.in_string:
+            if text[i] == '"' and not _escaped_quote(text, i):
+                state.in_string = False
+            i += 1
+            continue
+
+        if state.cartouche_depth > 0:
+            if text.startswith(r"\<open>", i):
+                state.cartouche_depth += 1
+                i += len(r"\<open>")
+                continue
+            if text.startswith(r"\<close>", i):
+                state.cartouche_depth -= 1
+                i += len(r"\<close>")
+                continue
+            i += 1
+            continue
+
+        if state.unicode_cartouche_depth > 0:
+            if text[i] == "‹":
+                state.unicode_cartouche_depth += 1
+            elif text[i] == "›":
+                state.unicode_cartouche_depth -= 1
+            i += 1
+            continue
+
+        if text.startswith("(*", i):
+            state.comment_depth += 1
+            i += 2
+            continue
+        if text.startswith(r"\<open>", i):
+            state.cartouche_depth += 1
+            i += len(r"\<open>")
+            continue
+        if text[i] == "‹":
+            state.unicode_cartouche_depth += 1
+            i += 1
+            continue
+        if text[i] == '"':
+            state.in_string = True
+            i += 1
+            continue
+        i += 1
+    return state
+
+
+def _line_starter_keyword(stripped: str) -> Optional[str]:
+    if stripped in {".", "..", "..."}:
+        return stripped
+    for kw in COMMAND_STARTERS:
+        if re.match(rf"^{re.escape(kw)}(\b|\s|\(|$)", stripped):
+            return kw
+    return None
+
+def extract_imports(text: str) -> list[str]:
+    m = IMPORTS_RE.search(text)
+    if not m:
+        return ["Main"]
+    out: list[str] = []
+    for token in IMPORT_TOKEN_RE.findall(m.group(1)):
+        token = token.strip().strip('"')
+        if token and token not in {"imports", "begin", "theory", "keywords"}:
+            out.append(token)
+    return sorted(set(out)) or ["Main"]
+
+def split_commands(body_text: str) -> list[str]:
+    """
+    Split a theory body into smaller Isabelle commands. Safe w.r.t. comments,
+    cartouches, and strings, so keywords inside text/cartouches do not split.
+    """
+    text = body_text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not text:
+        return []
+
+    lines = text.split("\n")
+    state = LexState()
+    commands: list[str] = []
+    current: list[str] = []
+
+    for raw_line in lines:
+        line = raw_line.rstrip()
+        stripped = line.strip()
+        safe_line_start = state.clear()
+        starter = _line_starter_keyword(stripped) if (safe_line_start and stripped) else None
+        if current and starter is not None:
+            block = "\n".join(current).strip()
+            if block:
+                commands.append(block)
+            current = []
+
+        current.append(line)
+        advance_lex_state(state, raw_line)
+        advance_lex_state(state, "\n")
+
+    block = "\n".join(current).strip()
+    if block:
+        commands.append(block)
+    return commands
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(
-        description="Local IsabelleGym evaluator that ignores warning-only failures and does NOT fetch open_subgoals after end."
+        description="Local IsabelleGym evaluator aligned with the server small-step evaluator."
     )
     ap.add_argument("--repo-root", required=True, type=Path)
     ap.add_argument("--corpus", required=True, type=Path)
-    ap.add_argument("--output", type=Path, default=Path("smallstep_isabellegym_no_end_subgoals.json"))
+    ap.add_argument("--output", type=Path, default=Path("smallstep_isabellegym_aligned.json"))
     ap.add_argument("--print-steps", action="store_true")
     args = ap.parse_args()
 
@@ -224,9 +361,9 @@ def main() -> None:
         text = thy_file.read_text(encoding="utf-8")
         theory_name = determine_theory_name(thy_file, text)
         header, body, end_kw = split_theory(text)
-        blocks = split_top_level_blocks(body)
-        command_stream = [("header", header)] + [("body", b + "\n") for b in blocks] + [("end", end_kw)]
-
+        commands = split_commands(body)
+        command_stream = [("header", header)] + [("body", c + "\n") for c in commands] + [("end", end_kw)]
+        imports = extract_imports(text)
         theory_wall_t0 = time.perf_counter()
         step_results: list[StepResult] = []
         completed_all_commands = False
@@ -240,7 +377,7 @@ def main() -> None:
 
         try:
             t0 = time.perf_counter()
-            gym = IsabelleGym(show_states=False)
+            gym = IsabelleGym(show_states=False, initial_thys = imports)
             gym.enter_thy(theory_name)
             startup = time.perf_counter() - t0
 
@@ -259,6 +396,7 @@ def main() -> None:
                     raw_error = None if accepted else get_error_message(repl_result)
                     exc_cls = None
 
+                    # Keep warning-only behaviour aligned with the server evaluator.
                     if not accepted and is_warning_message(raw_error):
                         accepted = True
                         warning = raw_error
@@ -273,10 +411,8 @@ def main() -> None:
                     err = str(exc)
                     exc_cls = exc.__class__.__name__
 
-                # IMPORTANT CHANGE:
-                # Do not query open_subgoals() after end. A successful end means the
-                # theory completed; after that there may be no active context/state for
-                # subgoal retrieval, which caused false negatives via timeouts.
+                # Keep the local evaluator's "no open_subgoals after end" behaviour,
+                # which avoids false negatives after the theory context is closed.
                 if kind == "end":
                     subgoals = []
                     subgoal_error = None
@@ -393,7 +529,7 @@ def main() -> None:
 
     payload = {
         "tool": "local-isabellegym",
-        "benchmark_kind": "local_smallstep_verification_benchmark_no_end_subgoals",
+        "benchmark_kind": "local_smallstep_verification_benchmark_aligned_server_split_and_acceptance",
         "corpus": str(args.corpus),
         "repo_root": str(args.repo_root),
         "total_files": len(results),

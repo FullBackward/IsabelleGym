@@ -26,7 +26,10 @@ dev = [
 ]
 
 [tool.setuptools]
-packages = ["gym"]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["client*", "gym*", "repl*", "server_gym*"]
 
 [tool.pylint.main]
 ignore-paths = [

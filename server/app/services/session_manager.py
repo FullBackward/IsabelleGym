@@ -6,7 +6,7 @@ import threading
 import time
 import uuid
 from collections import OrderedDict
-from typing import Any, Dict, List, Optional, Set, Union
+from typing import Any, Dict, List, Optional, Union
 
 from repl.src.python.repl_backend_gateway import ReplBackendGatewayProcess
 from repl.src.python.thy_init import ThyInit
@@ -279,16 +279,13 @@ class SessionManager:
         *,
         theory_name: str,
         theory: str,
-        dependencies: Optional[List[str]],
         field: Optional[str],
         timeout: float,
     ):
         normalized_field = self._normalize_field(field)
-        normalized_deps = self._normalize_theories(dependencies)
         return await self.build_verifier.verify(
             theory_name=theory_name,
             theory_text=theory,
-            dependencies=normalized_deps,
             field=normalized_field,
             timeout=timeout,
         )
