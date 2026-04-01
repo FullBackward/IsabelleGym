@@ -1,0 +1,327 @@
+"""Shared Isabelle theory parsing: header/body/end splitting, import extraction,
+theory-name extraction, and two command-splitting strategies (fine-grained
+lex-aware and coarse top-level-block)."""
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Optional
+
+
+# ---------------------------------------------------------------------------
+# Compiled regexes
+# ---------------------------------------------------------------------------
+
+THEORY_RE = re.compile(r'(?ms)^[ \t]*theory\s+(?:"([^"\n]+)"|([A-Za-z0-9_\'.-]+))')
+HEADER_RE = re.compile(r"(?s)\btheory\b.*?\bbegin\b")
+END_RE = re.compile(r"\bend\s*$")
+IMPORTS_RE = re.compile(r"(?s)\bimports\b(.*?)\bbegin\b")
+IMPORT_TOKEN_RE = re.compile(r'"[^"]+"|[A-Za-z_][A-Za-z0-9_./-]*')
+
+# ---------------------------------------------------------------------------
+# Fine-grained command-level keyword table (used by split_commands)
+# ---------------------------------------------------------------------------
+
+COMMAND_STARTERS = tuple(
+    sorted(
+        {
+            # document / structure
+            "chapter", "section", "subsection", "subsubsection", "subsubsubsection",
+            "paragraph", "subparagraph", "text", "text_raw",
+            "context", "locale", "interpretation", "sublocale", "experiment",
+            "bundle", "unbundle", "include", "including", "notepad", "named_theorems",
+            # theory / declarations
+            "lemma", "theorem", "corollary", "proposition", "schematic_goal",
+            "definition", "abbreviation", "lemmas", "fun", "function", "primrec",
+            "inductive", "inductive_set", "coinductive", "datatype", "codatatype",
+            "record", "typedef", "class", "instantiation", "instance",
+            "lift_definition", "termination", "consts", "axiomatization",
+            "notation", "no_notation", "adhoc_overloading", "no_adhoc_overloading",
+            "declare", "syntax", "no_syntax", "translations", "no_translations",
+            "typed_print_translation", "print_translation", "parse_translation",
+            "print_ast_translation", "parse_ast_translation",
+            "hide_const", "hide_fact", "hide_type", "hide_class",
+            "term", "typ", "thm", "prop", "value", "values",
+            "print_statement", "find_theorems", "print_theorems", "print_record",
+            "ML", "ML_file", "SML_export", "setup", "method_setup", "oracle",
+            # proof commands
+            "proof", "qed", "by", "done", "oops", "sorry", "next",
+            "fix", "assume", "presume", "case", "note", "let", "write",
+            "have", "show", "thus", "hence", "obtain", "guess", "define",
+            "then", "from", "with", "using", "unfolding", "supply",
+            "moreover", "ultimately", "also", "finally",
+            "apply", "apply_end", "subgoal", "defer", "prefer", "back",
+            # structural terminator inside nested contexts
+            "end",
+        },
+        key=lambda s: (-len(s), s),
+    )
+)
+
+# ---------------------------------------------------------------------------
+# Coarse top-level-block keyword tables (used by split_top_level_blocks)
+# ---------------------------------------------------------------------------
+
+TOP_LEVEL_KEYWORDS = (
+    "lemma", "theorem", "corollary", "proposition", "schematic_goal",
+    "definition", "fun", "function", "primrec", "inductive", "inductive_set",
+    "coinductive", "abbreviation", "notation", "no_notation", "declare",
+    "context", "locale", "interpretation", "instantiation", "lift_definition",
+    "datatype", "codatatype", "record", "typedef", "class", "instance",
+    "text", "text_raw", "ML", "ML_file", "SML_export", "setup",
+    "method_setup", "termination", "end",
+)
+PROOF_OPENERS = ("proof", "proof -", "proof (")
+PROOF_CLOSERS = ("qed", "by", "done", "oops", "sorry")
+
+# ---------------------------------------------------------------------------
+# Theory-name helpers
+# ---------------------------------------------------------------------------
+
+
+def extract_theory_name(text: str) -> Optional[str]:
+    """Extract the theory name from the ``theory`` header line."""
+    m = THEORY_RE.search(text)
+    if not m:
+        return None
+    return m.group(1) or m.group(2)
+
+
+def determine_theory_name(thy_file: Path, text: str) -> str:
+    """Return the declared theory name, falling back to the file stem."""
+    return extract_theory_name(text) or thy_file.stem
+
+
+# ---------------------------------------------------------------------------
+# Header / body / end splitting
+# ---------------------------------------------------------------------------
+
+
+def split_theory(text: str) -> tuple[str, str, str]:
+    """Split a .thy file into ``(header, body, end_keyword)``.
+
+    *header* includes everything up to and including ``begin`` (with a
+    trailing newline).  *body* is the text between ``begin`` and the final
+    ``end``.  *end_keyword* is typically just ``"end"``.
+    """
+    stripped = text.strip()
+    header_match = HEADER_RE.search(stripped)
+    end_match = END_RE.search(stripped)
+    if not header_match or not end_match:
+        raise ValueError("Could not split theory into header/body/end")
+    return (
+        stripped[:header_match.end()].strip() + "\n",
+        stripped[header_match.end():end_match.start()].strip(),
+        stripped[end_match.start():end_match.end()].strip(),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Import extraction
+# ---------------------------------------------------------------------------
+
+
+def extract_imports(text: str) -> list[str]:
+    """Return the sorted, deduplicated list of imports from a theory header."""
+    m = IMPORTS_RE.search(text)
+    if not m:
+        return ["Main"]
+    out: list[str] = []
+    for token in IMPORT_TOKEN_RE.findall(m.group(1)):
+        token = token.strip().strip('"')
+        if token and token not in {"imports", "begin", "theory", "keywords"}:
+            out.append(token)
+    return sorted(set(out)) or ["Main"]
+
+
+# ---------------------------------------------------------------------------
+# Lexer state (for fine-grained splitting)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class LexState:
+    """Tracks nesting of comments, strings, and cartouches."""
+    comment_depth: int = 0
+    in_string: bool = False
+    cartouche_depth: int = 0
+    unicode_cartouche_depth: int = 0
+
+    def clear(self) -> bool:
+        return (
+            self.comment_depth == 0
+            and not self.in_string
+            and self.cartouche_depth == 0
+            and self.unicode_cartouche_depth == 0
+        )
+
+
+def _escaped_quote(text: str, idx: int) -> bool:
+    backslashes = 0
+    j = idx - 1
+    while j >= 0 and text[j] == "\\":
+        backslashes += 1
+        j -= 1
+    return (backslashes % 2) == 1
+
+
+def advance_lex_state(state: LexState, text: str, start: int = 0) -> LexState:
+    """Advance *state* over *text* starting at position *start*."""
+    i = start
+    n = len(text)
+    while i < n:
+        if state.comment_depth > 0:
+            if text.startswith("(*", i):
+                state.comment_depth += 1
+                i += 2
+                continue
+            if text.startswith("*)", i):
+                state.comment_depth -= 1
+                i += 2
+                continue
+            i += 1
+            continue
+
+        if state.in_string:
+            if text[i] == '"' and not _escaped_quote(text, i):
+                state.in_string = False
+            i += 1
+            continue
+
+        if state.cartouche_depth > 0:
+            if text.startswith(r"\<open>", i):
+                state.cartouche_depth += 1
+                i += len(r"\<open>")
+                continue
+            if text.startswith(r"\<close>", i):
+                state.cartouche_depth -= 1
+                i += len(r"\<close>")
+                continue
+            i += 1
+            continue
+
+        if state.unicode_cartouche_depth > 0:
+            if text[i] == "\u2039":
+                state.unicode_cartouche_depth += 1
+            elif text[i] == "\u203a":
+                state.unicode_cartouche_depth -= 1
+            i += 1
+            continue
+
+        if text.startswith("(*", i):
+            state.comment_depth += 1
+            i += 2
+            continue
+        if text.startswith(r"\<open>", i):
+            state.cartouche_depth += 1
+            i += len(r"\<open>")
+            continue
+        if text[i] == "\u2039":
+            state.unicode_cartouche_depth += 1
+            i += 1
+            continue
+        if text[i] == '"':
+            state.in_string = True
+            i += 1
+            continue
+        i += 1
+    return state
+
+
+# ---------------------------------------------------------------------------
+# Fine-grained command splitting (lex-aware)
+# ---------------------------------------------------------------------------
+
+
+def _line_starter_keyword(stripped: str) -> Optional[str]:
+    if stripped in {".", "..", "..."}:
+        return stripped
+    for kw in COMMAND_STARTERS:
+        if re.match(rf"^{re.escape(kw)}(\b|\s|\(|$)", stripped):
+            return kw
+    return None
+
+
+def split_commands(body_text: str) -> list[str]:
+    """Split a theory body into individual Isabelle commands.
+
+    This is the fine-grained strategy: it respects comments, strings, and
+    cartouches so that keywords inside quoted text do not cause false splits.
+    """
+    text = body_text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not text:
+        return []
+
+    lines = text.split("\n")
+    state = LexState()
+    commands: list[str] = []
+    current: list[str] = []
+
+    for raw_line in lines:
+        line = raw_line.rstrip()
+        stripped = line.strip()
+        safe_line_start = state.clear()
+        starter = _line_starter_keyword(stripped) if (safe_line_start and stripped) else None
+        if current and starter is not None:
+            block = "\n".join(current).strip()
+            if block:
+                commands.append(block)
+            current = []
+
+        current.append(line)
+        advance_lex_state(state, raw_line)
+        advance_lex_state(state, "\n")
+
+    block = "\n".join(current).strip()
+    if block:
+        commands.append(block)
+    return commands
+
+
+# ---------------------------------------------------------------------------
+# Coarse top-level-block splitting (proof-depth aware)
+# ---------------------------------------------------------------------------
+
+
+def _starts_with_keyword(line: str, keywords: tuple[str, ...]) -> bool:
+    stripped = line.strip()
+    return any(re.match(rf"^{re.escape(keyword)}(\b|\s|\(|$)", stripped) for keyword in keywords)
+
+
+def split_top_level_blocks(body_text: str) -> list[str]:
+    """Split a theory body into coarse top-level blocks.
+
+    Each block starts at a top-level keyword (lemma, definition, etc.) and
+    includes the full proof that follows it.  This is the strategy used by
+    evaluators that replay one declaration+proof at a time.
+    """
+    text = body_text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not text:
+        return []
+    blocks: list[str] = []
+    current: list[str] = []
+    proof_depth = 0
+    for raw_line in text.split("\n"):
+        line = raw_line.rstrip()
+        stripped = line.strip()
+        starts_new_block = (
+            bool(current)
+            and proof_depth == 0
+            and stripped != ""
+            and _starts_with_keyword(stripped, TOP_LEVEL_KEYWORDS)
+        )
+        if starts_new_block:
+            block = "\n".join(current).strip()
+            if block:
+                blocks.append(block)
+            current = []
+        current.append(line)
+        if _starts_with_keyword(stripped, PROOF_OPENERS):
+            proof_depth += 1
+        elif _starts_with_keyword(stripped, PROOF_CLOSERS):
+            proof_depth = max(0, proof_depth - 1)
+    block = "\n".join(current).strip()
+    if block:
+        blocks.append(block)
+    return blocks

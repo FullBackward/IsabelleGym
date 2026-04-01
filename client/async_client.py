@@ -68,6 +68,26 @@ class IsabelleGymAsyncClient:
         response.raise_for_status()
         return response.json()
 
+    async def acquire_session(
+        self,
+        theories: list[str] | None = None,
+        field: str | None = "HOL",
+        reuse_dirty: bool = True,
+    ) -> dict[str, Any]:
+        """Find an existing session matching theories/field or create a new one.
+
+        Returns a dict with ``session_id``, ``theories``, ``status``, and a
+        ``reused`` boolean indicating whether the session already existed.
+        """
+        payload: dict[str, Any] = {"reuse_dirty": reuse_dirty}
+        if theories is not None:
+            payload["theories"] = theories
+        if field is not None:
+            payload["field"] = field
+        response = await self._request("POST", f"{BASE_URL}/acquire", json_body=payload)
+        response.raise_for_status()
+        return response.json()
+
     async def close_session(self, session_id: str) -> dict[str, Any]:
         response = await self._request("DELETE", f"{BASE_URL}/{session_id}")
         response.raise_for_status()

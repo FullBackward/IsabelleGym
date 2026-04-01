@@ -272,3 +272,4 @@ metals.sbt
 **/HOL_corpus/**/**/
 
 .vscode/**
+.vscode

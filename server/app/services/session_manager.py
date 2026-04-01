@@ -6,7 +6,7 @@ import threading
 import time
 import uuid
 from collections import OrderedDict
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from repl.src.python.repl_backend_gateway import ReplBackendGatewayProcess
 from repl.src.python.thy_init import ThyInit
@@ -310,6 +310,67 @@ class SessionManager:
         except Exception as e:
             logger.exception("create_session failed")
             raise SessionStartError(f"{self._where('create_session')}: Failed to create session: {e}") from e
+
+    def find_session(
+        self,
+        theories: Optional[List[str]] = None,
+        field: Optional[str] = None,
+        reuse_dirty: bool = True,
+    ) -> Optional[_Isabelle_Session]:
+        """Find an existing ACTIVE session whose dependency_key matches the
+        given theories + field combination.
+
+        Parameters
+        ----------
+        theories : list of theory names (dependencies)
+        field : Isabelle field / session image
+        reuse_dirty : if *False*, only return sessions with an empty
+                      ``command_history`` (i.e. "clean" sessions that have not
+                      been used yet).  When *True* (default), any active
+                      matching session can be returned.
+
+        Returns
+        -------
+        The matching session (moved to the MRU end of the LRU cache), or
+        ``None`` if no match was found.
+        """
+        target_key = self.build_dependency_key(theories, field)
+        with self._lock:
+            for sid, session in reversed(self._lru.items()):
+                if session.status != SessionStatus.ACTIVE:
+                    continue
+                if session.dependency_key != target_key:
+                    continue
+                if not reuse_dirty and len(session.command_history) > 0:
+                    continue
+                # Match found — promote to MRU
+                self._lru.move_to_end(sid, last=True)
+                logger.info(
+                    "found existing session session_id=%s dependency_key=%s",
+                    sid,
+                    target_key[:12],
+                )
+                return session
+        return None
+
+    async def acquire_session(
+        self,
+        theories: Optional[List[str]] = None,
+        field: Optional[str] = None,
+        reuse_dirty: bool = True,
+    ) -> Tuple[_Isabelle_Session, bool]:
+        """Find an existing matching session or create a new one.
+
+        Returns
+        -------
+        (session, reused) – *reused* is ``True`` when an existing session was
+        returned, ``False`` when a fresh one was created.
+        """
+        existing = self.find_session(theories=theories, field=field, reuse_dirty=reuse_dirty)
+        if existing is not None:
+            return existing, True
+        new_session = await self.create_session(theories=theories, field=field)
+        return new_session, False
 
     def get_session(self, session_id: Union[str, uuid.UUID]) -> _Isabelle_Session:
         sid = self._normalize_session_id(session_id)

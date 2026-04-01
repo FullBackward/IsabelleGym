@@ -11,6 +11,8 @@ from .schemas.API_models import (
     CommandRequest,
     CommandResponse,
     ProofStateResponse,
+    SessionAcquireRequest,
+    SessionAcquireResponse,
     SessionCreateRequest,
     SessionResponse,
     StateCheckpoint,
@@ -81,6 +83,49 @@ async def list_sessions(session_manager=Depends(get_session_manager)):
     sessions = session_manager.list_sessions()
     logger.debug("listed %s sessions", len(sessions))
     return {"sessions": sessions} if sessions else {"sessions": []}
+
+
+@router.post("/api/v1/sessions/acquire", response_model=SessionAcquireResponse)
+async def acquire_session(
+    request: SessionAcquireRequest,
+    session_manager=Depends(get_session_manager),
+):
+    """Find an existing session that matches the requested dependencies and
+    field, or create a new one on demand.
+
+    This avoids the cost of re-loading expensive Isabelle theories when an
+    existing compatible session is already available in the pool.
+    """
+    theories = request.theories if request.theories else None
+    field = request.field
+    if field is None or str(field).strip() == "" or str(field).lower() in {"null", "none", "default"}:
+        field = None
+
+    with logging_context(field=field or "default"):
+        logger.info(
+            "acquire_session requested theories=%s reuse_dirty=%s",
+            theories or [],
+            request.reuse_dirty,
+        )
+
+        session, reused = await session_manager.acquire_session(
+            theories=theories,
+            field=field,
+            reuse_dirty=request.reuse_dirty,
+        )
+
+        logger.info(
+            "acquire_session result session_id=%s reused=%s",
+            session.session_id,
+            reused,
+        )
+        return SessionAcquireResponse(
+            session_id=str(session.session_id),
+            created_at=session.created_at,
+            theories=session.theories or [],
+            status=session.status.value if hasattr(session.status, "value") else str(session.status),
+            reused=reused,
+        )
 
 
 @router.get("/api/v1/sessions/{session_id}")

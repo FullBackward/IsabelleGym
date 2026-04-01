@@ -3,10 +3,8 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import platform
 import re
-import statistics
 import subprocess
 import sys
 import tempfile
@@ -14,6 +12,9 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Optional
+
+from eval_stats import safe_mean, safe_median, summarize_metric
+from theory_splitter import determine_theory_name
 
 try:
     import resource  # Unix-only
@@ -37,31 +38,6 @@ class FileResult:
     stderr_tail: Optional[str]
 
 
-# Only match an actual theory command at the start of a line, e.g.
-#   theory Infinite_Sum
-#   theory "Cross3"
-THEORY_RE = re.compile(
-    r'(?m)^[ \t]*theory[ \t]+(?:"([^"\n]+)"|([A-Za-z0-9_\'.-]+))\b'
-)
-
-
-def extract_theory_name(text: str) -> Optional[str]:
-    m = THEORY_RE.search(text)
-    if not m:
-        return None
-    return m.group(1) or m.group(2)
-
-
-def determine_theory_name(thy_file: Path, text: str) -> str:
-    """
-    Prefer the declared theory name if we can find a real theory command.
-    Otherwise fall back to the file stem, which is what Isabelle expects
-    for loading <Name>.thy from the theories section of ROOT.
-    """
-    declared = extract_theory_name(text)
-    return declared if declared is not None else thy_file.stem
-
-
 def get_children_rusage_snapshot() -> Optional[tuple[float, float]]:
     """
     Return cumulative (user_cpu_sec, system_cpu_sec) for child processes.
@@ -82,60 +58,6 @@ def diff_rusage(
     user = max(0.0, after[0] - before[0])
     system = max(0.0, after[1] - before[1])
     return user, system, user + system
-
-
-def safe_mean(values: list[float]) -> Optional[float]:
-    return statistics.mean(values) if values else None
-
-
-def safe_median(values: list[float]) -> Optional[float]:
-    return statistics.median(values) if values else None
-
-
-def percentile(values: list[float], p: float) -> Optional[float]:
-    """
-    Inclusive linear interpolation percentile.
-    p should be in [0, 100].
-    """
-    if not values:
-        return None
-    if len(values) == 1:
-        return values[0]
-    if p <= 0:
-        return min(values)
-    if p >= 100:
-        return max(values)
-
-    xs = sorted(values)
-    rank = (len(xs) - 1) * (p / 100.0)
-    lo = math.floor(rank)
-    hi = math.ceil(rank)
-    if lo == hi:
-        return xs[lo]
-    weight = rank - lo
-    return xs[lo] * (1.0 - weight) + xs[hi] * weight
-
-
-def summarize_metric(values: list[float]) -> dict[str, Optional[float]]:
-    if not values:
-        return {
-            "count": 0,
-            "min": None,
-            "max": None,
-            "mean": None,
-            "median": None,
-            "p90": None,
-            "p95": None,
-        }
-    return {
-        "count": len(values),
-        "min": min(values),
-        "max": max(values),
-        "mean": safe_mean(values),
-        "median": safe_median(values),
-        "p90": percentile(values, 90),
-        "p95": percentile(values, 95),
-    }
 
 
 def build_one(

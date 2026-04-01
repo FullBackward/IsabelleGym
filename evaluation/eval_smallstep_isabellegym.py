@@ -3,59 +3,26 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import platform
-import re
-import statistics
 import sys
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Optional
 
-
-# Keep command splitting aligned with eval_smallstep_server_1_worker_no_reuse.py
-COMMAND_STARTERS = tuple(
-    sorted(
-        {
-            # document / structure
-            "chapter", "section", "subsection", "subsubsection", "subsubsubsection",
-            "paragraph", "subparagraph", "text", "text_raw",
-            "context", "locale", "interpretation", "sublocale", "experiment",
-            "bundle", "unbundle", "include", "including", "notepad", "named_theorems",
-            # theory / declarations
-            "lemma", "theorem", "corollary", "proposition", "schematic_goal",
-            "definition", "abbreviation", "lemmas", "fun", "function", "primrec",
-            "inductive", "inductive_set", "coinductive", "datatype", "codatatype",
-            "record", "typedef", "class", "instantiation", "instance",
-            "lift_definition", "termination", "consts", "axiomatization",
-            "notation", "no_notation", "adhoc_overloading", "no_adhoc_overloading",
-            "declare", "syntax", "no_syntax", "translations", "no_translations",
-            "typed_print_translation", "print_translation", "parse_translation",
-            "print_ast_translation", "parse_ast_translation",
-            "hide_const", "hide_fact", "hide_type", "hide_class",
-            "term", "typ", "thm", "prop", "value", "values",
-            "print_statement", "find_theorems", "print_theorems",
-            "ML", "ML_file", "SML_export", "setup", "method_setup",
-            # proof commands
-            "proof", "qed", "by", "done", "oops", "sorry", "next",
-            "fix", "assume", "presume", "case", "note", "let", "write",
-            "have", "show", "thus", "hence", "obtain", "guess", "define",
-            "then", "from", "with", "using", "unfolding", "supply",
-            "moreover", "ultimately", "also", "finally",
-            "apply", "apply_end", "subgoal", "defer", "prefer", "back",
-            # structural terminator inside nested contexts
-            "end",
-        },
-        key=lambda s: (-len(s), s),
-    )
+from eval_stats import (
+    is_warning_message,
+    preview,
+    safe_mean,
+    safe_median,
+    summarize_metric,
 )
-
-THEORY_RE = re.compile(r'(?ms)^[ \t]*theory\s+(?:"([^"\n]+)"|([A-Za-z0-9_\'.-]+))')
-HEADER_RE = re.compile(r"(?s)\btheory\b.*?\bbegin\b")
-END_RE = re.compile(r"\bend\s*$")
-IMPORTS_RE = re.compile(r"(?s)\bimports\b(.*?)\bbegin\b")
-IMPORT_TOKEN_RE = re.compile(r'"[^"]+"|[A-Za-z_][A-Za-z0-9_./-]*')
+from theory_splitter import (
+    determine_theory_name,
+    extract_imports,
+    split_commands,
+    split_theory,
+)
 
 
 @dataclass
@@ -96,243 +63,11 @@ class TheoryResult:
     steps: list[StepResult] = field(default_factory=list)
 
 
-@dataclass
-class LexState:
-    comment_depth: int = 0
-    in_string: bool = False
-    cartouche_depth: int = 0
-    unicode_cartouche_depth: int = 0
-
-    def clear(self) -> bool:
-        return (
-            self.comment_depth == 0
-            and not self.in_string
-            and self.cartouche_depth == 0
-            and self.unicode_cartouche_depth == 0
-        )
-
-
-def extract_theory_name(text: str) -> Optional[str]:
-    m = THEORY_RE.search(text)
-    if not m:
-        return None
-    return m.group(1) or m.group(2)
-
-
-def determine_theory_name(thy_file: Path, text: str) -> str:
-    declared = extract_theory_name(text)
-    return declared if declared is not None else thy_file.stem
-
-
-def split_theory(text: str) -> tuple[str, str, str]:
-    header_match = HEADER_RE.search(text)
-    end_match = END_RE.search(text.strip())
-    if not header_match or not end_match:
-        raise ValueError("Could not split theory into header/body/end")
-    stripped = text.strip()
-    header = stripped[:header_match.end()].strip() + "\n"
-    body = stripped[header_match.end():end_match.start()].strip()
-    end_kw = stripped[end_match.start():end_match.end()].strip()
-    return header, body, end_kw
-
-
-def preview(text: str, n: int = 100) -> str:
-    s = " ".join(text.split())
-    return s if len(s) <= n else s[: n - 3] + "..."
-
-
-def safe_mean(values: list[float]) -> Optional[float]:
-    return statistics.mean(values) if values else None
-
-
-def safe_median(values: list[float]) -> Optional[float]:
-    return statistics.median(values) if values else None
-
-
-def percentile(values: list[float], p: float) -> Optional[float]:
-    if not values:
-        return None
-    if len(values) == 1:
-        return values[0]
-    if p <= 0:
-        return min(values)
-    if p >= 100:
-        return max(values)
-    xs = sorted(values)
-    rank = (len(xs) - 1) * (p / 100.0)
-    lo = math.floor(rank)
-    hi = math.ceil(rank)
-    if lo == hi:
-        return xs[lo]
-    weight = rank - lo
-    return xs[lo] * (1.0 - weight) + xs[hi] * weight
-
-
-def summarize_metric(values: list[float]) -> dict[str, Optional[float]]:
-    if not values:
-        return {
-            "count": 0,
-            "min": None,
-            "max": None,
-            "mean": None,
-            "median": None,
-            "p90": None,
-            "p95": None,
-        }
-    return {
-        "count": len(values),
-        "min": min(values),
-        "max": max(values),
-        "mean": safe_mean(values),
-        "median": safe_median(values),
-        "p90": percentile(values, 90),
-        "p95": percentile(values, 95),
-    }
-
-
 def safe_open_subgoals(gym) -> tuple[list[str], Optional[str]]:
     try:
         return list(gym.open_subgoals()), None
     except Exception as exc:  # noqa: BLE001
         return [], f"{exc.__class__.__name__}: {exc}"
-
-
-def is_warning_message(msg: Optional[str]) -> bool:
-    if not msg:
-        return False
-    stripped = msg.strip()
-    first = stripped.splitlines()[0].strip().lower()
-    if first.startswith("warning") or first.startswith("ml warning"):
-        return True
-    lowered = stripped.lower()
-    if "warning" in lowered and "error" not in lowered and "failed" not in lowered:
-        return True
-    return False
-
-
-def _escaped_quote(text: str, idx: int) -> bool:
-    backslashes = 0
-    j = idx - 1
-    while j >= 0 and text[j] == "\\":
-        backslashes += 1
-        j -= 1
-    return (backslashes % 2) == 1
-
-
-def advance_lex_state(state: LexState, text: str, start: int = 0) -> LexState:
-    i = start
-    n = len(text)
-    while i < n:
-        if state.comment_depth > 0:
-            if text.startswith("(*", i):
-                state.comment_depth += 1
-                i += 2
-                continue
-            if text.startswith("*)", i):
-                state.comment_depth -= 1
-                i += 2
-                continue
-            i += 1
-            continue
-
-        if state.in_string:
-            if text[i] == '"' and not _escaped_quote(text, i):
-                state.in_string = False
-            i += 1
-            continue
-
-        if state.cartouche_depth > 0:
-            if text.startswith(r"\<open>", i):
-                state.cartouche_depth += 1
-                i += len(r"\<open>")
-                continue
-            if text.startswith(r"\<close>", i):
-                state.cartouche_depth -= 1
-                i += len(r"\<close>")
-                continue
-            i += 1
-            continue
-
-        if state.unicode_cartouche_depth > 0:
-            if text[i] == "‹":
-                state.unicode_cartouche_depth += 1
-            elif text[i] == "›":
-                state.unicode_cartouche_depth -= 1
-            i += 1
-            continue
-
-        if text.startswith("(*", i):
-            state.comment_depth += 1
-            i += 2
-            continue
-        if text.startswith(r"\<open>", i):
-            state.cartouche_depth += 1
-            i += len(r"\<open>")
-            continue
-        if text[i] == "‹":
-            state.unicode_cartouche_depth += 1
-            i += 1
-            continue
-        if text[i] == '"':
-            state.in_string = True
-            i += 1
-            continue
-        i += 1
-    return state
-
-
-def _line_starter_keyword(stripped: str) -> Optional[str]:
-    if stripped in {".", "..", "..."}:
-        return stripped
-    for kw in COMMAND_STARTERS:
-        if re.match(rf"^{re.escape(kw)}(\b|\s|\(|$)", stripped):
-            return kw
-    return None
-
-def extract_imports(text: str) -> list[str]:
-    m = IMPORTS_RE.search(text)
-    if not m:
-        return ["Main"]
-    out: list[str] = []
-    for token in IMPORT_TOKEN_RE.findall(m.group(1)):
-        token = token.strip().strip('"')
-        if token and token not in {"imports", "begin", "theory", "keywords"}:
-            out.append(token)
-    return sorted(set(out)) or ["Main"]
-
-def split_commands(body_text: str) -> list[str]:
-    """
-    Split a theory body into smaller Isabelle commands. Safe w.r.t. comments,
-    cartouches, and strings, so keywords inside text/cartouches do not split.
-    """
-    text = body_text.replace("\r\n", "\n").replace("\r", "\n").strip()
-    if not text:
-        return []
-
-    lines = text.split("\n")
-    state = LexState()
-    commands: list[str] = []
-    current: list[str] = []
-
-    for raw_line in lines:
-        line = raw_line.rstrip()
-        stripped = line.strip()
-        safe_line_start = state.clear()
-        starter = _line_starter_keyword(stripped) if (safe_line_start and stripped) else None
-        if current and starter is not None:
-            block = "\n".join(current).strip()
-            if block:
-                commands.append(block)
-            current = []
-
-        current.append(line)
-        advance_lex_state(state, raw_line)
-        advance_lex_state(state, "\n")
-
-    block = "\n".join(current).strip()
-    if block:
-        commands.append(block)
-    return commands
 
 
 def main() -> None:
