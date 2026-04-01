@@ -270,7 +270,7 @@ class SessionManager:
                     self._lru[session_id] = session
                     self._lru.move_to_end(session_id, last=True)
                     # Evict excess sessions, but SKIP sessions that are
-                    # actively processing a request.
+                    # actively processing a request or exclusively leased.
                     while len(self._lru) > self.pool_size:
                         # Walk LRU oldest-first looking for an idle candidate.
                         candidate_id: Optional[uuid.UUID] = None
@@ -278,17 +278,18 @@ class SessionManager:
                             if sid == session_id:
                                 continue  # never evict the one we just created
                             s = self._lru[sid]
-                            if not s.in_use:
+                            if not s.in_use and not s.leased:
                                 candidate_id = sid
                                 break
                         if candidate_id is None:
-                            # Every session is in-use — undo our insertion and
-                            # let the caller know the pool is exhausted.
+                            # Every session is in-use or leased — undo our
+                            # insertion and let the caller know the pool is
+                            # exhausted.
                             self._lru.pop(session_id, None)
                             session.close()
                             raise PoolExhausted(
                                 f"Session pool is full ({self.pool_size} sessions) "
-                                f"and all sessions are actively processing requests. "
+                                f"and all sessions are actively processing requests or leased. "
                                 f"Try again later or increase ISABELLE_POOL_SIZE."
                             )
                         evict_targets.append(
@@ -352,8 +353,8 @@ class SessionManager:
         field: Optional[str] = None,
         reuse_dirty: bool = True,
     ) -> Optional[_Isabelle_Session]:
-        """Find an existing ACTIVE session whose dependency_key matches the
-        given theories + field combination.
+        """Find an existing ACTIVE, **unleased** session whose dependency_key
+        matches the given theories + field combination.
 
         Parameters
         ----------
@@ -374,6 +375,8 @@ class SessionManager:
             for sid, session in reversed(self._lru.items()):
                 if session.status != SessionStatus.ACTIVE:
                     continue
+                if session.leased:
+                    continue
                 if session.dependency_key != target_key:
                     continue
                 if not reuse_dirty and len(session.command_history) > 0:
@@ -393,19 +396,51 @@ class SessionManager:
         theories: Optional[List[str]] = None,
         field: Optional[str] = None,
         reuse_dirty: bool = True,
-    ) -> Tuple[_Isabelle_Session, bool]:
+    ) -> Tuple[_Isabelle_Session, bool, str]:
         """Find an existing matching session or create a new one.
+
+        The returned session is **exclusively leased** — no other
+        ``acquire_session`` call can hand it out until the caller
+        invokes ``release_session`` (or ``close_session``).
 
         Returns
         -------
-        (session, reused) – *reused* is ``True`` when an existing session was
-        returned, ``False`` when a fresh one was created.
+        (session, reused, lease_id)
         """
+        lease_id = uuid.uuid4().hex[:12]
+
         existing = self.find_session(theories=theories, field=field, reuse_dirty=reuse_dirty)
         if existing is not None:
-            return existing, True
+            existing.acquire_lease(lease_id)
+            logger.info(
+                "session leased (reused) session_id=%s lease_id=%s",
+                existing.session_id, lease_id,
+            )
+            return existing, True, lease_id
+
         new_session = await self.create_session(theories=theories, field=field)
-        return new_session, False
+        new_session.acquire_lease(lease_id)
+        logger.info(
+            "session leased (new) session_id=%s lease_id=%s",
+            new_session.session_id, lease_id,
+        )
+        return new_session, False, lease_id
+
+    def release_session(self, session_id: Union[str, uuid.UUID]) -> bool:
+        """Release the exclusive lease so the session returns to the pool
+        for reuse by a future ``acquire_session`` call.
+
+        Unlike ``close_session``, the backend is kept alive.
+        """
+        sid = self._normalize_session_id(session_id)
+        with self._lock:
+            session = self._lru.get(sid)
+        if session is None:
+            raise SessionNotFound(f"Session {sid} not found")
+        with logging_context(session_id=sid, field=session.field):
+            logger.info("releasing session lease back to pool")
+            session.release_lease()
+        return True
 
     def get_session(self, session_id: Union[str, uuid.UUID]) -> _Isabelle_Session:
         sid = self._normalize_session_id(session_id)
@@ -427,7 +462,8 @@ class SessionManager:
         if session is None:
             raise SessionNotFound(f"Session {sid} not found")
         with logging_context(session_id=sid, field=session.field):
-            logger.info("closing session")
+            logger.info("closing session (lease_id=%s)", session.lease_id)
+            session.release_lease()
             session.close()
         return True
 
@@ -448,6 +484,8 @@ class SessionManager:
                     "verified_theories": session.verified_theories,
                     "in_use": session.in_use,
                     "active_requests": session.active_request_count,
+                    "leased": session.leased,
+                    "lease_id": session.lease_id,
                 }
                 for sid, session in self._lru.items()
             ]
@@ -460,6 +498,8 @@ class SessionManager:
 
             with self._lock:
                 for sid, session in list(self._lru.items()):
+                    if session.leased:
+                        continue  # never evict a leased session
                     if session.status != SessionStatus.CLOSED and session.is_idle(self.idle_timeout, now=now):
                         to_close.append(sid)
 
@@ -479,4 +519,5 @@ class SessionManager:
                 "active_sessions": len(sessions),
                 "max_pool_size": self.pool_size,
                 "busy_sessions": sum(1 for s in sessions if s.in_use),
+                "leased_sessions": sum(1 for s in sessions if s.leased),
             }

@@ -87,6 +87,7 @@ class SessionAcquireResponse(BaseModel):
     theories: List[str]
     status: str
     reused: bool = Field(description="True if an existing session was returned, False if a new one was created.")
+    lease_id: str = Field(description="Exclusive lease identifier. Pass to /release to return the session to the pool.")
 
 
 class BigStepTheoryRequest(BaseModel):

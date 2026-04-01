@@ -108,7 +108,7 @@ async def run_theory(
             session_payload = await client.acquire_session(
                 theories=imports,
                 field=field,
-                reuse_dirty=False,
+                reuse_dirty=True,
             )
             session_id = session_payload["session_id"]
             reused_session = session_payload.get("reused", False)
@@ -233,7 +233,7 @@ async def run_theory(
         finally:
             if session_id is not None:
                 try:
-                    await client.close_session(session_id)
+                    await client.release_session(session_id)
                 except Exception:
                     pass
 

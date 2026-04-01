@@ -95,6 +95,15 @@ class IsabelleGymAsyncClient:
             return response.json()
         return {}
 
+    async def release_session(self, session_id: str) -> dict[str, Any]:
+        """Release the exclusive lease on a session, returning it to the
+        pool for reuse.  Unlike ``close_session``, the backend stays alive."""
+        response = await self._request("POST", f"{BASE_URL}/{session_id}/release")
+        response.raise_for_status()
+        if response.content:
+            return response.json()
+        return {}
+
     async def enter_theory(self, session_id: str, theory_name: str) -> dict[str, Any]:
         response = await self._request(
             "POST",

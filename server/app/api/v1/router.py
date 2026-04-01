@@ -94,8 +94,9 @@ async def acquire_session(
     """Find an existing session that matches the requested dependencies and
     field, or create a new one on demand.
 
-    This avoids the cost of re-loading expensive Isabelle theories when an
-    existing compatible session is already available in the pool.
+    The returned session is **exclusively leased** — no other
+    ``acquire_session`` call will hand out the same session until the
+    caller invokes the ``/release`` or ``DELETE`` endpoint.
     """
     theories = request.theories if request.theories else None
     field = request.field
@@ -109,16 +110,17 @@ async def acquire_session(
             request.reuse_dirty,
         )
 
-        session, reused = await session_manager.acquire_session(
+        session, reused, lease_id = await session_manager.acquire_session(
             theories=theories,
             field=field,
             reuse_dirty=request.reuse_dirty,
         )
 
         logger.info(
-            "acquire_session result session_id=%s reused=%s",
+            "acquire_session result session_id=%s reused=%s lease_id=%s",
             session.session_id,
             reused,
+            lease_id,
         )
         return SessionAcquireResponse(
             session_id=str(session.session_id),
@@ -126,7 +128,19 @@ async def acquire_session(
             theories=session.theories or [],
             status=session.status.value if hasattr(session.status, "value") else str(session.status),
             reused=reused,
+            lease_id=lease_id,
         )
+
+
+@router.post("/api/v1/sessions/{session_id}/release")
+async def release_session(session_id: str, session_manager=Depends(get_session_manager)):
+    """Release the exclusive lease on a session, returning it to the pool
+    for reuse.  Unlike DELETE, the backend stays alive."""
+    with logging_context(session_id=session_id):
+        logger.info("releasing session lease")
+        session_manager.release_session(session_id)
+        logger.info("session lease released")
+        return {"success": True, "session_id": session_id}
 
 
 @router.get("/api/v1/sessions/{session_id}")

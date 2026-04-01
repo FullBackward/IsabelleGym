@@ -66,6 +66,12 @@ class _Isabelle_Session:
         self.entered_thy = ""
         self._active_requests = 0
         self._active_requests_lock = threading.Lock()
+
+        # Exclusive-lease support: when a session is leased, only the
+        # holder (identified by lease_id) may use it.  find_session()
+        # skips leased sessions so no two workers can collide.
+        self._leased = False
+        self._lease_id: Optional[str] = None
         with logging_context(session_id=self.session_id, field=self.field):
             logger.info(
                 "session object initialized dependency_key=%s loaded_theories=%s",
@@ -102,6 +108,30 @@ class _Isabelle_Session:
     def _release_request(self) -> None:
         with self._active_requests_lock:
             self._active_requests = max(0, self._active_requests - 1)
+
+    # ------------------------------------------------------------------
+    # Exclusive-lease API
+    # ------------------------------------------------------------------
+
+    @property
+    def leased(self) -> bool:
+        return self._leased
+
+    @property
+    def lease_id(self) -> Optional[str]:
+        return self._lease_id
+
+    def acquire_lease(self, lease_id: str) -> None:
+        """Mark this session as exclusively leased."""
+        self._leased = True
+        self._lease_id = lease_id
+        self.update_activity()
+
+    def release_lease(self) -> None:
+        """Release the exclusive lease so the session can be reused."""
+        self._leased = False
+        self._lease_id = None
+        self.update_activity()
 
     def step(self, command: str, timeout: Optional[float] = None):
         if not isinstance(command, str) or command.strip() == "":
