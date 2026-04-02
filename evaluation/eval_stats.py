@@ -79,6 +79,8 @@ def is_warning_message(msg: Optional[str]) -> bool:
     lowered = stripped.lower()
     if "warning" in lowered and "error" not in lowered and "failed" not in lowered:
         return True
+    if not "error" in lowered:
+        return True
     return False
 
 

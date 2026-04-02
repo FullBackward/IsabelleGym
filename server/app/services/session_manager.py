@@ -12,7 +12,7 @@ from repl.src.python.repl_backend_gateway import ReplBackendGatewayProcess
 from repl.src.python.thy_init import ThyInit
 from server.app.core.config import Server
 from server.app.core.logging import get_logger, logging_context
-from server.app.errors import GatewayUnavailable, PoolExhausted, SessionError, SessionNotFound, SessionStartError
+from server.app.errors import GatewayUnavailable, PoolExhausted, SessionBusyError, SessionError, SessionLeaseError, SessionNotFound, SessionStartError
 from server.app.services.session import SessionStatus, _Isabelle_Session
 from server.app.services.threaded_backend import ThreadedBackend
 
@@ -185,6 +185,7 @@ class SessionManager:
         self,
         initial_thys: Optional[List[str]] = None,
         field: str = Server.DEFAULT_FIELD,
+        lease_id: Optional[str] = None,
     ) -> _Isabelle_Session:
         where = self._where("_create_session")
         self._ensure_gateway()
@@ -268,6 +269,8 @@ class SessionManager:
                 evict_targets: List[Tuple[uuid.UUID, _Isabelle_Session]] = []
                 with self._lock:
                     self._lru[session_id] = session
+                    if lease_id is not None:
+                        session.acquire_lease(lease_id)
                     self._lru.move_to_end(session_id, last=True)
                     # Evict excess sessions, but SKIP sessions that are
                     # actively processing a request or exclusively leased.
@@ -347,6 +350,50 @@ class SessionManager:
             logger.exception("create_session failed")
             raise SessionStartError(f"{self._where('create_session')}: Failed to create session: {e}") from e
 
+    async def create_leased_session(
+        self,
+        theories: Optional[List[str]] = None,
+        field: str = Server.DEFAULT_FIELD,
+    ) -> Tuple[_Isabelle_Session, str]:
+        lease_id = uuid.uuid4().hex[:12]
+        try:
+            session = await self._create_session(theories, field, lease_id=lease_id)
+            return session, lease_id
+        except Exception as e:
+            logger.exception("create_leased_session failed")
+            raise SessionStartError(f"{self._where('create_leased_session')}: Failed to create leased session: {e}") from e
+
+    def _find_and_lease_session_locked(
+        self,
+        *,
+        lease_id: str,
+        theories: Optional[List[str]] = None,
+        field: Optional[str] = None,
+        reuse_dirty: bool = True,
+    ) -> Optional[_Isabelle_Session]:
+        """Find a matching session and atomically attach the lease while holding the manager lock."""
+        target_key = self.build_dependency_key(theories, field)
+        for sid, session in reversed(self._lru.items()):
+            if session.status != SessionStatus.ACTIVE:
+                continue
+            if session.leased:
+                continue
+            if session.dependency_key != target_key:
+                continue
+            if not reuse_dirty and len(session.command_history) > 0:
+                continue
+            if not session.try_acquire_lease(lease_id):
+                continue
+            self._lru.move_to_end(sid, last=True)
+            logger.info(
+                "found existing session and leased it atomically session_id=%s dependency_key=%s lease_id=%s",
+                sid,
+                target_key[:12],
+                lease_id,
+            )
+            return session
+        return None
+
     def find_session(
         self,
         theories: Optional[List[str]] = None,
@@ -409,24 +456,28 @@ class SessionManager:
         """
         lease_id = uuid.uuid4().hex[:12]
 
-        existing = self.find_session(theories=theories, field=field, reuse_dirty=reuse_dirty)
+        with self._lock:
+            existing = self._find_and_lease_session_locked(
+                lease_id=lease_id,
+                theories=theories,
+                field=field,
+                reuse_dirty=reuse_dirty,
+            )
         if existing is not None:
-            existing.acquire_lease(lease_id)
             logger.info(
                 "session leased (reused) session_id=%s lease_id=%s",
                 existing.session_id, lease_id,
             )
             return existing, True, lease_id
 
-        new_session = await self.create_session(theories=theories, field=field)
-        new_session.acquire_lease(lease_id)
+        new_session = await self._create_session(initial_thys=theories, field=field, lease_id=lease_id)
         logger.info(
             "session leased (new) session_id=%s lease_id=%s",
             new_session.session_id, lease_id,
         )
         return new_session, False, lease_id
 
-    def release_session(self, session_id: Union[str, uuid.UUID]) -> bool:
+    def release_session(self, session_id: Union[str, uuid.UUID], lease_id: str) -> bool:
         """Release the exclusive lease so the session returns to the pool
         for reuse by a future ``acquire_session`` call.
 
@@ -435,14 +486,26 @@ class SessionManager:
         sid = self._normalize_session_id(session_id)
         with self._lock:
             session = self._lru.get(sid)
-        if session is None:
-            raise SessionNotFound(f"Session {sid} not found")
+            if session is None:
+                raise SessionNotFound(f"Session {sid} not found")
+            if session.status == SessionStatus.CLOSED:
+                raise SessionNotFound(f"Session {sid} is closed")
+            session.require_lease(lease_id)
+            if session.in_use:
+                raise SessionBusyError(f"Session {sid} is busy and cannot be released")
+            session.release_lease()
+            self._lru.move_to_end(sid, last=True)
         with logging_context(session_id=sid, field=session.field):
             logger.info("releasing session lease back to pool")
-            session.release_lease()
         return True
 
-    def get_session(self, session_id: Union[str, uuid.UUID]) -> _Isabelle_Session:
+    def get_session(
+        self,
+        session_id: Union[str, uuid.UUID],
+        *,
+        lease_id: Optional[str] = None,
+        require_lease: bool = False,
+    ) -> _Isabelle_Session:
         sid = self._normalize_session_id(session_id)
         with self._lock:
             if sid not in self._lru:
@@ -451,19 +514,35 @@ class SessionManager:
             session = self._lru[sid]
             if session.status == SessionStatus.CLOSED:
                 raise SessionNotFound(f"Session {sid} is closed")
+            if require_lease:
+                session.require_lease(lease_id)
 
             self._lru.move_to_end(sid, last=True)
             return session
 
-    def close_session(self, session_id: Union[str, uuid.UUID]) -> bool:
+    def close_session(
+        self,
+        session_id: Union[str, uuid.UUID],
+        *,
+        lease_id: Optional[str] = None,
+        require_lease: bool = True,
+    ) -> bool:
         sid = self._normalize_session_id(session_id)
         with self._lock:
-            session = self._lru.pop(sid, None)
-        if session is None:
-            raise SessionNotFound(f"Session {sid} not found")
+            session = self._lru.get(sid)
+            if session is None:
+                raise SessionNotFound(f"Session {sid} not found")
+            if session.status == SessionStatus.CLOSED:
+                raise SessionNotFound(f"Session {sid} is closed")
+            if require_lease:
+                session.require_lease(lease_id)
+            if session.in_use:
+                raise SessionBusyError(f"Session {sid} is busy and cannot be closed")
+            self._lru.pop(sid, None)
+            if session.leased:
+                session.release_lease()
         with logging_context(session_id=sid, field=session.field):
-            logger.info("closing session (lease_id=%s)", session.lease_id)
-            session.release_lease()
+            logger.info("closing session")
             session.close()
         return True
 
@@ -505,7 +584,7 @@ class SessionManager:
 
             for sid in to_close:
                 logger.info("closing idle session session_id=%s", sid)
-                self.close_session(sid)
+                self.close_session(sid, require_lease=False)
 
     def start_cleanup_task(self) -> None:
         if self._cleanup_task is None:

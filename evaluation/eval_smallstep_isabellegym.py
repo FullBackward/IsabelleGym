@@ -197,8 +197,8 @@ def main() -> None:
 
                 if not accepted:
                     break
-            else:
-                completed_all_commands = True
+                else:
+                    completed_all_commands = True
 
         except Exception as exc:  # noqa: BLE001
             startup_error = str(exc)

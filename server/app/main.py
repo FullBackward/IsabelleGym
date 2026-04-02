@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from server.app.api.v1.router import router as api_router
 from server.app.core.config import API, Logging, Server
 from server.app.core.logging import get_logger, reset_logging_context, set_logging_context, setup_logging
-from server.app.errors import GatewayUnavailable, PoolExhausted, SessionNotFound, SessionStartError
+from server.app.errors import GatewayUnavailable, PoolExhausted, SessionBusyError, SessionLeaseError, SessionNotFound, SessionStartError
 from server.app.services.session_manager import SessionManager
 
 setup_logging()
@@ -103,6 +103,18 @@ async def handle_gateway_unavailable(request: Request, exc: GatewayUnavailable):
 async def handle_session_start_error(request: Request, exc: SessionStartError):
     logger.error("session startup failed on %s: %s", request.url.path, exc)
     return JSONResponse(status_code=500, content={"detail": str(exc) or "Session start failed"})
+
+
+@app.exception_handler(SessionLeaseError)
+async def handle_session_lease_error(request: Request, exc: SessionLeaseError):
+    logger.warning("session lease error on %s: %s", request.url.path, exc)
+    return JSONResponse(status_code=403, content={"detail": str(exc) or "Invalid lease token"})
+
+
+@app.exception_handler(SessionBusyError)
+async def handle_session_busy_error(request: Request, exc: SessionBusyError):
+    logger.warning("session busy on %s: %s", request.url.path, exc)
+    return JSONResponse(status_code=409, content={"detail": str(exc) or "Session is busy"})
 
 
 @app.exception_handler(PoolExhausted)

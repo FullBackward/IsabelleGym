@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from server.app.core.config import Logging
 from server.app.core.logging import get_logger, logging_context
-from server.app.errors import SessionError
+from server.app.errors import SessionError, SessionLeaseError
 from server.app.services.threaded_backend import ThreadedBackend
 from server_gym.success_checker import (
     get_error_message,
@@ -72,6 +72,7 @@ class _Isabelle_Session:
         # skips leased sessions so no two workers can collide.
         self._leased = False
         self._lease_id: Optional[str] = None
+        self._lease_lock = threading.Lock()
         with logging_context(session_id=self.session_id, field=self.field):
             logger.info(
                 "session object initialized dependency_key=%s loaded_theories=%s",
@@ -115,22 +116,48 @@ class _Isabelle_Session:
 
     @property
     def leased(self) -> bool:
-        return self._leased
+        with self._lease_lock:
+            return self._leased
 
     @property
     def lease_id(self) -> Optional[str]:
-        return self._lease_id
+        with self._lease_lock:
+            return self._lease_id
+
+    def try_acquire_lease(self, lease_id: str) -> bool:
+        """Atomically acquire the exclusive lease if it is currently free."""
+        with self._lease_lock:
+            if self._leased:
+                return False
+            self._leased = True
+            self._lease_id = lease_id
+        self.update_activity()
+        return True
 
     def acquire_lease(self, lease_id: str) -> None:
         """Mark this session as exclusively leased."""
-        self._leased = True
-        self._lease_id = lease_id
-        self.update_activity()
+        if not self.try_acquire_lease(lease_id):
+            raise SessionLeaseError(
+                f"Session {self.session_id} is already leased by {self.lease_id}"
+            )
+
+    def require_lease(self, lease_id: Optional[str]) -> None:
+        """Verify that the supplied lease token owns this session."""
+        with self._lease_lock:
+            if not self._leased or not self._lease_id:
+                raise SessionLeaseError(f"Session {self.session_id} is not currently leased")
+            if not lease_id:
+                raise SessionLeaseError("Missing lease token for leased session")
+            if self._lease_id != lease_id:
+                raise SessionLeaseError(
+                    f"Invalid lease token for session {self.session_id}"
+                )
 
     def release_lease(self) -> None:
         """Release the exclusive lease so the session can be reused."""
-        self._leased = False
-        self._lease_id = None
+        with self._lease_lock:
+            self._leased = False
+            self._lease_id = None
         self.update_activity()
 
     def step(self, command: str, timeout: Optional[float] = None):

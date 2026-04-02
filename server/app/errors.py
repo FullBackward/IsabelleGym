@@ -33,3 +33,13 @@ class PoolExhausted(SessionError):
     """Raised when the session pool is full and all sessions are actively
     processing requests, so no eviction candidate is available."""
     pass
+
+
+class SessionLeaseError(SessionError):
+    """Raised when a caller uses an invalid or missing lease token."""
+    pass
+
+
+class SessionBusyError(SessionError):
+    """Raised when a session cannot be released/closed because work is in flight."""
+    pass

@@ -112,7 +112,8 @@ async def run_theory(
             )
             session_id = session_payload["session_id"]
             reused_session = session_payload.get("reused", False)
-            await client.enter_theory(session_id, theory_name)
+            lease_id = session_payload.get("lease_id")
+            await client.enter_theory(session_id, theory_name, lease_id=lease_id)
             startup = time.perf_counter() - t0
 
             if print_steps:
@@ -131,7 +132,7 @@ async def run_theory(
                 warning_ignored = False
 
                 try:
-                    data = await client.execute_command(session_id, command, timeout=timeout)
+                    data = await client.execute_command(session_id, command, timeout=timeout, lease_id=lease_id)
                     elapsed = time.perf_counter() - t1
 
                     execution_time = normalize_execution_time(data.get("execution_time"))
@@ -206,8 +207,8 @@ async def run_theory(
 
                 if not accepted:
                     break
-            else:
-                completed_all_commands = True
+                else:
+                    completed_all_commands = True
 
         except Exception as exc:  # noqa: BLE001
             startup_error = str(exc)
@@ -233,7 +234,7 @@ async def run_theory(
         finally:
             if session_id is not None:
                 try:
-                    await client.release_session(session_id)
+                    await client.release_session(session_id, lease_id=lease_id)
                 except Exception:
                     pass
 

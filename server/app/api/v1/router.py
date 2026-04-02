@@ -4,7 +4,7 @@ import asyncio
 import time
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header
 
 from .schemas.API_models import (
     BigStepTheoryRequest,
@@ -20,10 +20,16 @@ from .schemas.API_models import (
 from server.app.core.config import API, Logging
 from server.app.core.logging import get_logger, logging_context
 from server.app.dependencies import get_session_manager
+from server.app.errors import SessionLeaseError
 
 router = APIRouter()
 logger = get_logger(__name__)
 
+
+def _require_lease_id(x_lease_id: str | None) -> str:
+    if not x_lease_id:
+        raise SessionLeaseError("Missing X-Lease-Id header")
+    return x_lease_id
 
 
 def _preview(text: str | None, limit: int) -> str:
@@ -65,17 +71,15 @@ async def create_session(
 
     with logging_context(field=field or "default"):
         logger.info("creating session theories=%s", theories or [])
-        if asyncio.iscoroutinefunction(session_manager.create_session):
-            session = await session_manager.create_session(theories=theories, field=field)
-        else:
-            session = await asyncio.to_thread(session_manager.create_session, theories=theories, field=field)
+        session, lease_id = await session_manager.create_leased_session(theories=theories, field=field)
 
-        logger.info("session created session_id=%s", session.session_id)
+        logger.info("session created session_id=%s lease_id=%s", session.session_id, lease_id)
         return SessionResponse(
             session_id=str(session.session_id),
             created_at=session.created_at,
             theories=session.theories or [],
             status=session.status.value if hasattr(session.status, "value") else str(session.status),
+            lease_id=lease_id,
         )
 
 
@@ -133,21 +137,23 @@ async def acquire_session(
 
 
 @router.post("/api/v1/sessions/{session_id}/release")
-async def release_session(session_id: str, session_manager=Depends(get_session_manager)):
+async def release_session(session_id: str, x_lease_id: str | None = Header(None, alias="X-Lease-Id"), session_manager=Depends(get_session_manager)):
     """Release the exclusive lease on a session, returning it to the pool
     for reuse.  Unlike DELETE, the backend stays alive."""
     with logging_context(session_id=session_id):
+        lease_id = _require_lease_id(x_lease_id)
         logger.info("releasing session lease")
-        session_manager.release_session(session_id)
+        session_manager.release_session(session_id, lease_id)
         logger.info("session lease released")
         return {"success": True, "session_id": session_id}
 
 
 @router.get("/api/v1/sessions/{session_id}")
-async def get_session_info(session_id: str, session_manager=Depends(get_session_manager)):
+async def get_session_info(session_id: str, x_lease_id: str | None = Header(None, alias="X-Lease-Id"), session_manager=Depends(get_session_manager)):
     with logging_context(session_id=session_id):
         logger.debug("fetching session info")
-        session = session_manager.get_session(session_id)
+        lease_id = _require_lease_id(x_lease_id)
+        session = session_manager.get_session(session_id, lease_id=lease_id, require_lease=True)
         return {
             "session_id": str(session.session_id),
             "created_at": session.created_at,
@@ -166,18 +172,20 @@ async def get_session_info(session_id: str, session_manager=Depends(get_session_
 
 
 @router.delete("/api/v1/sessions/{session_id}")
-async def close_session(session_id: str, session_manager=Depends(get_session_manager)):
+async def close_session(session_id: str, x_lease_id: str | None = Header(None, alias="X-Lease-Id"), session_manager=Depends(get_session_manager)):
     with logging_context(session_id=session_id):
+        lease_id = _require_lease_id(x_lease_id)
         logger.info("closing session")
-        await asyncio.to_thread(session_manager.close_session, session_id)
+        await asyncio.to_thread(session_manager.close_session, session_id, lease_id=lease_id)
         logger.info("session closed")
         return {"success": True}
 
 
 @router.post("/api/v1/sessions/{session_id}/commands", response_model=CommandResponse)
-async def execute_command(session_id: str, request: CommandRequest, session_manager=Depends(get_session_manager)):
+async def execute_command(session_id: str, request: CommandRequest, x_lease_id: str | None = Header(None, alias="X-Lease-Id"), session_manager=Depends(get_session_manager)):
     with logging_context(session_id=session_id):
-        session = session_manager.get_session(session_id)
+        lease_id = _require_lease_id(x_lease_id)
+        session = session_manager.get_session(session_id, lease_id=lease_id, require_lease=True)
         logger.info(
             "executing command timeout=%s preview=%s",
             request.timeout,
@@ -200,10 +208,11 @@ async def execute_command(session_id: str, request: CommandRequest, session_mana
 
 
 @router.get("/api/v1/sessions/{session_id}/state", response_model=ProofStateResponse)
-async def get_proof_state(session_id: str, session_manager=Depends(get_session_manager)):
+async def get_proof_state(session_id: str, x_lease_id: str | None = Header(None, alias="X-Lease-Id"), session_manager=Depends(get_session_manager)):
     with logging_context(session_id=session_id):
         logger.debug("fetching proof state")
-        session = session_manager.get_session(session_id)
+        lease_id = _require_lease_id(x_lease_id)
+        session = session_manager.get_session(session_id, lease_id=lease_id, require_lease=True)
         state = await asyncio.to_thread(session.get_proof_state)
         return ProofStateResponse(
             subgoals=getattr(state, "subgoals", []) or [],
@@ -213,9 +222,10 @@ async def get_proof_state(session_id: str, session_manager=Depends(get_session_m
 
 
 @router.get("/api/v1/sessions/{session_id}/subgoals")
-async def get_subgoals(session_id: str, session_manager=Depends(get_session_manager)):
+async def get_subgoals(session_id: str, x_lease_id: str | None = Header(None, alias="X-Lease-Id"), session_manager=Depends(get_session_manager)):
     with logging_context(session_id=session_id):
-        session = session_manager.get_session(session_id)
+        lease_id = _require_lease_id(x_lease_id)
+        session = session_manager.get_session(session_id, lease_id=lease_id, require_lease=True)
         state = await asyncio.to_thread(session.get_proof_state)
         subgoals = getattr(state, "subgoals", []) or []
         logger.debug("returning %s subgoals", len(subgoals))
@@ -227,10 +237,11 @@ async def get_subgoals(session_id: str, session_manager=Depends(get_session_mana
 
 
 @router.get("/api/v1/sessions/{session_id}/source")
-async def get_source(session_id: str, session_manager=Depends(get_session_manager)):
+async def get_source(session_id: str, x_lease_id: str | None = Header(None, alias="X-Lease-Id"), session_manager=Depends(get_session_manager)):
     with logging_context(session_id=session_id):
         logger.debug("fetching theory source")
-        session = session_manager.get_session(session_id)
+        lease_id = _require_lease_id(x_lease_id)
+        session = session_manager.get_session(session_id, lease_id=lease_id, require_lease=True)
         source_result = await asyncio.to_thread(session.get_source)
         current_thy = await asyncio.to_thread(lambda: session.current_thy)
         source_text = source_result.total_output() if hasattr(source_result, "total_output") else str(source_result)
@@ -238,10 +249,11 @@ async def get_source(session_id: str, session_manager=Depends(get_session_manage
 
 
 @router.post("/api/v1/sessions/{session_id}/checkpoints", response_model=StateCheckpoint)
-async def save_checkpoint(session_id: str, session_manager=Depends(get_session_manager)):
+async def save_checkpoint(session_id: str, x_lease_id: str | None = Header(None, alias="X-Lease-Id"), session_manager=Depends(get_session_manager)):
     with logging_context(session_id=session_id):
         logger.info("saving checkpoint")
-        session = session_manager.get_session(session_id)
+        lease_id = _require_lease_id(x_lease_id)
+        session = session_manager.get_session(session_id, lease_id=lease_id, require_lease=True)
         cp = await asyncio.to_thread(session.save_checkpoint)
         logger.info("checkpoint saved checkpoint_id=%s", getattr(cp, "checkpoint_id", None))
         return StateCheckpoint(
@@ -251,10 +263,11 @@ async def save_checkpoint(session_id: str, session_manager=Depends(get_session_m
 
 
 @router.post("/api/v1/sessions/{session_id}/checkpoints/{checkpoint_id}/restore")
-async def restore_checkpoint(session_id: str, checkpoint_id: int, session_manager=Depends(get_session_manager)):
+async def restore_checkpoint(session_id: str, checkpoint_id: int, x_lease_id: str | None = Header(None, alias="X-Lease-Id"), session_manager=Depends(get_session_manager)):
     with logging_context(session_id=session_id):
         logger.info("restoring checkpoint checkpoint_id=%s", checkpoint_id)
-        session = session_manager.get_session(session_id)
+        lease_id = _require_lease_id(x_lease_id)
+        session = session_manager.get_session(session_id, lease_id=lease_id, require_lease=True)
         success = await asyncio.to_thread(session.restore_checkpoint, checkpoint_id)
         ok = bool(success) if isinstance(success, bool) else False
         logger.info("checkpoint restore finished success=%s checkpoint_id=%s", ok, checkpoint_id)
@@ -266,28 +279,31 @@ async def restore_checkpoint(session_id: str, checkpoint_id: int, session_manage
 
 
 @router.post("/api/v1/sessions/{session_id}/rollback")
-async def rollback(session_id: str, session_manager=Depends(get_session_manager)):
+async def rollback(session_id: str, x_lease_id: str | None = Header(None, alias="X-Lease-Id"), session_manager=Depends(get_session_manager)):
     with logging_context(session_id=session_id):
         logger.info("rolling back latest command")
-        session = session_manager.get_session(session_id)
+        lease_id = _require_lease_id(x_lease_id)
+        session = session_manager.get_session(session_id, lease_id=lease_id, require_lease=True)
         result = await asyncio.to_thread(session.rollback)
         output = result.total_output() if hasattr(result, "total_output") else None
         return {"success": True, "output": output}
 
 
 @router.post("/api/v1/sessions/{session_id}/enter_theory/{theory_name}")
-async def enter_theory(session_id: str, theory_name: str, session_manager=Depends(get_session_manager)):
+async def enter_theory(session_id: str, theory_name: str, x_lease_id: str | None = Header(None, alias="X-Lease-Id"), session_manager=Depends(get_session_manager)):
     with logging_context(session_id=session_id):
         logger.info("entering theory theory_name=%s", theory_name)
-        session = session_manager.get_session(session_id)
+        lease_id = _require_lease_id(x_lease_id)
+        session = session_manager.get_session(session_id, lease_id=lease_id, require_lease=True)
         await asyncio.to_thread(session.enter_thy, theory_name)
         return {"success": True, "message": f"Entered theory {theory_name}"}
 
 
 @router.get("/api/v1/sessions/{session_id}/history")
-async def get_command_history(session_id: str, limit: int = 50, session_manager=Depends(get_session_manager)):
+async def get_command_history(session_id: str, limit: int = 50, x_lease_id: str | None = Header(None, alias="X-Lease-Id"), session_manager=Depends(get_session_manager)):
     with logging_context(session_id=session_id):
-        session = session_manager.get_session(session_id)
+        lease_id = _require_lease_id(x_lease_id)
+        session = session_manager.get_session(session_id, lease_id=lease_id, require_lease=True)
         history = session.command_history[-limit:]
         logger.debug("returning command history entries=%s", len(history))
         return {
@@ -320,9 +336,10 @@ async def execute_big_step(request: BigStepTheoryRequest, session_manager=Depend
 
 
 @router.get("/api/v1/sessions/{session_id}/stats")
-async def get_session_stats(session_id: str, session_manager=Depends(get_session_manager)):
+async def get_session_stats(session_id: str, x_lease_id: str | None = Header(None, alias="X-Lease-Id"), session_manager=Depends(get_session_manager)):
     with logging_context(session_id=session_id):
-        session = session_manager.get_session(session_id)
+        lease_id = _require_lease_id(x_lease_id)
+        session = session_manager.get_session(session_id, lease_id=lease_id, require_lease=True)
         successful = sum(1 for cmd in session.command_history if cmd.get("success"))
         failed = len(session.command_history) - successful
         logger.debug("returning session stats")

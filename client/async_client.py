@@ -39,15 +39,24 @@ class IsabelleGymAsyncClient:
         path: str,
         *,
         json_body: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
         timeout: float | None = None,
     ) -> httpx.Response:
         response = await self.client.request(
             method=method,
             url=path,
             json=json_body,
+            headers=headers,
             timeout=timeout if timeout is not None else self.timeout,
         )
         return response
+
+    @staticmethod
+    def _lease_headers(lease_id: str | None) -> dict[str, str] | None:
+        """Build the X-Lease-Id header dict, or None if no lease_id."""
+        if lease_id:
+            return {"X-Lease-Id": lease_id}
+        return None
 
     async def health(self) -> dict[str, Any]:
         response = await self._request("GET", "/")
@@ -76,8 +85,8 @@ class IsabelleGymAsyncClient:
     ) -> dict[str, Any]:
         """Find an existing session matching theories/field or create a new one.
 
-        Returns a dict with ``session_id``, ``theories``, ``status``, and a
-        ``reused`` boolean indicating whether the session already existed.
+        Returns a dict with ``session_id``, ``theories``, ``status``,
+        ``reused``, and ``lease_id``.
         """
         payload: dict[str, Any] = {"reuse_dirty": reuse_dirty}
         if theories is not None:
@@ -88,26 +97,39 @@ class IsabelleGymAsyncClient:
         response.raise_for_status()
         return response.json()
 
-    async def close_session(self, session_id: str) -> dict[str, Any]:
-        response = await self._request("DELETE", f"{BASE_URL}/{session_id}")
+    async def close_session(
+        self, session_id: str, *, lease_id: str | None = None,
+    ) -> dict[str, Any]:
+        response = await self._request(
+            "DELETE", f"{BASE_URL}/{session_id}",
+            headers=self._lease_headers(lease_id),
+        )
         response.raise_for_status()
         if response.content:
             return response.json()
         return {}
 
-    async def release_session(self, session_id: str) -> dict[str, Any]:
+    async def release_session(
+        self, session_id: str, *, lease_id: str | None = None,
+    ) -> dict[str, Any]:
         """Release the exclusive lease on a session, returning it to the
         pool for reuse.  Unlike ``close_session``, the backend stays alive."""
-        response = await self._request("POST", f"{BASE_URL}/{session_id}/release")
+        response = await self._request(
+            "POST", f"{BASE_URL}/{session_id}/release",
+            headers=self._lease_headers(lease_id),
+        )
         response.raise_for_status()
         if response.content:
             return response.json()
         return {}
 
-    async def enter_theory(self, session_id: str, theory_name: str) -> dict[str, Any]:
+    async def enter_theory(
+        self, session_id: str, theory_name: str, *, lease_id: str | None = None,
+    ) -> dict[str, Any]:
         response = await self._request(
             "POST",
             f"{BASE_URL}/{session_id}/enter_theory/{theory_name}",
+            headers=self._lease_headers(lease_id),
         )
         response.raise_for_status()
         if response.content:
@@ -119,6 +141,8 @@ class IsabelleGymAsyncClient:
         session_id: str,
         command: str,
         timeout: float | None = None,
+        *,
+        lease_id: str | None = None,
     ) -> dict[str, Any]:
         response = await self._request(
             "POST",
@@ -127,6 +151,7 @@ class IsabelleGymAsyncClient:
                 "command": command,
                 "timeout": timeout if timeout is not None else self.timeout,
             },
+            headers=self._lease_headers(lease_id),
             timeout=timeout,
         )
         response.raise_for_status()

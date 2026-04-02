@@ -13,6 +13,7 @@ class SessionResponse(BaseModel):
     created_at: float
     theories: List[str]
     status: str
+    lease_id: str = Field(description="Exclusive lease identifier required for session-specific endpoints.")
 
 
 class CommandRequest(BaseModel):
