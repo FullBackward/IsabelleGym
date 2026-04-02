@@ -1,0 +1,242 @@
+\documentclass{article}      
+\usepackage{xcolor}          
+\usepackage{alltt}           
+\usepackage{hyperref}
+\usepackage{fontspec}        % text fonts
+\usepackage{unicode-math}    % math fonts
+\setmainfont{Latin Modern Roman}
+\setmathfont{Latin Modern Math}
+\setmonofont{JetBrains Mono}
+\title{Server_Concurrency.thy}
+
+\newcommand{\syntaxOPERATOR}[1]{\textcolor[rgb]{0.0,0.0,0.0}{\textbf{#1}}}
+\newcommand{\syntaxCOMMENTC}[1]{\textcolor[rgb]{0.4,0.0,0.8}{#1}}
+\newcommand{\syntaxKEYWORDA}[1]{\textcolor[rgb]{0.0,0.4,0.6}{\textbf{#1}}}
+\newcommand{\syntaxKEYWORDB}[1]{\textcolor[rgb]{0.0,0.6,0.4}{\textbf{#1}}}
+\newcommand{\syntaxKEYWORDC}[1]{\textcolor[rgb]{0.0,0.6,1.0}{\textbf{#1}}}
+\newcommand{\syntaxLITERALA}[1]{\textcolor[rgb]{1.0,0.0,0.8}{#1}}
+\newcommand{\syntaxCOMMENTC}[1]{\textcolor[rgb]{0.4,0.0,0.8}{#1}}
+
+\newcommand{\gutter}[1]{\textcolor[rgb]{0,0,0}{{|}#1}}
+\newcommand{\gutterH}[1]{\textcolor[rgb]{1,0,0}{{|}#1}}
+
+\definecolor{bgcolor}{rgb}{1.0,1.0,1.0}
+\newsavebox{\opencurlybracket}%
+\newsavebox{\closecurlybracket}%
+\newsavebox{\lessthan}%
+\newsavebox{\greaterthan}%
+\newsavebox{\dollarbox}%
+\newsavebox{\underscorebox}%
+\newsavebox{\andbox}%
+\newsavebox{\hashbox}%
+\newsavebox{\backslashbox}%
+\newsavebox{\atbox}%
+\newsavebox{\percentbox}%
+\newsavebox{\hatbox}%
+\setbox\opencurlybracket=\hbox{\verb.{.}%
+\setbox\closecurlybracket=\hbox{\verb.}.}%
+\setbox\lessthan=\hbox{\verb.<.}%
+\setbox\dollarbox=\hbox{\verb.$.}%
+\setbox\underscorebox=\hbox{\verb._.}%
+\setbox\andbox=\hbox{\verb.&.}%
+\setbox\hashbox=\hbox{\verb.#.}%
+\setbox\atbox=\hbox{\verb.@.}%
+\setbox\backslashbox=\hbox{\verb.\.}%
+\setbox\greaterthan=\hbox{\verb.>.}%
+\setbox\percentbox=\hbox{\verb.\%.}%
+\setbox\hatbox=\hbox{\verb.^.}%
+\def\urltilda{\kern -.15em\lower .7ex\hbox{\~{}}\kern .04em}
+\begin{document}
+\pagecolor{bgcolor}
+\ttfamily
+\noindent
+\gutter{\ \ \ 1{|}\ }\syntaxKEYWORDA{theory}{\ }Server\usebox{\underscorebox}Concurrency\hfill\\
+\gutter{\ \ \ 2{|}\ }{\ }{\ }\syntaxKEYWORDB{imports}{\ }Main\hfill\\
+\gutter{\ \ \ 3{|}\ }\syntaxKEYWORDB{begin}\hfill\\
+\gutter{\ \ \ 4{|}\ }\hfill\\
+\gutterH{\ \ \ 5{|}\ }\syntaxKEYWORDA{text}{\ }\syntaxCOMMENTC{\<open>}\hfill\\
+\gutter{\ \ \ 6{|}\ }\syntaxCOMMENTC{{\ }{\ }This{\ }theory{\ }gives{\ }a{\ }small{\ }abstract{\ }model{\ }of{\ }the{\ }current{\ }lease{-}atomic{\ }server:}\hfill\\
+\gutter{\ \ \ 7{|}\ }\hfill\\
+\gutter{\ \ \ 8{|}\ }\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{\<^item>}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{e}\syntaxCOMMENTC{a}\syntaxCOMMENTC{c}\syntaxCOMMENTC{h}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{s}\syntaxCOMMENTC{e}\syntaxCOMMENTC{s}\syntaxCOMMENTC{s}\syntaxCOMMENTC{i}\syntaxCOMMENTC{o}\syntaxCOMMENTC{n}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{h}\syntaxCOMMENTC{a}\syntaxCOMMENTC{s}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{e}\syntaxCOMMENTC{x}\syntaxCOMMENTC{a}\syntaxCOMMENTC{c}\syntaxCOMMENTC{t}\syntaxCOMMENTC{l}\syntaxCOMMENTC{y}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{o}\syntaxCOMMENTC{n}\syntaxCOMMENTC{e}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{w}\syntaxCOMMENTC{o}\syntaxCOMMENTC{r}\syntaxCOMMENTC{k}\syntaxCOMMENTC{e}\syntaxCOMMENTC{r}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{t}\syntaxCOMMENTC{h}\syntaxCOMMENTC{r}\syntaxCOMMENTC{e}\syntaxCOMMENTC{a}\syntaxCOMMENTC{d}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{(}\syntaxCOMMENTC{m}\syntaxCOMMENTC{o}\syntaxCOMMENTC{d}\syntaxCOMMENTC{e}\syntaxCOMMENTC{l}\syntaxCOMMENTC{l}\syntaxCOMMENTC{e}\syntaxCOMMENTC{d}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{b}\syntaxCOMMENTC{y}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{a}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{s}\syntaxCOMMENTC{i}\syntaxCOMMENTC{n}\syntaxCOMMENTC{g}\syntaxCOMMENTC{l}\syntaxCOMMENTC{e}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{\usebox{\atbox}}\syntaxCOMMENTC{\usebox{\opencurlybracket}}\syntaxCOMMENTC{t}\syntaxCOMMENTC{e}\syntaxCOMMENTC{r}\syntaxCOMMENTC{m}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{r}\syntaxCOMMENTC{u}\syntaxCOMMENTC{n}\syntaxCOMMENTC{n}\syntaxCOMMENTC{i}\syntaxCOMMENTC{n}\syntaxCOMMENTC{g}\syntaxCOMMENTC{\usebox{\closecurlybracket}}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{s}\syntaxCOMMENTC{l}\syntaxCOMMENTC{o}\syntaxCOMMENTC{t}\syntaxCOMMENTC{)}\syntaxCOMMENTC{,}\hfill\\
+\gutter{\ \ \ 9{|}\ }\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{\<^item>}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{s}\syntaxCOMMENTC{e}\syntaxCOMMENTC{s}\syntaxCOMMENTC{s}\syntaxCOMMENTC{i}\syntaxCOMMENTC{o}\syntaxCOMMENTC{n}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{r}\syntaxCOMMENTC{e}\syntaxCOMMENTC{u}\syntaxCOMMENTC{s}\syntaxCOMMENTC{e}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{i}\syntaxCOMMENTC{s}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{p}\syntaxCOMMENTC{r}\syntaxCOMMENTC{o}\syntaxCOMMENTC{t}\syntaxCOMMENTC{e}\syntaxCOMMENTC{c}\syntaxCOMMENTC{t}\syntaxCOMMENTC{e}\syntaxCOMMENTC{d}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{b}\syntaxCOMMENTC{y}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{a}\syntaxCOMMENTC{n}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{e}\syntaxCOMMENTC{x}\syntaxCOMMENTC{c}\syntaxCOMMENTC{l}\syntaxCOMMENTC{u}\syntaxCOMMENTC{s}\syntaxCOMMENTC{i}\syntaxCOMMENTC{v}\syntaxCOMMENTC{e}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{l}\syntaxCOMMENTC{e}\syntaxCOMMENTC{a}\syntaxCOMMENTC{s}\syntaxCOMMENTC{e}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{\usebox{\atbox}}\syntaxCOMMENTC{\usebox{\opencurlybracket}}\syntaxCOMMENTC{t}\syntaxCOMMENTC{e}\syntaxCOMMENTC{r}\syntaxCOMMENTC{m}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{o}\syntaxCOMMENTC{w}\syntaxCOMMENTC{n}\syntaxCOMMENTC{e}\syntaxCOMMENTC{r}\syntaxCOMMENTC{\usebox{\closecurlybracket}}\syntaxCOMMENTC{,}\hfill\\
+\gutterH{\ \ 10{|}\ }\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{\<^item>}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{o}\syntaxCOMMENTC{n}\syntaxCOMMENTC{l}\syntaxCOMMENTC{y}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{t}\syntaxCOMMENTC{h}\syntaxCOMMENTC{e}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{l}\syntaxCOMMENTC{e}\syntaxCOMMENTC{a}\syntaxCOMMENTC{s}\syntaxCOMMENTC{e}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{h}\syntaxCOMMENTC{o}\syntaxCOMMENTC{l}\syntaxCOMMENTC{d}\syntaxCOMMENTC{e}\syntaxCOMMENTC{r}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{m}\syntaxCOMMENTC{a}\syntaxCOMMENTC{y}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{e}\syntaxCOMMENTC{n}\syntaxCOMMENTC{q}\syntaxCOMMENTC{u}\syntaxCOMMENTC{e}\syntaxCOMMENTC{u}\syntaxCOMMENTC{e}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{w}\syntaxCOMMENTC{o}\syntaxCOMMENTC{r}\syntaxCOMMENTC{k}\syntaxCOMMENTC{,}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{a}\syntaxCOMMENTC{n}\syntaxCOMMENTC{d}\hfill\\
+\gutter{\ \ 11{|}\ }\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{\<^item>}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{r}\syntaxCOMMENTC{e}\syntaxCOMMENTC{l}\syntaxCOMMENTC{e}\syntaxCOMMENTC{a}\syntaxCOMMENTC{s}\syntaxCOMMENTC{e}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{i}\syntaxCOMMENTC{s}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{a}\syntaxCOMMENTC{l}\syntaxCOMMENTC{l}\syntaxCOMMENTC{o}\syntaxCOMMENTC{w}\syntaxCOMMENTC{e}\syntaxCOMMENTC{d}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{o}\syntaxCOMMENTC{n}\syntaxCOMMENTC{l}\syntaxCOMMENTC{y}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{w}\syntaxCOMMENTC{h}\syntaxCOMMENTC{e}\syntaxCOMMENTC{n}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{t}\syntaxCOMMENTC{h}\syntaxCOMMENTC{e}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{s}\syntaxCOMMENTC{e}\syntaxCOMMENTC{s}\syntaxCOMMENTC{s}\syntaxCOMMENTC{i}\syntaxCOMMENTC{o}\syntaxCOMMENTC{n}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{i}\syntaxCOMMENTC{s}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{i}\syntaxCOMMENTC{d}\syntaxCOMMENTC{l}\syntaxCOMMENTC{e}\syntaxCOMMENTC{.}\hfill\\
+\gutter{\ \ 12{|}\ }\hfill\\
+\gutter{\ \ 13{|}\ }\syntaxCOMMENTC{{\ }{\ }The{\ }main{\ }result{\ }is{\ }a{\ }commutativity{\ }theorem{\ }for{\ }actions{\ }on{\ }distinct{\ }sessions.}\hfill\\
+\gutter{\ \ 14{|}\ }\syntaxCOMMENTC{{\ }{\ }That{\ }is{\ }the{\ }standard{\ }interleaving{\ }proof{\ }obligation{\ }for{\ }concurrency:{\ }if{\ }two}\hfill\\
+\gutterH{\ \ 15{|}\ }\syntaxCOMMENTC{{\ }{\ }actions{\ }touch{\ }different{\ }sessions,{\ }the{\ }server{\ }imposes{\ }no{\ }order{\ }between{\ }them.}\hfill\\
+\gutter{\ \ 16{|}\ }\syntaxCOMMENTC{\<close>}\hfill\\
+\gutter{\ \ 17{|}\ }\hfill\\
+\gutter{\ \ 18{|}\ }\syntaxKEYWORDA{typedecl}{\ }sid\hfill\\
+\gutter{\ \ 19{|}\ }\syntaxKEYWORDA{text}{\ }\syntaxCOMMENTC{\<open>}\syntaxCOMMENTC{A}\syntaxCOMMENTC{b}\syntaxCOMMENTC{s}\syntaxCOMMENTC{t}\syntaxCOMMENTC{r}\syntaxCOMMENTC{a}\syntaxCOMMENTC{c}\syntaxCOMMENTC{t}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{s}\syntaxCOMMENTC{e}\syntaxCOMMENTC{s}\syntaxCOMMENTC{s}\syntaxCOMMENTC{i}\syntaxCOMMENTC{o}\syntaxCOMMENTC{n}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{i}\syntaxCOMMENTC{d}\syntaxCOMMENTC{e}\syntaxCOMMENTC{n}\syntaxCOMMENTC{t}\syntaxCOMMENTC{i}\syntaxCOMMENTC{f}\syntaxCOMMENTC{i}\syntaxCOMMENTC{e}\syntaxCOMMENTC{r}\syntaxCOMMENTC{s}\syntaxCOMMENTC{.}\syntaxCOMMENTC{\<close>}\hfill\\
+\gutterH{\ \ 20{|}\ }\hfill\\
+\gutter{\ \ 21{|}\ }\syntaxKEYWORDA{typedecl}{\ }cid\hfill\\
+\gutter{\ \ 22{|}\ }\syntaxKEYWORDA{text}{\ }\syntaxCOMMENTC{\<open>}\syntaxCOMMENTC{A}\syntaxCOMMENTC{b}\syntaxCOMMENTC{s}\syntaxCOMMENTC{t}\syntaxCOMMENTC{r}\syntaxCOMMENTC{a}\syntaxCOMMENTC{c}\syntaxCOMMENTC{t}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{c}\syntaxCOMMENTC{l}\syntaxCOMMENTC{i}\syntaxCOMMENTC{e}\syntaxCOMMENTC{n}\syntaxCOMMENTC{t}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{/}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{l}\syntaxCOMMENTC{e}\syntaxCOMMENTC{a}\syntaxCOMMENTC{s}\syntaxCOMMENTC{e}\syntaxCOMMENTC{{-}}\syntaxCOMMENTC{h}\syntaxCOMMENTC{o}\syntaxCOMMENTC{l}\syntaxCOMMENTC{d}\syntaxCOMMENTC{e}\syntaxCOMMENTC{r}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{i}\syntaxCOMMENTC{d}\syntaxCOMMENTC{e}\syntaxCOMMENTC{n}\syntaxCOMMENTC{t}\syntaxCOMMENTC{i}\syntaxCOMMENTC{f}\syntaxCOMMENTC{i}\syntaxCOMMENTC{e}\syntaxCOMMENTC{r}\syntaxCOMMENTC{s}\syntaxCOMMENTC{.}\syntaxCOMMENTC{\<close>}\hfill\\
+\gutter{\ \ 23{|}\ }\hfill\\
+\gutter{\ \ 24{|}\ }\syntaxKEYWORDA{typedecl}{\ }req\hfill\\
+\gutterH{\ \ 25{|}\ }\syntaxKEYWORDA{text}{\ }\syntaxCOMMENTC{\<open>}\syntaxCOMMENTC{A}\syntaxCOMMENTC{b}\syntaxCOMMENTC{s}\syntaxCOMMENTC{t}\syntaxCOMMENTC{r}\syntaxCOMMENTC{a}\syntaxCOMMENTC{c}\syntaxCOMMENTC{t}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{r}\syntaxCOMMENTC{e}\syntaxCOMMENTC{q}\syntaxCOMMENTC{u}\syntaxCOMMENTC{e}\syntaxCOMMENTC{s}\syntaxCOMMENTC{t}\syntaxCOMMENTC{s}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{s}\syntaxCOMMENTC{u}\syntaxCOMMENTC{b}\syntaxCOMMENTC{m}\syntaxCOMMENTC{i}\syntaxCOMMENTC{t}\syntaxCOMMENTC{t}\syntaxCOMMENTC{e}\syntaxCOMMENTC{d}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{t}\syntaxCOMMENTC{o}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{a}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{s}\syntaxCOMMENTC{e}\syntaxCOMMENTC{s}\syntaxCOMMENTC{s}\syntaxCOMMENTC{i}\syntaxCOMMENTC{o}\syntaxCOMMENTC{n}\syntaxCOMMENTC{.}\syntaxCOMMENTC{\<close>}\hfill\\
+\gutter{\ \ 26{|}\ }\hfill\\
+\gutter{\ \ 27{|}\ }\syntaxKEYWORDA{typedecl}{\ }lst\hfill\\
+\gutter{\ \ 28{|}\ }\syntaxKEYWORDA{text}{\ }\syntaxCOMMENTC{\<open>}\syntaxCOMMENTC{A}\syntaxCOMMENTC{b}\syntaxCOMMENTC{s}\syntaxCOMMENTC{t}\syntaxCOMMENTC{r}\syntaxCOMMENTC{a}\syntaxCOMMENTC{c}\syntaxCOMMENTC{t}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{l}\syntaxCOMMENTC{o}\syntaxCOMMENTC{c}\syntaxCOMMENTC{a}\syntaxCOMMENTC{l}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{b}\syntaxCOMMENTC{a}\syntaxCOMMENTC{c}\syntaxCOMMENTC{k}\syntaxCOMMENTC{e}\syntaxCOMMENTC{n}\syntaxCOMMENTC{d}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{s}\syntaxCOMMENTC{t}\syntaxCOMMENTC{a}\syntaxCOMMENTC{t}\syntaxCOMMENTC{e}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{o}\syntaxCOMMENTC{f}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{o}\syntaxCOMMENTC{n}\syntaxCOMMENTC{e}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{s}\syntaxCOMMENTC{e}\syntaxCOMMENTC{s}\syntaxCOMMENTC{s}\syntaxCOMMENTC{i}\syntaxCOMMENTC{o}\syntaxCOMMENTC{n}\syntaxCOMMENTC{.}\syntaxCOMMENTC{\<close>}\hfill\\
+\gutter{\ \ 29{|}\ }\hfill\\
+\gutterH{\ \ 30{|}\ }\syntaxKEYWORDA{record}{\ }session\usebox{\underscorebox}state{\ }\syntaxOPERATOR{=}\hfill\\
+\gutter{\ \ 31{|}\ }{\ }{\ }owner{\ }{\ }{\ }\syntaxOPERATOR{::}{\ }\syntaxLITERALA{"cid{\ }option"}\hfill\\
+\gutter{\ \ 32{|}\ }{\ }{\ }q{\ }{\ }{\ }{\ }{\ }{\ }{\ }\syntaxOPERATOR{::}{\ }\syntaxLITERALA{"req{\ }list"}\hfill\\
+\gutter{\ \ 33{|}\ }{\ }{\ }running{\ }\syntaxOPERATOR{::}{\ }\syntaxLITERALA{"req{\ }option"}\hfill\\
+\gutter{\ \ 34{|}\ }{\ }{\ }local{\ }{\ }{\ }\syntaxOPERATOR{::}{\ }lst\hfill\\
+\gutterH{\ \ 35{|}\ }\hfill\\
+\gutter{\ \ 36{|}\ }\syntaxKEYWORDA{type\usebox{\underscorebox}synonym}{\ }system\usebox{\underscorebox}state{\ }\syntaxOPERATOR{=}{\ }\syntaxLITERALA{"sid{\ }\<Rightarrow>{\ }session\usebox{\underscorebox}state"}\hfill\\
+\gutter{\ \ 37{|}\ }\hfill\\
+\gutter{\ \ 38{|}\ }\syntaxKEYWORDA{definition}{\ }idle{\ }\syntaxOPERATOR{::}{\ }\syntaxLITERALA{"system\usebox{\underscorebox}state{\ }\<Rightarrow>{\ }sid{\ }\<Rightarrow>{\ }bool"}{\ }\syntaxKEYWORDB{where}\hfill\\
+\gutter{\ \ 39{|}\ }{\ }{\ }\syntaxLITERALA{"idle{\ }\<sigma>{\ }s{\ }\<longleftrightarrow>{\ }q{\ }(\<sigma>{\ }s){\ }={\ }{[}{]}{\ }\<and>{\ }running{\ }(\<sigma>{\ }s){\ }={\ }None"}\hfill\\
+\gutterH{\ \ 40{|}\ }\hfill\\
+\gutter{\ \ 41{|}\ }\syntaxKEYWORDA{definition}{\ }upd\usebox{\underscorebox}sess{\ }\syntaxOPERATOR{::}{\ }\syntaxLITERALA{"sid{\ }\<Rightarrow>{\ }(session\usebox{\underscorebox}state{\ }\<Rightarrow>{\ }session\usebox{\underscorebox}state){\ }\<Rightarrow>{\ }system\usebox{\underscorebox}state{\ }\<Rightarrow>{\ }system\usebox{\underscorebox}state"}{\ }\syntaxKEYWORDB{where}\hfill\\
+\gutter{\ \ 42{|}\ }{\ }{\ }\syntaxLITERALA{"upd\usebox{\underscorebox}sess{\ }s{\ }f{\ }\<sigma>{\ }={\ }\<sigma>(s{\ }:={\ }f{\ }(\<sigma>{\ }s))"}\hfill\\
+\gutter{\ \ 43{|}\ }\hfill\\
+\gutter{\ \ 44{|}\ }\syntaxKEYWORDA{datatype}{\ }action{\ }\syntaxOPERATOR{=}\hfill\\
+\gutterH{\ \ 45{|}\ }{\ }{\ }{\ }{\ }Acquire{\ }cid{\ }sid\hfill\\
+\gutter{\ \ 46{|}\ }{\ }{\ }\syntaxOPERATOR{|}{\ }Release{\ }cid{\ }sid\hfill\\
+\gutter{\ \ 47{|}\ }{\ }{\ }\syntaxOPERATOR{|}{\ }Enqueue{\ }cid{\ }sid{\ }req\hfill\\
+\gutter{\ \ 48{|}\ }{\ }{\ }\syntaxOPERATOR{|}{\ }Start{\ }sid\hfill\\
+\gutter{\ \ 49{|}\ }{\ }{\ }\syntaxOPERATOR{|}{\ }Finish{\ }sid{\ }lst\hfill\\
+\gutterH{\ \ 50{|}\ }\hfill\\
+\gutter{\ \ 51{|}\ }\syntaxKEYWORDA{fun}{\ }acts\usebox{\underscorebox}on{\ }\syntaxOPERATOR{::}{\ }\syntaxLITERALA{"action{\ }\<Rightarrow>{\ }sid"}{\ }\syntaxKEYWORDB{where}\hfill\\
+\gutter{\ \ 52{|}\ }{\ }{\ }\syntaxLITERALA{"acts\usebox{\underscorebox}on{\ }(Acquire{\ }c{\ }s){\ }={\ }s"}\hfill\\
+\gutter{\ \ 53{|}\ }\syntaxOPERATOR{|}{\ }\syntaxLITERALA{"acts\usebox{\underscorebox}on{\ }(Release{\ }c{\ }s){\ }={\ }s"}\hfill\\
+\gutter{\ \ 54{|}\ }\syntaxOPERATOR{|}{\ }\syntaxLITERALA{"acts\usebox{\underscorebox}on{\ }(Enqueue{\ }c{\ }s{\ }r){\ }={\ }s"}\hfill\\
+\gutterH{\ \ 55{|}\ }\syntaxOPERATOR{|}{\ }\syntaxLITERALA{"acts\usebox{\underscorebox}on{\ }(Start{\ }s){\ }={\ }s"}\hfill\\
+\gutter{\ \ 56{|}\ }\syntaxOPERATOR{|}{\ }\syntaxLITERALA{"acts\usebox{\underscorebox}on{\ }(Finish{\ }s{\ }st){\ }={\ }s"}\hfill\\
+\gutter{\ \ 57{|}\ }\hfill\\
+\gutter{\ \ 58{|}\ }\syntaxKEYWORDA{fun}{\ }enabled{\ }\syntaxOPERATOR{::}{\ }\syntaxLITERALA{"action{\ }\<Rightarrow>{\ }system\usebox{\underscorebox}state{\ }\<Rightarrow>{\ }bool"}{\ }\syntaxKEYWORDB{where}\hfill\\
+\gutter{\ \ 59{|}\ }{\ }{\ }\syntaxLITERALA{"enabled{\ }(Acquire{\ }c{\ }s){\ }\<sigma>{\ }\<longleftrightarrow>{\ }owner{\ }(\<sigma>{\ }s){\ }={\ }None"}\hfill\\
+\gutterH{\ \ 60{|}\ }\syntaxOPERATOR{|}{\ }\syntaxLITERALA{"enabled{\ }(Release{\ }c{\ }s){\ }\<sigma>{\ }\<longleftrightarrow>{\ }owner{\ }(\<sigma>{\ }s){\ }={\ }Some{\ }c{\ }\<and>{\ }idle{\ }\<sigma>{\ }s"}\hfill\\
+\gutter{\ \ 61{|}\ }\syntaxOPERATOR{|}{\ }\syntaxLITERALA{"enabled{\ }(Enqueue{\ }c{\ }s{\ }r){\ }\<sigma>{\ }\<longleftrightarrow>{\ }owner{\ }(\<sigma>{\ }s){\ }={\ }Some{\ }c"}\hfill\\
+\gutter{\ \ 62{|}\ }\syntaxOPERATOR{|}{\ }\syntaxLITERALA{"enabled{\ }(Start{\ }s){\ }\<sigma>{\ }\<longleftrightarrow>{\ }owner{\ }(\<sigma>{\ }s){\ }\<noteq>{\ }None{\ }\<and>{\ }running{\ }(\<sigma>{\ }s){\ }={\ }None{\ }\<and>{\ }q{\ }(\<sigma>{\ }s){\ }\<noteq>{\ }{[}{]}"}\hfill\\
+\gutter{\ \ 63{|}\ }\syntaxOPERATOR{|}{\ }\syntaxLITERALA{"enabled{\ }(Finish{\ }s{\ }st){\ }\<sigma>{\ }\<longleftrightarrow>{\ }owner{\ }(\<sigma>{\ }s){\ }\<noteq>{\ }None{\ }\<and>{\ }running{\ }(\<sigma>{\ }s){\ }\<noteq>{\ }None"}\hfill\\
+\gutter{\ \ 64{|}\ }\hfill\\
+\gutterH{\ \ 65{|}\ }\syntaxKEYWORDA{fun}{\ }exec{\ }\syntaxOPERATOR{::}{\ }\syntaxLITERALA{"action{\ }\<Rightarrow>{\ }system\usebox{\underscorebox}state{\ }\<Rightarrow>{\ }system\usebox{\underscorebox}state"}{\ }\syntaxKEYWORDB{where}\hfill\\
+\gutter{\ \ 66{|}\ }{\ }{\ }\syntaxLITERALA{"exec{\ }(Acquire{\ }c{\ }s){\ }\<sigma>{\ }={\ }upd\usebox{\underscorebox}sess{\ }s{\ }(\<lambda>x.{\ }x\<lparr>owner{\ }:={\ }Some{\ }c\<rparr>){\ }\<sigma>"}\hfill\\
+\gutter{\ \ 67{|}\ }\syntaxOPERATOR{|}{\ }\syntaxLITERALA{"exec{\ }(Release{\ }c{\ }s){\ }\<sigma>{\ }={\ }upd\usebox{\underscorebox}sess{\ }s{\ }(\<lambda>x.{\ }x\<lparr>owner{\ }:={\ }None\<rparr>){\ }\<sigma>"}\hfill\\
+\gutter{\ \ 68{|}\ }\syntaxOPERATOR{|}{\ }\syntaxLITERALA{"exec{\ }(Enqueue{\ }c{\ }s{\ }r){\ }\<sigma>{\ }={\ }upd\usebox{\underscorebox}sess{\ }s{\ }(\<lambda>x.{\ }x\<lparr>q{\ }:={\ }q{\ }x{\ }\usebox{\atbox}{\ }{[}r{]}\<rparr>){\ }\<sigma>"}\hfill\\
+\gutter{\ \ 69{|}\ }\syntaxOPERATOR{|}{\ }\syntaxLITERALA{"exec{\ }(Start{\ }s){\ }\<sigma>{\ }={\ }upd\usebox{\underscorebox}sess{\ }s{\ }(\<lambda>x.{\ }x\<lparr>running{\ }:={\ }Some{\ }(hd{\ }(q{\ }x)),{\ }q{\ }:={\ }tl{\ }(q{\ }x)\<rparr>){\ }\<sigma>"}\hfill\\
+\gutterH{\ \ 70{|}\ }\syntaxOPERATOR{|}{\ }\syntaxLITERALA{"exec{\ }(Finish{\ }s{\ }st){\ }\<sigma>{\ }={\ }upd\usebox{\underscorebox}sess{\ }s{\ }(\<lambda>x.{\ }x\<lparr>running{\ }:={\ }None,{\ }local{\ }:={\ }st\<rparr>){\ }\<sigma>"}\hfill\\
+\gutter{\ \ 71{|}\ }\hfill\\
+\gutter{\ \ 72{|}\ }\syntaxKEYWORDA{text}{\ }\syntaxCOMMENTC{\<open>}\syntaxCOMMENTC{B}\syntaxCOMMENTC{a}\syntaxCOMMENTC{s}\syntaxCOMMENTC{i}\syntaxCOMMENTC{c}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{s}\syntaxCOMMENTC{a}\syntaxCOMMENTC{f}\syntaxCOMMENTC{e}\syntaxCOMMENTC{t}\syntaxCOMMENTC{y}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{f}\syntaxCOMMENTC{a}\syntaxCOMMENTC{c}\syntaxCOMMENTC{t}\syntaxCOMMENTC{s}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{c}\syntaxCOMMENTC{o}\syntaxCOMMENTC{r}\syntaxCOMMENTC{r}\syntaxCOMMENTC{e}\syntaxCOMMENTC{s}\syntaxCOMMENTC{p}\syntaxCOMMENTC{o}\syntaxCOMMENTC{n}\syntaxCOMMENTC{d}\syntaxCOMMENTC{i}\syntaxCOMMENTC{n}\syntaxCOMMENTC{g}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{t}\syntaxCOMMENTC{o}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{t}\syntaxCOMMENTC{h}\syntaxCOMMENTC{e}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{i}\syntaxCOMMENTC{m}\syntaxCOMMENTC{p}\syntaxCOMMENTC{l}\syntaxCOMMENTC{e}\syntaxCOMMENTC{m}\syntaxCOMMENTC{e}\syntaxCOMMENTC{n}\syntaxCOMMENTC{t}\syntaxCOMMENTC{a}\syntaxCOMMENTC{t}\syntaxCOMMENTC{i}\syntaxCOMMENTC{o}\syntaxCOMMENTC{n}\syntaxCOMMENTC{.}\syntaxCOMMENTC{\<close>}\hfill\\
+\gutter{\ \ 73{|}\ }\hfill\\
+\gutter{\ \ 74{|}\ }\syntaxKEYWORDA{lemma}{\ }only\usebox{\underscorebox}owner\usebox{\underscorebox}can\usebox{\underscorebox}enqueue\syntaxOPERATOR{:}\hfill\\
+\gutterH{\ \ 75{|}\ }{\ }{\ }\syntaxLITERALA{"enabled{\ }(Enqueue{\ }c{\ }s{\ }r){\ }\<sigma>{\ }\<longleftrightarrow>{\ }owner{\ }(\<sigma>{\ }s){\ }={\ }Some{\ }c"}\hfill\\
+\gutter{\ \ 76{|}\ }{\ }{\ }\syntaxKEYWORDA{by}{\ }simp\hfill\\
+\gutter{\ \ 77{|}\ }\hfill\\
+\gutter{\ \ 78{|}\ }\syntaxKEYWORDA{lemma}{\ }release\usebox{\underscorebox}only\usebox{\underscorebox}when\usebox{\underscorebox}idle\syntaxOPERATOR{:}\hfill\\
+\gutter{\ \ 79{|}\ }{\ }{\ }\syntaxLITERALA{"enabled{\ }(Release{\ }c{\ }s){\ }\<sigma>{\ }\<longleftrightarrow>{\ }owner{\ }(\<sigma>{\ }s){\ }={\ }Some{\ }c{\ }\<and>{\ }q{\ }(\<sigma>{\ }s){\ }={\ }{[}{]}{\ }\<and>{\ }running{\ }(\<sigma>{\ }s){\ }={\ }None"}\hfill\\
+\gutterH{\ \ 80{|}\ }{\ }{\ }\syntaxKEYWORDA{by}{\ }\syntaxOPERATOR{(}simp{\ }add\syntaxOPERATOR{:}{\ }idle\usebox{\underscorebox}def\syntaxOPERATOR{)}\hfill\\
+\gutter{\ \ 81{|}\ }\hfill\\
+\gutter{\ \ 82{|}\ }\syntaxKEYWORDA{lemma}{\ }start\usebox{\underscorebox}requires\usebox{\underscorebox}no\usebox{\underscorebox}running\usebox{\underscorebox}job\syntaxOPERATOR{:}\hfill\\
+\gutter{\ \ 83{|}\ }{\ }{\ }\syntaxLITERALA{"enabled{\ }(Start{\ }s){\ }\<sigma>{\ }\<Longrightarrow>{\ }running{\ }(\<sigma>{\ }s){\ }={\ }None"}\hfill\\
+\gutter{\ \ 84{|}\ }{\ }{\ }\syntaxKEYWORDA{by}{\ }simp\hfill\\
+\gutterH{\ \ 85{|}\ }\hfill\\
+\gutter{\ \ 86{|}\ }\syntaxKEYWORDA{lemma}{\ }start\usebox{\underscorebox}blocks\usebox{\underscorebox}second\usebox{\underscorebox}start\usebox{\underscorebox}same\usebox{\underscorebox}session\syntaxOPERATOR{:}\hfill\\
+\gutter{\ \ 87{|}\ }{\ }{\ }\syntaxKEYWORDB{assumes}{\ }\syntaxLITERALA{"enabled{\ }(Start{\ }s){\ }\<sigma>"}\hfill\\
+\gutter{\ \ 88{|}\ }{\ }{\ }\syntaxKEYWORDB{shows}{\ }\syntaxLITERALA{"\<not>{\ }enabled{\ }(Start{\ }s){\ }(exec{\ }(Start{\ }s){\ }\<sigma>)"}\hfill\\
+\gutter{\ \ 89{|}\ }{\ }{\ }\syntaxKEYWORDA{proof}{\ }{-}\hfill\\
+\gutterH{\ \ 90{|}\ }{\ }{\ }\syntaxKEYWORDA{have}{\ }run\usebox{\underscorebox}after\syntaxOPERATOR{:}{\ }\syntaxLITERALA{"running{\ }((exec{\ }(Start{\ }s){\ }\<sigma>){\ }s){\ }\<noteq>{\ }None"}\hfill\\
+\gutter{\ \ 91{|}\ }{\ }{\ }{\ }{\ }\syntaxKEYWORDA{by}{\ }\syntaxOPERATOR{(}simp{\ }add\syntaxOPERATOR{:}{\ }upd\usebox{\underscorebox}sess\usebox{\underscorebox}def\syntaxOPERATOR{)}\hfill\\
+\gutter{\ \ 92{|}\ }{\ }{\ }\syntaxKEYWORDA{then}{\ }\syntaxKEYWORDC{show}{\ }?thesis\hfill\\
+\gutter{\ \ 93{|}\ }{\ }{\ }{\ }{\ }\syntaxKEYWORDA{by}{\ }simp\hfill\\
+\gutter{\ \ 94{|}\ }\syntaxKEYWORDA{qed}\hfill\\
+\gutterH{\ \ 95{|}\ }{\ }{\ }\hfill\\
+\gutter{\ \ 96{|}\ }\hfill\\
+\gutter{\ \ 97{|}\ }\syntaxKEYWORDA{text}{\ }\syntaxCOMMENTC{\<open>}\hfill\\
+\gutter{\ \ 98{|}\ }\syntaxCOMMENTC{{\ }{\ }The{\ }previous{\ }lemma{\ }is{\ }the{\ }formal{\ }version{\ }of{\ }“one{\ }worker{\ }thread{\ }per{\ }session”:}\hfill\\
+\gutter{\ \ 99{|}\ }\syntaxCOMMENTC{{\ }{\ }after{\ }a{\ }start{\ }step,{\ }the{\ }same{\ }session{\ }cannot{\ }start{\ }a{\ }second{\ }job{\ }until{\ }a{\ }finish}\hfill\\
+\gutterH{\ 100{|}\ }\syntaxCOMMENTC{{\ }{\ }step{\ }clears{\ }\usebox{\atbox}\usebox{\opencurlybracket}term{\ }running\usebox{\closecurlybracket}{\ }again.}\hfill\\
+\gutter{\ 101{|}\ }\syntaxCOMMENTC{\<close>}\hfill\\
+\gutter{\ 102{|}\ }\hfill\\
+\gutter{\ 103{|}\ }\syntaxKEYWORDA{lemma}{\ }exec\usebox{\underscorebox}other\usebox{\underscorebox}session\syntaxOPERATOR{{[}}simp\syntaxOPERATOR{{]}}\syntaxOPERATOR{:}\hfill\\
+\gutter{\ 104{|}\ }{\ }{\ }\syntaxKEYWORDB{assumes}{\ }\syntaxLITERALA{"acts\usebox{\underscorebox}on{\ }a{\ }\<noteq>{\ }s"}\hfill\\
+\gutterH{\ 105{|}\ }{\ }{\ }\syntaxKEYWORDB{shows}{\ }\syntaxLITERALA{"exec{\ }a{\ }\<sigma>{\ }s{\ }={\ }\<sigma>{\ }s"}\hfill\\
+\gutter{\ 106{|}\ }{\ }{\ }\syntaxKEYWORDA{using}{\ }assms\hfill\\
+\gutter{\ 107{|}\ }{\ }{\ }\syntaxKEYWORDA{by}{\ }\syntaxOPERATOR{(}cases{\ }a\syntaxOPERATOR{;}{\ }simp{\ }add\syntaxOPERATOR{:}{\ }upd\usebox{\underscorebox}sess\usebox{\underscorebox}def\syntaxOPERATOR{)}\hfill\\
+\gutter{\ 108{|}\ }\hfill\\
+\gutter{\ 109{|}\ }\syntaxKEYWORDA{lemma}{\ }enabled\usebox{\underscorebox}unchanged\usebox{\underscorebox}by\usebox{\underscorebox}other\usebox{\underscorebox}session\usebox{\underscorebox}update\syntaxOPERATOR{:}\hfill\\
+\gutterH{\ 110{|}\ }{\ }{\ }\syntaxKEYWORDB{assumes}{\ }\syntaxLITERALA{"acts\usebox{\underscorebox}on{\ }a{\ }\<noteq>{\ }t"}\hfill\\
+\gutter{\ 111{|}\ }{\ }{\ }\syntaxKEYWORDB{shows}{\ }\syntaxLITERALA{"enabled{\ }a{\ }(upd\usebox{\underscorebox}sess{\ }t{\ }f{\ }\<sigma>){\ }={\ }enabled{\ }a{\ }\<sigma>"}\hfill\\
+\gutter{\ 112{|}\ }{\ }{\ }\syntaxKEYWORDA{using}{\ }assms\hfill\\
+\gutter{\ 113{|}\ }{\ }{\ }\syntaxKEYWORDA{by}{\ }\syntaxOPERATOR{(}cases{\ }a\syntaxOPERATOR{;}{\ }simp{\ }add\syntaxOPERATOR{:}{\ }upd\usebox{\underscorebox}sess\usebox{\underscorebox}def{\ }idle\usebox{\underscorebox}def\syntaxOPERATOR{)}\hfill\\
+\gutter{\ 114{|}\ }\hfill\\
+\gutterH{\ 115{|}\ }\syntaxKEYWORDA{lemma}{\ }enabled\usebox{\underscorebox}preserved\usebox{\underscorebox}by\usebox{\underscorebox}disjoint\usebox{\underscorebox}exec\syntaxOPERATOR{:}\hfill\\
+\gutter{\ 116{|}\ }{\ }{\ }\syntaxKEYWORDB{assumes}{\ }\syntaxLITERALA{"acts\usebox{\underscorebox}on{\ }a{\ }\<noteq>{\ }acts\usebox{\underscorebox}on{\ }b"}\hfill\\
+\gutter{\ 117{|}\ }{\ }{\ }\syntaxKEYWORDB{shows}{\ }\syntaxLITERALA{"enabled{\ }a{\ }(exec{\ }b{\ }\<sigma>){\ }={\ }enabled{\ }a{\ }\<sigma>"}\hfill\\
+\gutter{\ 118{|}\ }{\ }{\ }\syntaxKEYWORDA{using}{\ }assms\hfill\\
+\gutter{\ 119{|}\ }{\ }{\ }\syntaxKEYWORDA{by}{\ }\syntaxOPERATOR{(}cases{\ }b\syntaxOPERATOR{;}{\ }simp{\ }add\syntaxOPERATOR{:}{\ }enabled\usebox{\underscorebox}unchanged\usebox{\underscorebox}by\usebox{\underscorebox}other\usebox{\underscorebox}session\usebox{\underscorebox}update\syntaxOPERATOR{)}\hfill\\
+\gutterH{\ 120{|}\ }\hfill\\
+\gutter{\ 121{|}\ }\syntaxKEYWORDA{lemma}{\ }exec\usebox{\underscorebox}commute\usebox{\underscorebox}disjoint\syntaxOPERATOR{:}\hfill\\
+\gutter{\ 122{|}\ }{\ }{\ }\syntaxKEYWORDB{assumes}{\ }\syntaxLITERALA{"acts\usebox{\underscorebox}on{\ }a{\ }\<noteq>{\ }acts\usebox{\underscorebox}on{\ }b"}\hfill\\
+\gutter{\ 123{|}\ }{\ }{\ }\syntaxKEYWORDB{shows}{\ }\syntaxLITERALA{"exec{\ }a{\ }(exec{\ }b{\ }\<sigma>){\ }={\ }exec{\ }b{\ }(exec{\ }a{\ }\<sigma>)"}\hfill\\
+\gutter{\ 124{|}\ }{\ }{\ }\syntaxKEYWORDA{using}{\ }assms\hfill\\
+\gutterH{\ 125{|}\ }{\ }{\ }\syntaxKEYWORDA{by}{\ }\syntaxOPERATOR{(}cases{\ }a\syntaxOPERATOR{;}{\ }cases{\ }b\syntaxOPERATOR{;}{\ }simp{\ }add\syntaxOPERATOR{:}{\ }upd\usebox{\underscorebox}sess\usebox{\underscorebox}def{\ }fun\usebox{\underscorebox}upd\usebox{\underscorebox}twist\syntaxOPERATOR{)}\hfill\\
+\gutter{\ 126{|}\ }\hfill\\
+\gutter{\ 127{|}\ }\syntaxKEYWORDA{text}{\ }\syntaxCOMMENTC{\<open>}\hfill\\
+\gutter{\ 128{|}\ }\syntaxCOMMENTC{{\ }{\ }Main{\ }concurrency{\ }theorem:{\ }if{\ }two{\ }actions{\ }on{\ }distinct{\ }sessions{\ }are{\ }both{\ }enabled,}\hfill\\
+\gutter{\ 129{|}\ }\syntaxCOMMENTC{{\ }{\ }then{\ }each{\ }remains{\ }enabled{\ }after{\ }the{\ }other,{\ }and{\ }the{\ }two{\ }execution{\ }orders{\ }yield}\hfill\\
+\gutterH{\ 130{|}\ }\syntaxCOMMENTC{{\ }{\ }the{\ }same{\ }global{\ }state.}\hfill\\
+\gutter{\ 131{|}\ }\syntaxCOMMENTC{\<close>}\hfill\\
+\gutter{\ 132{|}\ }\hfill\\
+\gutter{\ 133{|}\ }\syntaxKEYWORDA{theorem}{\ }disjoint\usebox{\underscorebox}enabled\usebox{\underscorebox}actions\usebox{\underscorebox}commute\syntaxOPERATOR{:}\hfill\\
+\gutter{\ 134{|}\ }{\ }{\ }\syntaxKEYWORDB{assumes}{\ }diff\syntaxOPERATOR{:}{\ }\syntaxLITERALA{"acts\usebox{\underscorebox}on{\ }a{\ }\<noteq>{\ }acts\usebox{\underscorebox}on{\ }b"}\hfill\\
+\gutterH{\ 135{|}\ }{\ }{\ }{\ }{\ }\syntaxKEYWORDB{and}{\ }ena\syntaxOPERATOR{:}{\ }\syntaxLITERALA{"enabled{\ }a{\ }\<sigma>"}\hfill\\
+\gutter{\ 136{|}\ }{\ }{\ }{\ }{\ }\syntaxKEYWORDB{and}{\ }enb\syntaxOPERATOR{:}{\ }\syntaxLITERALA{"enabled{\ }b{\ }\<sigma>"}\hfill\\
+\gutter{\ 137{|}\ }{\ }{\ }\syntaxKEYWORDB{shows}{\ }\syntaxLITERALA{"enabled{\ }a{\ }(exec{\ }b{\ }\<sigma>)"}\hfill\\
+\gutter{\ 138{|}\ }{\ }{\ }{\ }{\ }\syntaxKEYWORDB{and}{\ }\syntaxLITERALA{"enabled{\ }b{\ }(exec{\ }a{\ }\<sigma>)"}\hfill\\
+\gutter{\ 139{|}\ }{\ }{\ }{\ }{\ }\syntaxKEYWORDB{and}{\ }\syntaxLITERALA{"exec{\ }a{\ }(exec{\ }b{\ }\<sigma>){\ }={\ }exec{\ }b{\ }(exec{\ }a{\ }\<sigma>)"}\hfill\\
+\gutterH{\ 140{|}\ }{\ }{\ }\syntaxKEYWORDA{using}{\ }diff{\ }ena{\ }enb\hfill\\
+\gutter{\ 141{|}\ }{\ }{\ }\syntaxKEYWORDA{by}{\ }\syntaxOPERATOR{(}simp\usebox{\underscorebox}all{\ }add\syntaxOPERATOR{:}{\ }enabled\usebox{\underscorebox}preserved\usebox{\underscorebox}by\usebox{\underscorebox}disjoint\usebox{\underscorebox}exec{\ }exec\usebox{\underscorebox}commute\usebox{\underscorebox}disjoint\syntaxOPERATOR{)}\hfill\\
+\gutter{\ 142{|}\ }\hfill\\
+\gutter{\ 143{|}\ }\syntaxKEYWORDA{text}{\ }\syntaxCOMMENTC{\<open>}\syntaxCOMMENTC{A}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{c}\syntaxCOMMENTC{o}\syntaxCOMMENTC{n}\syntaxCOMMENTC{c}\syntaxCOMMENTC{r}\syntaxCOMMENTC{e}\syntaxCOMMENTC{t}\syntaxCOMMENTC{e}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{c}\syntaxCOMMENTC{o}\syntaxCOMMENTC{r}\syntaxCOMMENTC{o}\syntaxCOMMENTC{l}\syntaxCOMMENTC{l}\syntaxCOMMENTC{a}\syntaxCOMMENTC{r}\syntaxCOMMENTC{y}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{s}\syntaxCOMMENTC{p}\syntaxCOMMENTC{e}\syntaxCOMMENTC{c}\syntaxCOMMENTC{i}\syntaxCOMMENTC{a}\syntaxCOMMENTC{l}\syntaxCOMMENTC{i}\syntaxCOMMENTC{s}\syntaxCOMMENTC{e}\syntaxCOMMENTC{d}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{t}\syntaxCOMMENTC{o}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{t}\syntaxCOMMENTC{w}\syntaxCOMMENTC{o}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{l}\syntaxCOMMENTC{e}\syntaxCOMMENTC{a}\syntaxCOMMENTC{s}\syntaxCOMMENTC{e}\syntaxCOMMENTC{d}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{s}\syntaxCOMMENTC{e}\syntaxCOMMENTC{s}\syntaxCOMMENTC{s}\syntaxCOMMENTC{i}\syntaxCOMMENTC{o}\syntaxCOMMENTC{n}\syntaxCOMMENTC{s}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{w}\syntaxCOMMENTC{i}\syntaxCOMMENTC{t}\syntaxCOMMENTC{h}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{p}\syntaxCOMMENTC{e}\syntaxCOMMENTC{n}\syntaxCOMMENTC{d}\syntaxCOMMENTC{i}\syntaxCOMMENTC{n}\syntaxCOMMENTC{g}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{w}\syntaxCOMMENTC{o}\syntaxCOMMENTC{r}\syntaxCOMMENTC{k}\syntaxCOMMENTC{.}\syntaxCOMMENTC{\<close>}\hfill\\
+\gutter{\ 144{|}\ }\hfill\\
+\gutterH{\ 145{|}\ }\syntaxKEYWORDA{theorem}{\ }two\usebox{\underscorebox}distinct\usebox{\underscorebox}leased\usebox{\underscorebox}sessions\usebox{\underscorebox}can\usebox{\underscorebox}progress\usebox{\underscorebox}independently\syntaxOPERATOR{:}\hfill\\
+\gutter{\ 146{|}\ }{\ }{\ }\syntaxKEYWORDB{assumes}{\ }sid\usebox{\underscorebox}diff\syntaxOPERATOR{:}{\ }\syntaxLITERALA{"s1{\ }\<noteq>{\ }s2"}\hfill\\
+\gutter{\ 147{|}\ }{\ }{\ }{\ }{\ }\syntaxKEYWORDB{and}{\ }own1\syntaxOPERATOR{:}{\ }\syntaxLITERALA{"owner{\ }(\<sigma>{\ }s1){\ }={\ }Some{\ }c1"}\hfill\\
+\gutter{\ 148{|}\ }{\ }{\ }{\ }{\ }\syntaxKEYWORDB{and}{\ }own2\syntaxOPERATOR{:}{\ }\syntaxLITERALA{"owner{\ }(\<sigma>{\ }s2){\ }={\ }Some{\ }c2"}\hfill\\
+\gutter{\ 149{|}\ }{\ }{\ }{\ }{\ }\syntaxKEYWORDB{and}{\ }run1\syntaxOPERATOR{:}{\ }\syntaxLITERALA{"running{\ }(\<sigma>{\ }s1){\ }={\ }None"}\hfill\\
+\gutterH{\ 150{|}\ }{\ }{\ }{\ }{\ }\syntaxKEYWORDB{and}{\ }run2\syntaxOPERATOR{:}{\ }\syntaxLITERALA{"running{\ }(\<sigma>{\ }s2){\ }={\ }None"}\hfill\\
+\gutter{\ 151{|}\ }{\ }{\ }{\ }{\ }\syntaxKEYWORDB{and}{\ }q1\syntaxOPERATOR{:}{\ }\syntaxLITERALA{"q{\ }(\<sigma>{\ }s1){\ }\<noteq>{\ }{[}{]}"}\hfill\\
+\gutter{\ 152{|}\ }{\ }{\ }{\ }{\ }\syntaxKEYWORDB{and}{\ }q2\syntaxOPERATOR{:}{\ }\syntaxLITERALA{"q{\ }(\<sigma>{\ }s2){\ }\<noteq>{\ }{[}{]}"}\hfill\\
+\gutter{\ 153{|}\ }{\ }{\ }\syntaxKEYWORDB{shows}{\ }\syntaxLITERALA{"enabled{\ }(Start{\ }s1){\ }\<sigma>"}\hfill\\
+\gutter{\ 154{|}\ }{\ }{\ }{\ }{\ }\syntaxKEYWORDB{and}{\ }\syntaxLITERALA{"enabled{\ }(Start{\ }s2){\ }\<sigma>"}\hfill\\
+\gutterH{\ 155{|}\ }{\ }{\ }{\ }{\ }\syntaxKEYWORDB{and}{\ }\syntaxLITERALA{"exec{\ }(Start{\ }s1){\ }(exec{\ }(Start{\ }s2){\ }\<sigma>){\ }={\ }exec{\ }(Start{\ }s2){\ }(exec{\ }(Start{\ }s1){\ }\<sigma>)"}\hfill\\
+\gutter{\ 156{|}\ }\syntaxKEYWORDA{proof}{\ }{-}\hfill\\
+\gutter{\ 157{|}\ }{\ }{\ }\syntaxKEYWORDA{have}{\ }e1\syntaxOPERATOR{:}{\ }\syntaxLITERALA{"enabled{\ }(Start{\ }s1){\ }\<sigma>"}\hfill\\
+\gutter{\ 158{|}\ }{\ }{\ }{\ }{\ }\syntaxKEYWORDA{using}{\ }own1{\ }run1{\ }q1{\ }\syntaxKEYWORDA{by}{\ }simp\hfill\\
+\gutter{\ 159{|}\ }{\ }{\ }\syntaxKEYWORDA{have}{\ }e2\syntaxOPERATOR{:}{\ }\syntaxLITERALA{"enabled{\ }(Start{\ }s2){\ }\<sigma>"}\hfill\\
+\gutterH{\ 160{|}\ }{\ }{\ }{\ }{\ }\syntaxKEYWORDA{using}{\ }own2{\ }run2{\ }q2{\ }\syntaxKEYWORDA{by}{\ }simp\hfill\\
+\gutter{\ 161{|}\ }{\ }{\ }\syntaxKEYWORDA{have}{\ }comm\syntaxOPERATOR{:}\hfill\\
+\gutter{\ 162{|}\ }{\ }{\ }{\ }{\ }\syntaxLITERALA{"exec{\ }(Start{\ }s1){\ }(exec{\ }(Start{\ }s2){\ }\<sigma>){\ }={\ }exec{\ }(Start{\ }s2){\ }(exec{\ }(Start{\ }s1){\ }\<sigma>)"}\hfill\\
+\gutter{\ 163{|}\ }{\ }{\ }{\ }{\ }\syntaxKEYWORDA{using}{\ }sid\usebox{\underscorebox}diff\hfill\\
+\gutter{\ 164{|}\ }{\ }{\ }{\ }{\ }\syntaxKEYWORDA{by}{\ }\syntaxOPERATOR{(}metis{\ }sid\usebox{\underscorebox}diff{\ }exec\usebox{\underscorebox}commute\usebox{\underscorebox}disjoint{\ }acts\usebox{\underscorebox}on.simps\syntaxOPERATOR{(}4\syntaxOPERATOR{)}\syntaxOPERATOR{)}\hfill\\
+\gutterH{\ 165{|}\ }{\ }{\ }\syntaxKEYWORDC{show}{\ }\syntaxLITERALA{"enabled{\ }(Start{\ }s1){\ }\<sigma>"}\hfill\\
+\gutter{\ 166{|}\ }{\ }{\ }{\ }{\ }\syntaxKEYWORDA{using}{\ }e1{\ }\syntaxKEYWORDA{.}\hfill\\
+\gutter{\ 167{|}\ }{\ }{\ }\syntaxKEYWORDC{show}{\ }\syntaxLITERALA{"enabled{\ }(Start{\ }s2){\ }\<sigma>"}\hfill\\
+\gutter{\ 168{|}\ }{\ }{\ }{\ }{\ }\syntaxKEYWORDA{using}{\ }e2{\ }\syntaxKEYWORDA{.}\hfill\\
+\gutter{\ 169{|}\ }{\ }{\ }\syntaxKEYWORDC{show}{\ }\syntaxLITERALA{"exec{\ }(Start{\ }s1){\ }(exec{\ }(Start{\ }s2){\ }\<sigma>){\ }={\ }exec{\ }(Start{\ }s2){\ }(exec{\ }(Start{\ }s1){\ }\<sigma>)"}\hfill\\
+\gutterH{\ 170{|}\ }{\ }{\ }{\ }{\ }\syntaxKEYWORDA{using}{\ }comm{\ }\syntaxKEYWORDA{.}\hfill\\
+\gutter{\ 171{|}\ }\syntaxKEYWORDA{qed}\hfill\\
+\gutter{\ 172{|}\ }\hfill\\
+\gutter{\ 173{|}\ }\syntaxKEYWORDA{text}{\ }\syntaxCOMMENTC{\<open>}\hfill\\
+\gutter{\ 174{|}\ }\syntaxCOMMENTC{{\ }{\ }Interpretation{\ }for{\ }the{\ }implementation:}\hfill\\
+\gutterH{\ 175{|}\ }\hfill\\
+\gutter{\ 176{|}\ }\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{\<^item>}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{\usebox{\atbox}}\syntaxCOMMENTC{\usebox{\opencurlybracket}}\syntaxCOMMENTC{c}\syntaxCOMMENTC{o}\syntaxCOMMENTC{n}\syntaxCOMMENTC{s}\syntaxCOMMENTC{t}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{A}\syntaxCOMMENTC{c}\syntaxCOMMENTC{q}\syntaxCOMMENTC{u}\syntaxCOMMENTC{i}\syntaxCOMMENTC{r}\syntaxCOMMENTC{e}\syntaxCOMMENTC{\usebox{\closecurlybracket}}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{m}\syntaxCOMMENTC{o}\syntaxCOMMENTC{d}\syntaxCOMMENTC{e}\syntaxCOMMENTC{l}\syntaxCOMMENTC{s}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{t}\syntaxCOMMENTC{h}\syntaxCOMMENTC{e}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{a}\syntaxCOMMENTC{t}\syntaxCOMMENTC{o}\syntaxCOMMENTC{m}\syntaxCOMMENTC{i}\syntaxCOMMENTC{c}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{l}\syntaxCOMMENTC{e}\syntaxCOMMENTC{a}\syntaxCOMMENTC{s}\syntaxCOMMENTC{e}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{a}\syntaxCOMMENTC{t}\syntaxCOMMENTC{t}\syntaxCOMMENTC{a}\syntaxCOMMENTC{c}\syntaxCOMMENTC{h}\syntaxCOMMENTC{m}\syntaxCOMMENTC{e}\syntaxCOMMENTC{n}\syntaxCOMMENTC{t}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{d}\syntaxCOMMENTC{o}\syntaxCOMMENTC{n}\syntaxCOMMENTC{e}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{u}\syntaxCOMMENTC{n}\syntaxCOMMENTC{d}\syntaxCOMMENTC{e}\syntaxCOMMENTC{r}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{t}\syntaxCOMMENTC{h}\syntaxCOMMENTC{e}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{m}\syntaxCOMMENTC{a}\syntaxCOMMENTC{n}\syntaxCOMMENTC{a}\syntaxCOMMENTC{g}\syntaxCOMMENTC{e}\syntaxCOMMENTC{r}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{l}\syntaxCOMMENTC{o}\syntaxCOMMENTC{c}\syntaxCOMMENTC{k}\syntaxCOMMENTC{.}\hfill\\
+\gutter{\ 177{|}\ }\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{\<^item>}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{\usebox{\atbox}}\syntaxCOMMENTC{\usebox{\opencurlybracket}}\syntaxCOMMENTC{c}\syntaxCOMMENTC{o}\syntaxCOMMENTC{n}\syntaxCOMMENTC{s}\syntaxCOMMENTC{t}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{E}\syntaxCOMMENTC{n}\syntaxCOMMENTC{q}\syntaxCOMMENTC{u}\syntaxCOMMENTC{e}\syntaxCOMMENTC{u}\syntaxCOMMENTC{e}\syntaxCOMMENTC{\usebox{\closecurlybracket}}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{m}\syntaxCOMMENTC{o}\syntaxCOMMENTC{d}\syntaxCOMMENTC{e}\syntaxCOMMENTC{l}\syntaxCOMMENTC{s}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{a}\syntaxCOMMENTC{n}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{A}\syntaxCOMMENTC{P}\syntaxCOMMENTC{I}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{c}\syntaxCOMMENTC{a}\syntaxCOMMENTC{l}\syntaxCOMMENTC{l}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{t}\syntaxCOMMENTC{h}\syntaxCOMMENTC{a}\syntaxCOMMENTC{t}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{p}\syntaxCOMMENTC{a}\syntaxCOMMENTC{s}\syntaxCOMMENTC{s}\syntaxCOMMENTC{e}\syntaxCOMMENTC{d}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{X}\syntaxCOMMENTC{{-}}\syntaxCOMMENTC{L}\syntaxCOMMENTC{e}\syntaxCOMMENTC{a}\syntaxCOMMENTC{s}\syntaxCOMMENTC{e}\syntaxCOMMENTC{{-}}\syntaxCOMMENTC{I}\syntaxCOMMENTC{d}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{c}\syntaxCOMMENTC{h}\syntaxCOMMENTC{e}\syntaxCOMMENTC{c}\syntaxCOMMENTC{k}\syntaxCOMMENTC{s}\syntaxCOMMENTC{.}\hfill\\
+\gutter{\ 178{|}\ }\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{\<^item>}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{\usebox{\atbox}}\syntaxCOMMENTC{\usebox{\opencurlybracket}}\syntaxCOMMENTC{c}\syntaxCOMMENTC{o}\syntaxCOMMENTC{n}\syntaxCOMMENTC{s}\syntaxCOMMENTC{t}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{S}\syntaxCOMMENTC{t}\syntaxCOMMENTC{a}\syntaxCOMMENTC{r}\syntaxCOMMENTC{t}\syntaxCOMMENTC{\usebox{\closecurlybracket}}\syntaxCOMMENTC{/}\syntaxCOMMENTC{\usebox{\atbox}}\syntaxCOMMENTC{\usebox{\opencurlybracket}}\syntaxCOMMENTC{c}\syntaxCOMMENTC{o}\syntaxCOMMENTC{n}\syntaxCOMMENTC{s}\syntaxCOMMENTC{t}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{F}\syntaxCOMMENTC{i}\syntaxCOMMENTC{n}\syntaxCOMMENTC{i}\syntaxCOMMENTC{s}\syntaxCOMMENTC{h}\syntaxCOMMENTC{\usebox{\closecurlybracket}}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{m}\syntaxCOMMENTC{o}\syntaxCOMMENTC{d}\syntaxCOMMENTC{e}\syntaxCOMMENTC{l}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{t}\syntaxCOMMENTC{h}\syntaxCOMMENTC{e}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{s}\syntaxCOMMENTC{i}\syntaxCOMMENTC{n}\syntaxCOMMENTC{g}\syntaxCOMMENTC{l}\syntaxCOMMENTC{e}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{w}\syntaxCOMMENTC{o}\syntaxCOMMENTC{r}\syntaxCOMMENTC{k}\syntaxCOMMENTC{e}\syntaxCOMMENTC{r}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{t}\syntaxCOMMENTC{h}\syntaxCOMMENTC{r}\syntaxCOMMENTC{e}\syntaxCOMMENTC{a}\syntaxCOMMENTC{d}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{o}\syntaxCOMMENTC{f}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{o}\syntaxCOMMENTC{n}\syntaxCOMMENTC{e}\hfill\\
+\gutter{\ 179{|}\ }\syntaxCOMMENTC{{\ }{\ }{\ }{\ }\usebox{\atbox}\usebox{\opencurlybracket}text{\ }ThreadedBackend\usebox{\closecurlybracket}{\ }consuming{\ }its{\ }private{\ }queue.}\hfill\\
+\gutterH{\ 180{|}\ }\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{\<^item>}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{\usebox{\atbox}}\syntaxCOMMENTC{\usebox{\opencurlybracket}}\syntaxCOMMENTC{t}\syntaxCOMMENTC{h}\syntaxCOMMENTC{m}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{{[}}\syntaxCOMMENTC{s}\syntaxCOMMENTC{o}\syntaxCOMMENTC{u}\syntaxCOMMENTC{r}\syntaxCOMMENTC{c}\syntaxCOMMENTC{e}\syntaxCOMMENTC{{]}}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{d}\syntaxCOMMENTC{i}\syntaxCOMMENTC{s}\syntaxCOMMENTC{j}\syntaxCOMMENTC{o}\syntaxCOMMENTC{i}\syntaxCOMMENTC{n}\syntaxCOMMENTC{t}\syntaxCOMMENTC{\usebox{\underscorebox}}\syntaxCOMMENTC{e}\syntaxCOMMENTC{n}\syntaxCOMMENTC{a}\syntaxCOMMENTC{b}\syntaxCOMMENTC{l}\syntaxCOMMENTC{e}\syntaxCOMMENTC{d}\syntaxCOMMENTC{\usebox{\underscorebox}}\syntaxCOMMENTC{a}\syntaxCOMMENTC{c}\syntaxCOMMENTC{t}\syntaxCOMMENTC{i}\syntaxCOMMENTC{o}\syntaxCOMMENTC{n}\syntaxCOMMENTC{s}\syntaxCOMMENTC{\usebox{\underscorebox}}\syntaxCOMMENTC{c}\syntaxCOMMENTC{o}\syntaxCOMMENTC{m}\syntaxCOMMENTC{m}\syntaxCOMMENTC{u}\syntaxCOMMENTC{t}\syntaxCOMMENTC{e}\syntaxCOMMENTC{\usebox{\closecurlybracket}}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{s}\syntaxCOMMENTC{t}\syntaxCOMMENTC{a}\syntaxCOMMENTC{t}\syntaxCOMMENTC{e}\syntaxCOMMENTC{s}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{t}\syntaxCOMMENTC{h}\syntaxCOMMENTC{e}\syntaxCOMMENTC{{\ }}\syntaxCOMMENTC{s}\syntaxCOMMENTC{e}\syntaxCOMMENTC{r}\syntaxCOMMENTC{v}\syntaxCOMMENTC{e}\syntaxCOMMENTC{r}\syntaxCOMMENTC{{-}}\syntaxCOMMENTC{l}\syntaxCOMMENTC{e}\syntaxCOMMENTC{v}\syntaxCOMMENTC{e}\syntaxCOMMENTC{l}\hfill\\
+\gutter{\ 181{|}\ }\syntaxCOMMENTC{{\ }{\ }{\ }{\ }concurrency{\ }property:{\ }distinct{\ }leased{\ }sessions{\ }are{\ }independent{\ }and{\ }their}\hfill\\
+\gutter{\ 182{|}\ }\syntaxCOMMENTC{{\ }{\ }{\ }{\ }steps{\ }commute.}\hfill\\
+\gutter{\ 183{|}\ }\hfill\\
+\gutter{\ 184{|}\ }\syntaxCOMMENTC{{\ }{\ }This{\ }proves{\ }a{\ }safety{\ }property{\ }of{\ }the{\ }protocol.{\ }{\ }It{\ }does{\ }not{\ }prove{\ }a{\ }wall{-}clock}\hfill\\
+\gutterH{\ 185{|}\ }\syntaxCOMMENTC{{\ }{\ }speedup{\ }or{\ }that{\ }the{\ }operating{\ }system{\ }schedules{\ }the{\ }two{\ }worker{\ }threads{\ }on}\hfill\\
+\gutter{\ 186{|}\ }\syntaxCOMMENTC{{\ }{\ }different{\ }cores.}\hfill\\
+\gutter{\ 187{|}\ }\syntaxCOMMENTC{\<close>}\hfill\\
+\gutter{\ 188{|}\ }\syntaxKEYWORDB{end}\hfill\\
+\normalfont
+\end{document}
