@@ -24,7 +24,6 @@ logger = get_logger(__name__)
 
 
 class SessionManager:
-    """Manages all active Isabelle sessions."""
 
     def __init__(
         self,
@@ -400,23 +399,6 @@ class SessionManager:
         field: Optional[str] = None,
         reuse_dirty: bool = True,
     ) -> Optional[_Isabelle_Session]:
-        """Find an existing ACTIVE, **unleased** session whose dependency_key
-        matches the given theories + field combination.
-
-        Parameters
-        ----------
-        theories : list of theory names (dependencies)
-        field : Isabelle field / session image
-        reuse_dirty : if *False*, only return sessions with an empty
-                      ``command_history`` (i.e. "clean" sessions that have not
-                      been used yet).  When *True* (default), any active
-                      matching session can be returned.
-
-        Returns
-        -------
-        The matching session (moved to the MRU end of the LRU cache), or
-        ``None`` if no match was found.
-        """
         target_key = self.build_dependency_key(theories, field)
         with self._lock:
             for sid, session in reversed(self._lru.items()):
@@ -444,16 +426,6 @@ class SessionManager:
         field: Optional[str] = None,
         reuse_dirty: bool = True,
     ) -> Tuple[_Isabelle_Session, bool, str]:
-        """Find an existing matching session or create a new one.
-
-        The returned session is **exclusively leased** — no other
-        ``acquire_session`` call can hand it out until the caller
-        invokes ``release_session`` (or ``close_session``).
-
-        Returns
-        -------
-        (session, reused, lease_id)
-        """
         lease_id = uuid.uuid4().hex[:12]
 
         with self._lock:

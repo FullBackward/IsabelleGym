@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 from __future__ import annotations
 
 import argparse
@@ -12,13 +11,6 @@ THEORY_HEADER_RE = re.compile(
     re.DOTALL,
 )
 
-# Remove whole lines like:
-#   text \<open>See \<^cite>\<open>"dugundji"\<close>.\<close>
-#
-# Narrow rule:
-# - line starts with Isabelle command `text`
-# - line contains `\<^cite>`
-# - remove the whole line including its trailing newline
 CITE_ANTIQUOT_RE = re.compile(
     r'\\<\^cite>\\<open>"[^"\n]+"' r'\\<close>'
 )
@@ -29,38 +21,20 @@ LATEX_LINE_RE = re.compile(
 
 
 def sanitize_theory_text_for_baseline(text: str) -> str:
-    """
-    Remove documentation-only antiquotations that can fail in a temporary
-    benchmark session lacking the original bibliography/document context.
-    """
     text = CITE_ANTIQUOT_RE.sub("", text)
     text = LATEX_LINE_RE.sub("", text)
     return text
 
-# Matches either:
-#   Foo
-#   "Foo"
-#   "HOL-Analysis.Foo"
-# but not Isabelle keywords
 IMPORT_TOKEN_RE = re.compile(
     r'"[^"]+"|[A-Za-z_][A-Za-z0-9_./-]*'
 )
 
 
 def build_analysis_theory_set(analysis_dir: pathlib.Path) -> Set[str]:
-    """
-    Return basenames of all .thy files in the HOL/Analysis directory.
-    Example: Homotopy.thy -> 'Homotopy'
-    """
     return {p.stem for p in analysis_dir.glob("*.thy")}
 
 
 def normalize_import_token(token: str, analysis_theories: Set[str]) -> str:
-    """
-    Convert an import token to HOL-Analysis.<Name> iff:
-    - it refers to a theory in analysis_theories
-    - it is not already qualified
-    """
     raw = token.strip()
     quoted = raw.startswith('"') and raw.endswith('"')
     name = raw[1:-1] if quoted else raw
@@ -78,10 +52,6 @@ def normalize_import_token(token: str, analysis_theories: Set[str]) -> str:
 
 
 def rewrite_imports_block(imports_block: str, analysis_theories: Set[str]) -> str:
-    """
-    Rewrite only import tokens inside the imports block, preserving
-    whitespace/comments as much as possible.
-    """
     pieces = []
     last = 0
 
@@ -104,10 +74,6 @@ def rewrite_imports_block(imports_block: str, analysis_theories: Set[str]) -> st
 
 
 def rewrite_theory_text(text: str, analysis_theories: Set[str]) -> str:
-    """
-    Remove problematic citation text lines, then rewrite the imports ... begin
-    section of a theory file.
-    """
     text = sanitize_theory_text_for_baseline(text)
 
     m = THEORY_HEADER_RE.search(text)

@@ -67,12 +67,6 @@ def _starts_with_keyword(line: str, keywords: tuple[str, ...]) -> bool:
 
 
 def split_theory_into_blocks(theory_text: str) -> List[str]:
-    """
-    Heuristic top-level splitter for Isabelle theory bodies.
-
-    This intentionally avoids raw line-by-line splitting. It groups theorem/proof
-    blocks and other top-level commands into larger semantic chunks.
-    """
     text = _normalize(theory_text).strip()
     if not text:
         return []
@@ -113,11 +107,6 @@ def split_theory_into_blocks(theory_text: str) -> List[str]:
 
 
 def split_block_into_chunks(block_text: str, max_lines: int = 40) -> List[str]:
-    """
-    Split one failing block into smaller replayable chunks.
-
-    First prefer paragraph boundaries, then fall back to fixed-size line windows.
-    """
     text = _normalize(block_text).strip()
     if not text:
         return []

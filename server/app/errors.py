@@ -2,7 +2,6 @@ from __future__ import annotations
 
 
 class SessionError(Exception):
-    """Base class for session-related errors with optional execution metadata."""
 
     def __init__(
         self,

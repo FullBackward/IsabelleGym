@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 from __future__ import annotations
 
 import argparse
@@ -17,7 +16,7 @@ from eval_stats import safe_mean, safe_median, summarize_metric
 from theory_splitter import determine_theory_name
 
 try:
-    import resource  # Unix-only
+    import resource
 except ImportError:
     resource = None
 
@@ -39,10 +38,6 @@ class FileResult:
 
 
 def get_children_rusage_snapshot() -> Optional[tuple[float, float]]:
-    """
-    Return cumulative (user_cpu_sec, system_cpu_sec) for child processes.
-    Only available on Unix-like platforms with the `resource` module.
-    """
     if resource is None:
         return None
     usage = resource.getrusage(resource.RUSAGE_CHILDREN)

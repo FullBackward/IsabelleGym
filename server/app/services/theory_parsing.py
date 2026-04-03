@@ -1,4 +1,3 @@
-# server/app/services/theory_parsing.py
 from __future__ import annotations
 from typing import Optional
 from server.app.core.config import RegularExp

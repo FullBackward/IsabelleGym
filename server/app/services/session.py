@@ -35,7 +35,6 @@ logger = get_logger(__name__)
 
 
 class _Isabelle_Session:
-    """Manages a single Isabelle proving session (threaded backend)."""
 
     def __init__(
         self,
@@ -93,7 +92,6 @@ class _Isabelle_Session:
 
     @property
     def in_use(self) -> bool:
-        """True if at least one request is currently being processed."""
         with self._active_requests_lock:
             return self._active_requests > 0
 
@@ -110,9 +108,6 @@ class _Isabelle_Session:
         with self._active_requests_lock:
             self._active_requests = max(0, self._active_requests - 1)
 
-    # ------------------------------------------------------------------
-    # Exclusive-lease API
-    # ------------------------------------------------------------------
 
     @property
     def leased(self) -> bool:
@@ -125,7 +120,6 @@ class _Isabelle_Session:
             return self._lease_id
 
     def try_acquire_lease(self, lease_id: str) -> bool:
-        """Atomically acquire the exclusive lease if it is currently free."""
         with self._lease_lock:
             if self._leased:
                 return False
@@ -135,14 +129,12 @@ class _Isabelle_Session:
         return True
 
     def acquire_lease(self, lease_id: str) -> None:
-        """Mark this session as exclusively leased."""
         if not self.try_acquire_lease(lease_id):
             raise SessionLeaseError(
                 f"Session {self.session_id} is already leased by {self.lease_id}"
             )
 
     def require_lease(self, lease_id: Optional[str]) -> None:
-        """Verify that the supplied lease token owns this session."""
         with self._lease_lock:
             if not self._leased or not self._lease_id:
                 raise SessionLeaseError(f"Session {self.session_id} is not currently leased")
@@ -154,7 +146,6 @@ class _Isabelle_Session:
                 )
 
     def release_lease(self) -> None:
-        """Release the exclusive lease so the session can be reused."""
         with self._lease_lock:
             self._leased = False
             self._lease_id = None
@@ -240,15 +231,6 @@ class _Isabelle_Session:
         )
 
     def _split_complete_theory(self, theory_text: str) -> Tuple[str, str, str]:
-        """
-        Split a complete theory file into:
-        1. theory/imports/begin header
-        2. theory body
-        3. final end keyword
-
-        This matches the backend behavior where incomplete proofs are surfaced when
-        the final standalone `end` is stepped.
-        """
         text = theory_text.strip()
         if not text:
             raise ValueError("Theory text is empty.")

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 from __future__ import annotations
 
 import argparse
@@ -6,7 +5,6 @@ import re
 import shutil
 from pathlib import Path
 
-# Only these document-style commands are removed.
 DOC_COMMANDS = {
     "chapter",
     "section",
@@ -41,20 +39,6 @@ def first_keyword(command: str) -> str | None:
 
 
 def split_top_level_commands(body_text: str) -> list[str]:
-    """
-    Split a theory body into top-level Isabelle commands.
-
-    This scanner is careful not to split on keywords that occur inside:
-    - nested comments: (* ... *)
-    - cartouches: \<open> ... \<close>
-    - quoted strings: "..."
-    - backtick strings: `...`
-
-    It starts a new command whenever it encounters a word at column-insensitive
-    top level after a newline. This is deliberately broader than the old
-    TOP_LEVEL_KEYWORDS-based splitter, because we want to preserve commands like
-    adhoc_overloading/value/thm/etc. while only removing the doc commands later.
-    """
     s = body_text.replace("\r\n", "\n").replace("\r", "\n").strip()
     if not s:
         return []

@@ -1,6 +1,3 @@
-"""Shared Isabelle theory parsing: header/body/end splitting, import extraction,
-theory-name extraction, and two command-splitting strategies (fine-grained
-lex-aware and coarse top-level-block)."""
 from __future__ import annotations
 
 import re
@@ -9,9 +6,6 @@ from pathlib import Path
 from typing import Optional
 
 
-# ---------------------------------------------------------------------------
-# Compiled regexes
-# ---------------------------------------------------------------------------
 
 THEORY_RE = re.compile(r'(?ms)^[ \t]*theory\s+(?:"([^"\n]+)"|([A-Za-z0-9_\'.-]+))')
 HEADER_RE = re.compile(r"(?s)\btheory\b.*?\bbegin\b")
@@ -19,9 +13,6 @@ END_RE = re.compile(r"\bend\s*$")
 IMPORTS_RE = re.compile(r"(?s)\bimports\b(.*?)\bbegin\b")
 IMPORT_TOKEN_RE = re.compile(r'"[^"]+"|[A-Za-z_][A-Za-z0-9_./-]*')
 
-# ---------------------------------------------------------------------------
-# Fine-grained command-level keyword table (used by split_commands)
-# ---------------------------------------------------------------------------
 
 COMMAND_STARTERS = tuple(
     sorted(
@@ -59,9 +50,6 @@ COMMAND_STARTERS = tuple(
     )
 )
 
-# ---------------------------------------------------------------------------
-# Coarse top-level-block keyword tables (used by split_top_level_blocks)
-# ---------------------------------------------------------------------------
 
 TOP_LEVEL_KEYWORDS = (
     "lemma", "theorem", "corollary", "proposition", "schematic_goal",
@@ -75,13 +63,8 @@ TOP_LEVEL_KEYWORDS = (
 PROOF_OPENERS = ("proof", "proof -", "proof (")
 PROOF_CLOSERS = ("qed", "by", "done", "oops", "sorry")
 
-# ---------------------------------------------------------------------------
-# Theory-name helpers
-# ---------------------------------------------------------------------------
-
 
 def extract_theory_name(text: str) -> Optional[str]:
-    """Extract the theory name from the ``theory`` header line."""
     m = THEORY_RE.search(text)
     if not m:
         return None
@@ -89,22 +72,10 @@ def extract_theory_name(text: str) -> Optional[str]:
 
 
 def determine_theory_name(thy_file: Path, text: str) -> str:
-    """Return the declared theory name, falling back to the file stem."""
     return extract_theory_name(text) or thy_file.stem
 
 
-# ---------------------------------------------------------------------------
-# Header / body / end splitting
-# ---------------------------------------------------------------------------
-
-
 def split_theory(text: str) -> tuple[str, str, str]:
-    """Split a .thy file into ``(header, body, end_keyword)``.
-
-    *header* includes everything up to and including ``begin`` (with a
-    trailing newline).  *body* is the text between ``begin`` and the final
-    ``end``.  *end_keyword* is typically just ``"end"``.
-    """
     stripped = text.strip()
     header_match = HEADER_RE.search(stripped)
     end_match = END_RE.search(stripped)
@@ -116,14 +87,7 @@ def split_theory(text: str) -> tuple[str, str, str]:
         stripped[end_match.start():end_match.end()].strip(),
     )
 
-
-# ---------------------------------------------------------------------------
-# Import extraction
-# ---------------------------------------------------------------------------
-
-
 def extract_imports(text: str) -> list[str]:
-    """Return the sorted, deduplicated list of imports from a theory header."""
     m = IMPORTS_RE.search(text)
     if not m:
         return ["Main"]
@@ -135,14 +99,8 @@ def extract_imports(text: str) -> list[str]:
     return sorted(set(out)) or ["Main"]
 
 
-# ---------------------------------------------------------------------------
-# Lexer state (for fine-grained splitting)
-# ---------------------------------------------------------------------------
-
-
 @dataclass
 class LexState:
-    """Tracks nesting of comments, strings, and cartouches."""
     comment_depth: int = 0
     in_string: bool = False
     cartouche_depth: int = 0
@@ -167,7 +125,6 @@ def _escaped_quote(text: str, idx: int) -> bool:
 
 
 def advance_lex_state(state: LexState, text: str, start: int = 0) -> LexState:
-    """Advance *state* over *text* starting at position *start*."""
     i = start
     n = len(text)
     while i < n:
@@ -229,11 +186,6 @@ def advance_lex_state(state: LexState, text: str, start: int = 0) -> LexState:
     return state
 
 
-# ---------------------------------------------------------------------------
-# Fine-grained command splitting (lex-aware)
-# ---------------------------------------------------------------------------
-
-
 def _line_starter_keyword(stripped: str) -> Optional[str]:
     if stripped in {".", "..", "..."}:
         return stripped
@@ -244,11 +196,6 @@ def _line_starter_keyword(stripped: str) -> Optional[str]:
 
 
 def split_commands(body_text: str) -> list[str]:
-    """Split a theory body into individual Isabelle commands.
-
-    This is the fine-grained strategy: it respects comments, strings, and
-    cartouches so that keywords inside quoted text do not cause false splits.
-    """
     text = body_text.replace("\r\n", "\n").replace("\r", "\n").strip()
     if not text:
         return []
@@ -279,23 +226,12 @@ def split_commands(body_text: str) -> list[str]:
     return commands
 
 
-# ---------------------------------------------------------------------------
-# Coarse top-level-block splitting (proof-depth aware)
-# ---------------------------------------------------------------------------
-
-
 def _starts_with_keyword(line: str, keywords: tuple[str, ...]) -> bool:
     stripped = line.strip()
     return any(re.match(rf"^{re.escape(keyword)}(\b|\s|\(|$)", stripped) for keyword in keywords)
 
 
 def split_top_level_blocks(body_text: str) -> list[str]:
-    """Split a theory body into coarse top-level blocks.
-
-    Each block starts at a top-level keyword (lemma, definition, etc.) and
-    includes the full proof that follows it.  This is the strategy used by
-    evaluators that replay one declaration+proof at a time.
-    """
     text = body_text.replace("\r\n", "\n").replace("\r", "\n").strip()
     if not text:
         return []

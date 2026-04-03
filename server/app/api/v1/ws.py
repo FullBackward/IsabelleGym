@@ -14,7 +14,6 @@ logger = get_logger(__name__)
 
 
 class ConnectionManager:
-    """Manages WebSocket connections per session_id."""
 
     def __init__(self) -> None:
         self.active_connections: Dict[str, WebSocket] = {}

@@ -72,7 +72,6 @@ class ProofStatusResponse(BaseModel):
 
 
 class SessionAcquireRequest(BaseModel):
-    """Request to find an existing session matching the given dependencies/field, or create one."""
     theories: List[str] = Field(default_factory=list)
     field: str | None = None
     reuse_dirty: bool = Field(

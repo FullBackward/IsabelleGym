@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
 from typing import Any, Optional
@@ -53,7 +52,6 @@ class IsabelleGymAsyncClient:
 
     @staticmethod
     def _lease_headers(lease_id: str | None) -> dict[str, str] | None:
-        """Build the X-Lease-Id header dict, or None if no lease_id."""
         if lease_id:
             return {"X-Lease-Id": lease_id}
         return None
@@ -83,11 +81,6 @@ class IsabelleGymAsyncClient:
         field: str | None = "HOL",
         reuse_dirty: bool = True,
     ) -> dict[str, Any]:
-        """Find an existing session matching theories/field or create a new one.
-
-        Returns a dict with ``session_id``, ``theories``, ``status``,
-        ``reused``, and ``lease_id``.
-        """
         payload: dict[str, Any] = {"reuse_dirty": reuse_dirty}
         if theories is not None:
             payload["theories"] = theories
@@ -112,8 +105,6 @@ class IsabelleGymAsyncClient:
     async def release_session(
         self, session_id: str, *, lease_id: str | None = None,
     ) -> dict[str, Any]:
-        """Release the exclusive lease on a session, returning it to the
-        pool for reuse.  Unlike ``close_session``, the backend stays alive."""
         response = await self._request(
             "POST", f"{BASE_URL}/{session_id}/release",
             headers=self._lease_headers(lease_id),

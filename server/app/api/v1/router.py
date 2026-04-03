@@ -95,13 +95,6 @@ async def acquire_session(
     request: SessionAcquireRequest,
     session_manager=Depends(get_session_manager),
 ):
-    """Find an existing session that matches the requested dependencies and
-    field, or create a new one on demand.
-
-    The returned session is **exclusively leased** — no other
-    ``acquire_session`` call will hand out the same session until the
-    caller invokes the ``/release`` or ``DELETE`` endpoint.
-    """
     theories = request.theories if request.theories else None
     field = request.field
     if field is None or str(field).strip() == "" or str(field).lower() in {"null", "none", "default"}:

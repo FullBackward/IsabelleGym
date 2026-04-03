@@ -1,6 +1,3 @@
-"""Provides a Python interface to interact with Isabelle."""
-
-import atexit
 import time
 from typing import Optional
 
@@ -10,7 +7,6 @@ from .operation import Success, Failure
 
 
 class IsabelleClient:
-    """High-level interface to Isabelle."""
 
     def __init__(
         self, 
@@ -22,7 +18,6 @@ class IsabelleClient:
         initial_thys: list[str] = None,
         field: str = "HOL"
     ) -> None:
-        """Initialize the Isabelle client."""
         self.repl_backend_gateway_process = ReplBackendGatewayProcess()
         self.repl_backend_gateway_process_init = True
         
@@ -67,7 +62,6 @@ class IsabelleClient:
         self.repl_backend_init = True
 
     def _normalize_theories(self, theories: Optional[list[str]]) -> list[str]:
-        """Normalize dependency theories while preserving the caller's order."""
         if theories is None:
             return []
 
@@ -84,7 +78,6 @@ class IsabelleClient:
     def _build_loaded_theories(
         self, wrapper_name: str, dependency_theories: list[str]
     ) -> tuple[list[str], Optional[str]]:
-        """Resolve raw dependency theories to the actual theory loaded by Isabelle."""
         if not dependency_theories:
             return ["$ISABELLE_REPL_HOME/thys/IsabelleREPL"], None
 
@@ -99,76 +92,60 @@ class IsabelleClient:
         return [f"$ISABELLE_REPL_HOME/thys/{wrapper_theory}"], wrapper_theory
 
     def _get_active_backend(self):
-        """get the active backend"""
         if self.use_multi_session:
             return self.get_current_session()
         else:
             return self.repl_backend
 
     def enter_thy(self, thy_name: str) -> ReplResult:
-        """Enters a given theory."""
         return self._get_active_backend().enter_thy(thy_name)
 
     def isar_snippet(self, isar_string: str) -> ReplResult:
-        """Adds the given Isar string to the current theory."""
         if(isar_string.strip() == ""):
             return ReplResult(Outputs("", ""), "Empty input")
         return self._get_active_backend().step(isar_string)
 
     def get_current_thy_name(self) -> str:
-        """Returns the current theory name."""
         return self._get_active_backend().current_thy_name_string()
 
     def open_subgoals(self) -> list[str]:
-        """Returns the list of currently open subgoals."""
         subgoals = self._get_active_backend().open_subgoals()
         return [subgoal.strip() for subgoal in subgoals]
 
     def local_facts(self) -> list[str]:
-        """Returns the list of local facts in the current proof context."""
         return list(self._get_active_backend().local_facts())
 
     def global_facts(self, limit: int) -> list[str]:
-        """Returns the list of global facts in the current proof context."""
         return list(self._get_active_backend().global_facts(limit))
 
     def get_source(self) -> ReplResult:
-        """Returns the source code of the current theory (if any)."""
         return self._get_active_backend().get_source()
 
     def rollback(self) -> ReplResult:
-        """Undoes the last step in the current theory."""
         return self._get_active_backend().rollback()
 
     def save_state(self) -> EnvStateID:
-        """Saves the current state of the environment, returning an ID for the state."""
         return self._get_active_backend().save_state()
 
     def restore_state(self, state_id: EnvStateID) -> bool:
-        """Restores a previously saved state by the state ID."""
         return self._get_active_backend().restore_state(state_id)
 
     def reset(self) -> None:
-        """Resets the Scala REPL."""
         if self.use_multi_session:
             self._get_active_backend().reset()
         else:
             self.repl_backend.reset()
 
     def vectorise(self, size: int) -> None:
-        """Switches to vector mode with the specified number of environments."""
         return self._get_active_backend().vectorise(size)
 
     def scalarise(self, index_to_keep: int):
-        """Switches from vector mode back to scalar mode"""
         return self._get_active_backend().scalarise(index_to_keep)
 
     def vector_step(self, isar_strings: list[str]) -> ReplResult:
-        """Executes Isar commands in parallel across all environments."""
         return self._get_active_backend().vector_step(isar_strings)
 
     def cleanup(self) -> None:
-        """Cleans up the Scala REPL with proper shutdown sequence"""
     
         if not (self.repl_backend_gateway_process_init 
                 and not self.repl_backend_gateway_process.has_terminated()):
@@ -182,22 +159,22 @@ class IsabelleClient:
             for session_id in list(self.sessions.keys()):
                 try:
                     self.close_session(session_id)
-                    print(f"  ✓ Closed session: {session_id}")
+                    print(f"Closed session: {session_id}")
                 except Exception as e:
-                    print(f"  ⚠ Error closing session {session_id}: {e}")
+                    print(f"Error closing session {session_id}: {e}")
         else:
             print("[Cleanup] Closing backend...")
             try:
                 self.repl_backend.exit()
-                print("  ✓ Backend exited")
+                print("Backend exited")
             except Exception as e:
-                print(f"  ⚠ Error closing backend: {e}")
+                print(f"Error closing backend: {e}")
             if self.initial_wrapper_name is not None:
                 result = self.thy_init.cleanup(self.initial_wrapper_name)
                 if result.__class__ != Success:
-                    print(f"  ⚠ Error cleaning up main theory file: {result.err}")
+                    print(f"Error cleaning up main theory file: {result.err}")
                 else:
-                    print("  ✓ Main theory files cleaned up")
+                    print("Main theory files cleaned up")
 
     
         # Step 2: CRITICAL - Give backends time to cleanup
@@ -208,21 +185,19 @@ class IsabelleClient:
         print("[Cleanup] Terminating gateway process...")
         try:
             self.repl_backend_gateway_process.terminate()
-            print("  ✓ Gateway terminated")
+            print("Gateway terminated")
         except Exception as e:
-            print(f"  ⚠ Gateway termination warning: {e}")
+            print(f"Gateway termination warning: {e}")
     
         print("[Cleanup] Cleanup complete")
 
     def get_cache_stats(self) -> dict:
-        """Returns the cache statistics."""
         if self.use_multi_session:
             return self.get_session_cache_stats()
         else:
             return dict(self.repl_backend.get_cache_stats())
 
     def get_cache_status(self) -> str:
-        """Returns the cache status."""
         if self.use_multi_session:
             return self.get_session_cache_status()
         else:
@@ -230,7 +205,6 @@ class IsabelleClient:
 
     # only available in multi-session mode
     def create_session(self, session_id: str, initial_thys: list[str] = None, field: str = "HOL") -> str:
-        """create a new Session"""
         if not self.use_multi_session:
             raise RuntimeError("create_session is only available in multi-session mode")
 
@@ -263,7 +237,6 @@ class IsabelleClient:
         return session_id
 
     def switch_session(self, session_id: str) -> bool:
-        """switch to the specified Session"""
         if not self.use_multi_session:
             raise RuntimeError("switch_session is only available in multi-session mode")
         
@@ -276,7 +249,6 @@ class IsabelleClient:
         return True
     
     def get_current_session(self):
-        """get the backend of the current active Session"""
         if not self.use_multi_session:
             raise RuntimeError("get_current_session is only available in multi-session mode")
         
@@ -300,7 +272,6 @@ class IsabelleClient:
         return result
     
     def close_session(self, session_id: str) -> bool:
-        """close the specified Session"""
         if not self.use_multi_session:
             raise RuntimeError("close_session is only available in multi-session mode")
         
@@ -326,7 +297,6 @@ class IsabelleClient:
         return True
     
     def get_session_cache_stats(self, session_id: str = None) -> dict:
-        """get the cache statistics of the specified Session"""
         if not self.use_multi_session:
             raise RuntimeError("get_session_cache_stats is only available in multi-session mode")
         
@@ -340,7 +310,6 @@ class IsabelleClient:
         return dict(backend.get_cache_stats())
     
     def get_session_cache_status(self, session_id: str = None) -> str:
-        """get the cache status of the specified Session"""
         if not self.use_multi_session:
             raise RuntimeError("get_session_cache_status is only available in multi-session mode")
         
@@ -355,7 +324,6 @@ class IsabelleClient:
     
     # memory management methods
     def get_memory_report(self) -> str:
-        """Get detailed memory report from the backend"""
         if self.use_multi_session:
             backend = self._get_active_backend()
         else:
@@ -369,7 +337,6 @@ class IsabelleClient:
             return f"Error getting memory report: {e}"
     
     def get_memory_status(self) -> str:
-        """Get current memory status from the backend"""
         if self.use_multi_session:
             backend = self._get_active_backend()
         else:
@@ -383,7 +350,6 @@ class IsabelleClient:
             return f"Error getting memory status: {e}"
     
     def can_create_new_session(self) -> bool:
-        """Check if memory allows creating a new session"""
         if self.use_multi_session:
             backend = self._get_active_backend()
         else:
@@ -398,7 +364,6 @@ class IsabelleClient:
             return False
     
     def perform_memory_cleanup(self) -> None:
-        """Perform memory cleanup operations"""
         if self.use_multi_session:
             backend = self._get_active_backend()
         else:
