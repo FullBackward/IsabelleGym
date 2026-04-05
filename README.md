@@ -490,97 +490,100 @@ A comprehensive file structure summary, this is due to the fact that no complete
 
 ```
 repo_root/
-├── client/
+├── client/                                                            # Directory for Async Client
 |   ├── __init__.py
-|   └── async_client.py
-├── evaluation/
-|   ├── analysis_exports/
-|   ├── benchmark/
-|   ├── HOL_corpus/
-|   ├── local_gym/
-|   ├── runs/
-|   ├── scripts/
-|   |   ├── clean_example_dir.py
-|   |   ├── eval_bigstep_isabelle_build.py
-|   |   ├── eval_bigstep_server_client_ver.py
-|   |   ├── eval_smallstep_isabellegym.py
-|   |   ├── eval_smallstep_qisabelle.py
-|   |   ├── eval_smallstep_server_client_1_worker_no_reuse.py
-|   |   ├── eval_smallstep_server_client_with_reuse.py
-|   |   ├── eval_stats.py
-|   |   ├── process.py
-|   |   └── theory_splitter.py
-|   ├── runs_analysis.ipynb
-|   └── Server_Concurrency.thy
-├── previous works/
-|   ├── IsabelleGym1.0/
-|   |   ├── IsabelleGym/
-|   |   └── IsabelleGym.pdf
-|   └── msc_20257720.pdf
-├── repl/
-|   ├── Admin/
-|   ├── etc/
-|   ├── gradle/
-|   ├── python/
-|   ├── src/
-|   |   ├── main/
+|   └── async_client.py                                                # Async client entrypoint
+├── evaluation/                                                        # Supporting material for evaluation chapter in the report
+|   ├── analysis_exports/                                              # Artifects from run_analysis.ipynb
+|   ├── benchmark/                                                     # Benchmark folder from previous iterations, not maintained
+|   ├── HOL_corpus/                                                    # Where you store the evaluation corpus theory files
+|   |   ├── HOL_Examples/
+|   |   └── HOL_Analysis/
+|   ├── local_gym/                                                     # IsabelleGym 2.0 iteration codes, used for small-step evaluation
+|   ├── runs/                                                          # Evaluation runs results
+|   ├── scripts/                                                       # Scripts for runnning evaluation
+|   |   ├── clean_example_dir.py                                       # Preprocessing: remove documentation keywords chunks
+|   |   ├── eval_bigstep_isabelle_build.py                             # Benchmarking local bigstep isabelle build
+|   |   ├── eval_bigstep_server_client_ver.py                          # Benchmarking server bigstep with async client
+|   |   ├── eval_smallstep_isabellegym.py                              # Benchmarking local smallstep with IsabelleGym 2.0
+|   |   ├── eval_smallstep_qisabelle.py                                # Benchmarking local smallstep with QIsabelle. This file is to be used with QIsabelle repository.
+|   |   ├── eval_smallstep_server_client_1_worker_no_reuse.py          # Benchmarking server smallstep with async client, configurated as 1 worker, no session reuse.
+|   |   ├── eval_smallstep_server_client_with_reuse.py                 # Benchmarking server smallstep with async client, can be configurated as n workers, with session reuse.
+|   |   ├── eval_stats.py                                              # Benchmarking statistics helper script
+|   |   ├── process.py                                                 # Preprocessing: normalise theory imports
+|   |   └── theory_splitter.py                                         # Smallstep theory splitter helper script
+|   ├── runs_analysis.ipynb                                            # IPython notebook for evaluation results analysis
+|   └── Server_Concurrency.thy                                         # Concurrency formal proof for session acquire and release
+├── previous works/                                                    # Collections of previous works that were unpublished
+|   ├── IsabelleGym1.0/                                                
+|   |   ├── IsabelleGym/                                               # IsabelleGym 1.0 source
+|   |   └── IsabelleGym.pdf                                            # IsabelleGym 1.0 report
+|   └── msc_20257720.pdf                                               # IsabelleGym 2.0 report
+├── repl/                                                              # REPL source that connect Python <--> Scala <--> Isabelle/ML
+|   ├── Admin/                                                         # Build properties and Scala components
+|   ├── etc/                                                           # Build misc
+|   ├── gradle/                                                        # Scala compiler
+|   ├── python/                                                        # Archived Python scripts for Isabelle 2.0
+|   ├── src/                                                           # Source code for REPL backend
+|   |   ├── main/                                                      # Scala code
 |   |   |   └── scala/
 |   |   |   |   └── repl/
-|   |   |   |       ├── document_utils.scala
-|   |   |   |       ├── edit_utils.scala
-|   |   |   |       ├── repl_backend_gateway.scala
-|   |   |   |       ├── repl_backend.scala
-|   |   |   |       ├── repl_ml_communication.scala
-|   |   |   |       ├── repl_output.scala
-|   |   |   |       ├── repl_session.scala
-|   |   |   |       ├── server_utils.scala
-|   |   |   |       ├── session_manager.scala
+|   |   |   |       ├── document_utils.scala                           # Utilities for document checkpoint and facts
+|   |   |   |       ├── edit_utils.scala                               # Utilities for snappits editing
+|   |   |   |       ├── repl_backend_gateway.scala                     # Scala code exposing Isabelle/ML methods
+|   |   |   |       ├── repl_backend.scala                             # REPL backend definition
+|   |   |   |       ├── repl_ml_communication.scala                    # Scala <--> ML interaction code
+|   |   |   |       ├── repl_output.scala                              
+|   |   |   |       ├── repl_session.scala                             # Define Scala session behaviour
+|   |   |   |       ├── server_utils.scala                             # Key script for Isabelle server and session creation
+|   |   |   |       ├── session_manager.scala                          # Scala level session manager, not used
 |   |   |   |       ├── thy_info.scala
 |   |   |   |       ├── thy_parsing.scala
 |   |   |   |       ├── thy_status.scala
 |   |   |   |       └── vector_env.scala
 |   |   ├── ml/
-|   |   |   └── REPL.ML
+|   |   |   └── REPL.ML                                                # ML code for extracting facts and subgoals from proofs
 |   |   └── python/
-|   |       ├── isabelle_client.py
-|   |       ├── isabelle_repl.py
+|   |       ├── isabelle_client.py                                     # Python end wrapper to REPL backend
+|   |       ├── isabelle_repl.py                                       # Local REPL interface from IsabelleGym 1.0
 |   |       ├── operation.py
-|   |       ├── repl_backend_gateway.py
-|   |       ├── session_manager.py
-|   |       └── thy_init.py
-|   ├── thys/
+|   |       ├── repl_backend_gateway.py                                # Python end wrapper for REPL creation
+|   |       ├── session_manager.py                                     # Unused session manager wrapper
+|   |       └── thy_init.py                                            # Responsible for create managable wrapper .thy file to import dependencies
+|   ├── thys/                                                          # Cache for wrapper .thy files
 |   ├── __init__.py
-|   ├── build.gradle
-|   ├── demo_repl.py
+|   ├── build.gradle                                                   # Gradle scala compiler properties
+|   ├── demo_repl.py                                                   # A demo REPL interface for local IsabelleGym 1.0
 |   ├── gradlew
 |   ├── gradlew.bat
 |   ├── README.md
 |   ├── settings.gradle
-|   └── temp.txt
-├── server/
+|   └── temp.txt                                                       # Wrapper .thy file template from IsabelleGym 1.0
+├── server/                                                            # Server implementation
 |   └── app/
 |       ├── api/
 |       |   └── v1/
-|       |   |   ├── schemas
-|       |   |   ├── router.py
-|       |   |   └── ws.py
+|       |   |   ├── schemas/                                           
+|       |   |   |   └── API_models.py                                  # Python models for API requests and responses
+|       |   |   ├── router.py                                          # Main controller
+|       |   |   └── ws.py                                              # Not implemented websocket endpoint
 |       ├── core/
-|       |   ├── config.py
-|       |   └── logging.py
+|       |   ├── config.py                                              # Configuration file
+|       |   └── logging.py                                             # Logger configuration
 |       ├── services/
-|       |   ├── build_verify.py
-|       |   ├── internal_models.py
-|       |   ├── session_manager.py
-|       |   ├── session.py
-|       |   ├── theory_chunks.py
-|       |   ├── theory_parsing.py
-|       |   └── threaded_backend.py
-|       ├── dependencies.py
-|       ├── errors.py
-|       └── main.py
-├── server_gym/
+|       |   ├── build_verify.py                                        # Bigstep verifier utilising Isabelle build command line
+|       |   ├── internal_models.py                                     # Internal schemas for requests and return types
+|       |   ├── session_manager.py                                     # Session manager implementation
+|       |   ├── session.py                                             # Individual session implementation
+|       |   ├── theory_chunks.py                                       # Helper script for command preview
+|       |   ├── theory_parsing.py                                      # Helper script for theory parsing
+|       |   └── threaded_backend.py                                    # Wrapping each session with concurrent subthreads
+|       ├── dependencies.py                                            # Sharing the same session manager instance accross scripts
+|       ├── errors.py                                                  # Schema for error
+|       └── main.py                                                    # Server entrypoint
+├── server_gym/                                                        # Modified version of some scripts from IsabelleGym 2.0 to use for server
 |   ├── isabelle_gym.py
-|   └── success_checker.py
+|   └── success_checker.py                                             # Modified for use in checking error messages
 ├── docker-compose.yml
 ├── Dockerfile
 ├── install.sh
