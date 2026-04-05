@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Optional
 
 from client.async_client import IsabelleGymAsyncClient
-from eval_stats import safe_mean, safe_median, summarize_metric
+from evaluation.scripts.eval_stats import safe_mean, safe_median, summarize_metric
 
 
 @dataclass

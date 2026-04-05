@@ -12,7 +12,7 @@ from typing import Optional
 
 import httpx
 from client.async_client import IsabelleGymAsyncClient
-from eval_stats import (
+from evaluation.scripts.eval_stats import (
     is_warning_message,
     normalize_execution_time,
     preview,
@@ -20,7 +20,7 @@ from eval_stats import (
     safe_median,
     summarize_metric,
 )
-from theory_splitter import (
+from evaluation.scripts.theory_splitter import (
     determine_theory_name,
     extract_imports,
     split_commands,

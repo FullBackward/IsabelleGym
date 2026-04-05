@@ -12,13 +12,13 @@ from typing import Any, Optional
 
 import requests
 
-from eval_stats import (
+from evaluation.scripts.eval_stats import (
     preview,
     safe_mean,
     safe_median,
     summarize_metric,
 )
-from theory_splitter import (
+from evaluation.scripts.theory_splitter import (
     HEADER_RE,
     END_RE,
     determine_theory_name,

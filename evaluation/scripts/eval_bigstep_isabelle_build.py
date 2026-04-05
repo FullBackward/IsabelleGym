@@ -12,8 +12,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Optional
 
-from eval_stats import safe_mean, safe_median, summarize_metric
-from theory_splitter import determine_theory_name
+from evaluation.scripts.eval_stats import safe_mean, safe_median, summarize_metric
+from evaluation.scripts.theory_splitter import determine_theory_name
 
 try:
     import resource

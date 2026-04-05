@@ -9,14 +9,14 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from eval_stats import (
+from evaluation.scripts.eval_stats import (
     is_warning_message,
     preview,
     safe_mean,
     safe_median,
     summarize_metric,
 )
-from theory_splitter import (
+from evaluation.scripts.theory_splitter import (
     determine_theory_name,
     extract_imports,
     split_commands,

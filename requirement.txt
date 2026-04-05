@@ -18,3 +18,5 @@ uvicorn
 
 watchfiles
 fastapi[standard]
+
+httpx
