@@ -52,7 +52,7 @@ object Document_Utils {
         .foreach(_._2 match {
           case XML.Elem(Markup(markup_type, _), body) =>
             markup_type match {
-              case Markup.WRITELN_MESSAGE => ()
+              case Markup.WRITELN_MESSAGE => output_pretty_if_non_empty(body, Repl_Output.add_output)
               case Markup.STATE_MESSAGE =>
                 if (!(command.is_ignored || hide_state_messages))
                   output_pretty_if_non_empty(body, Repl_Output.add_output)

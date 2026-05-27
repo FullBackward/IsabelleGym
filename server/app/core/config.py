@@ -4,7 +4,7 @@ import re
 
 
 class API:
-    VERSION: Final = "0.0.1"
+    VERSION: Final = "0.0.2"
 
 
 class Server:
@@ -15,7 +15,7 @@ class Server:
     ENABLE_CACHE: Final = os.getenv("ISABELLE_ENABLE_CACHE", "false").lower() in {
         "1", "true", "yes", "on",
     }
-    INITIAL_SESSIONS: Final = int(os.getenv("ISABELLE_INITIAL_SESSIONS", "8"))
+    INITIAL_SESSIONS: Final = int(os.getenv("ISABELLE_INITIAL_SESSIONS", "3"))
     MAX_CACHE_SIZE: Final = int(os.getenv("ISABELLE_MAX_CACHE_SIZE", "1"))
     SHOW_STATES: Final = os.getenv("ISABELLE_SHOW_STATES", "false").lower() in {
         "1", "true", "yes", "on",
@@ -25,6 +25,17 @@ class Server:
     HOST: Final = os.getenv("ISABELLE_SERVER_HOST", "0.0.0.0")
     PORT: Final = int(os.getenv("ISABELLE_SERVER_PORT", "8000"))
 
+class Repl:
+    SUBGOALS_TIMEOUT_S: Final     = int(os.getenv("ISABELLE_REPL_SUBGOALS_TIMEOUT", "20"))
+    LOCAL_FACTS_TIMEOUT_S: Final  = int(os.getenv("ISABELLE_REPL_LOCAL_FACTS_TIMEOUT", "20"))
+    GLOBAL_FACTS_TIMEOUT_MIN: Final = int(os.getenv("ISABELLE_REPL_GLOBAL_FACTS_TIMEOUT_MINUTES", "5"))
+
+    GATEWAY_POLL_INTERVAL: Final  = float(os.getenv("ISABELLE_REPL_GATEWAY_POLL_INTERVAL", "0.1"))
+    GATEWAY_POLL_TIMEOUT: Final   = float(os.getenv("ISABELLE_REPL_GATEWAY_POLL_TIMEOUT", "20.0"))
+    GATEWAY_TERMINATE_WAIT: Final = float(os.getenv("ISABELLE_REPL_GATEWAY_TERMINATE_WAIT", "3.0"))
+
+    BACKEND_EXIT_TIMEOUT: Final   = float(os.getenv("ISABELLE_BACKEND_EXIT_TIMEOUT", "60.0"))
+    BACKEND_JOIN_TIMEOUT: Final   = float(os.getenv("ISABELLE_BACKEND_JOIN_TIMEOUT", "5.0"))
 
 class RegularExp:
     IMPORT_RE = re.compile(r'(?ms)\bimports\b(?P<imports>.*?)\bbegin\b')

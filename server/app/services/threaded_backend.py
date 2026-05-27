@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from repl.src.python.repl_backend_gateway import ReplBackend
+from server.app.core.config import Repl
 from server.app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -21,6 +22,8 @@ class _Job:
 
 
 class ThreadedBackend:
+    EXIT_TIMEOUT: float = Repl.BACKEND_EXIT_TIMEOUT
+    JOIN_TIMEOUT: float = Repl.BACKEND_JOIN_TIMEOUT
     def __init__(self, backend: ReplBackend, name: str):
         self._backend = backend
         self._name = name
@@ -57,9 +60,12 @@ class ThreadedBackend:
 
     def close(self) -> None:
         logger.info("closing threaded backend worker=%s", self._name)
+        exit_fut = self.submit(self._backend.exit)
         try:
-            self._backend.exit()
+            exit_fut.result(timeout=self.EXIT_TIMEOUT)
+        except Exception:
+            logger.exception("backend exit raised during close worker=%s", self._name)
         finally:
             self._stop.set()
-            self._t.join(timeout=2.0)
+            self._t.join(timeout=self.JOIN_TIMEOUT)
             logger.info("threaded backend closed worker=%s", self._name)

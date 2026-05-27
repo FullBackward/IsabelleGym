@@ -29,9 +29,12 @@ object Repl_ML_Communication {
   // Per-channel infrastructure
   // -----------------------------------------------------------------------
 
-  private val SUBGOALS_TIMEOUT_SECONDS = 20
-  private val LOCAL_FACTS_TIMEOUT_SECONDS = 20
-  private val GLOBAL_FACTS_TIMEOUT_MINUTES = 5
+  private val SUBGOALS_TIMEOUT_SECONDS: Int =
+    sys.env.get("ISABELLE_REPL_SUBGOALS_TIMEOUT").flatMap(_.toIntOption).getOrElse(20)
+  private val LOCAL_FACTS_TIMEOUT_SECONDS: Int =
+    sys.env.get("ISABELLE_REPL_LOCAL_FACTS_TIMEOUT").flatMap(_.toIntOption).getOrElse(20)
+  private val GLOBAL_FACTS_TIMEOUT_MINUTES: Int =
+  sys.env.get("ISABELLE_REPL_GLOBAL_FACTS_TIMEOUT_MINUTES").flatMap(_.toIntOption).getOrElse(5)
 
   private val DEFAULT_CHANNEL = "__default__"
 

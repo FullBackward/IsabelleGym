@@ -12,9 +12,12 @@ import py4j
 import py4j.java_collections
 from py4j.java_gateway import GatewayParameters, JavaGateway
 
+from server.app.core.config import Repl
+
 REPO_ROOT = Path(__file__).parent.parent.parent.parent.parent
 repl_gateway_path = REPO_ROOT / "app/repl/src/main/scala/repl/repl_backend_gateway.scala"
 isabelle_executable = REPO_ROOT / "opt" / "isabelle" / "bin" / "isabelle"
+
 
 EnvStateID = int
 
@@ -83,9 +86,9 @@ class ReplBackendGatewayProcess:
     """
 
     # Configurable via subclass or monkey-patch; avoids hardcoded magic numbers.
-    POLL_INTERVAL: float = 0.1
-    POLL_TIMEOUT: float = 20.0
-    TERMINATE_WAIT: float = 3.0
+    POLL_INTERVAL: float = Repl.GATEWAY_POLL_INTERVAL
+    POLL_TIMEOUT: float = Repl.GATEWAY_POLL_TIMEOUT
+    TERMINATE_WAIT: float = Repl.GATEWAY_TERMINATE_WAIT
 
     def __init__(self) -> None:
         # pylint: disable=consider-using-with, subprocess-popen-preexec-fn
