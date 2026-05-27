@@ -8,25 +8,52 @@ object Document_Utils {
     Document.Node.Name(s"$qualifier.$thy_name", theory = thy_name)
   }
 
+  // private def stable_node_snapshot(
+  //     session: Headless.Session,
+  //     node_name: Document.Node.Name,
+  //     wait_until_all_commands_processed: Boolean = true
+  // ): Document.Snapshot = {
+  //   val node_snapshot =
+  //     session.await_stable_snapshot().switch(node_name)
+  //   val version = node_snapshot.version
+  //   var commands_to_process = node_snapshot.node.commands
+
+  //   def all_commands_processed = {
+  //     val state = session.get_state()
+  //     commands_to_process = commands_to_process.filterNot { command =>
+  //       val states = state.command_states(version, command)
+  //       // Try with both `maybe_consolidated` and `consolidated` for showing sledgehammer outputs
+  //       // states.exists(st => st.maybe_consolidated || st.consolidated)
+  //       states.exists(st => st.consolidated)
+  //     }
+  //     commands_to_process.isEmpty
+  //   }
+
+  //   while (wait_until_all_commands_processed && !all_commands_processed)
+  //     session.output_delay.sleep()
+
+  //   node_snapshot
+  // }
+
   private def stable_node_snapshot(
       session: Headless.Session,
       node_name: Document.Node.Name,
       wait_until_all_commands_processed: Boolean = true
   ): Document.Snapshot = {
-    val node_snapshot =
+    var node_snapshot =
       session.await_stable_snapshot().switch(node_name)
-    val version = node_snapshot.version
-    var commands_to_process = node_snapshot.node.commands
 
-    def all_commands_processed = {
-      val state = session.get_state()
-      commands_to_process = commands_to_process.filterNot { command =>
-        val states = state.command_states(version, command)
-        // Try with both `maybe_consolidated` and `consolidated` for showing sledgehammer outputs
-        // states.exists(st => st.maybe_consolidated || st.consolidated)
-        states.exists(st => st.consolidated)
+    def all_commands_processed: Boolean = {
+      node_snapshot = session.await_stable_snapshot().switch(node_name)
+      val version = node_snapshot.version
+      val state   = session.get_state()
+      node_snapshot.node.commands.forall { command =>
+        scala.util.Try(state.command_states(version, command))
+          .fold(
+            _   => true,  // version no longer tracked → PIDE advanced → done
+            sts => sts.exists(st => st.maybe_consolidated || st.consolidated)
+          )
       }
-      commands_to_process.isEmpty
     }
 
     while (wait_until_all_commands_processed && !all_commands_processed)
@@ -54,7 +81,9 @@ object Document_Utils {
         .foreach(_._2 match {
           case XML.Elem(Markup(markup_type, _), body) =>
             markup_type match {
-              case Markup.WRITELN_MESSAGE => output_pretty_if_non_empty(body, Repl_Output.add_output)
+              case Markup.WRITELN_MESSAGE => 
+                if (!hide_state_messages)
+                  output_pretty_if_non_empty(body, Repl_Output.add_output)
               case Markup.STATE_MESSAGE =>
                 if (!(command.is_ignored || hide_state_messages))
                   output_pretty_if_non_empty(body, Repl_Output.add_output)
