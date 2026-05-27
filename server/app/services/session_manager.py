@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 from repl.src.python.repl_backend_gateway import ReplBackendGatewayProcess
 from repl.src.python.thy_init import ThyInit
-from server.app.core.config import Server
+from server.app.core.config import Server, Timeouts
 from server.app.core.logging import get_logger, logging_context
 from server.app.errors import GatewayUnavailable, PoolExhausted, SessionBusyError, SessionError, SessionLeaseError, SessionNotFound, SessionStartError
 from server.app.services.session import SessionStatus, _Isabelle_Session
@@ -27,12 +27,14 @@ class SessionManager:
 
     def __init__(
         self,
-        idle_timeout: float = Server.IDLE_TIMEOUT_SECONDS,
+        idle_timeout: float = Timeouts.SESSION_IDLE_TIMEOUT ,
         pool_size: int = Server.DEFAULT_POOL_SIZE,
+        cleanup_interval: float = Timeouts.CLEANUP_INTERVAL,
         initial_sessions: int = Server.INITIAL_SESSIONS,
     ):
         self.idle_timeout = idle_timeout
         self.pool_size = pool_size
+        self.cleanup_interval = cleanup_interval
         self.initial_sessions = initial_sessions
 
         self.gateway: Optional[ReplBackendGatewayProcess] = None
@@ -543,7 +545,7 @@ class SessionManager:
 
     async def cleanup_idle_sessions(self) -> None:
         while True:
-            await asyncio.sleep(60)
+            await asyncio.sleep(self.cleanup_interval)
             now = time.time()
             to_close: List[uuid.UUID] = []
 

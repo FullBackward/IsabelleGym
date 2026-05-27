@@ -245,9 +245,9 @@ class ReplBackendGatewayProcess:
         # Step 1: Shutdown Py4J gateway (tells Scala we're done)
         try:
             self.gateway.shutdown()
-            print("✓ Gateway shutdown initiated")
+            print("Gateway shutdown initiated")
         except Exception as e:
-            print(f"⚠ Gateway shutdown warning: {e}")
+            print(f"Gateway shutdown warning: {e}")
     
         # Step 2: Give Isabelle time to cleanup gracefully
         # This is CRITICAL - Isabelle needs time to cleanup threads
@@ -256,25 +256,25 @@ class ReplBackendGatewayProcess:
         # Step 3: Politely ask process to terminate (SIGTERM to process, not group)
         try:
             self.process.terminate()  # Sends SIGTERM to single process
-            print("✓ Terminate signal sent to gateway process")
+            print("Terminate signal sent to gateway process")
         except Exception as e:
-            print(f"⚠ Terminate warning: {e}")
+            print(f"Terminate warning: {e}")
     
         # Step 4: Wait for graceful shutdown (with timeout)
         wait_start_time = time.time()
-        wait_timeout = 3.0  # Increased from 1s to 3s
+        wait_timeout = self.TERMINATE_WAIT
     
         while time.time() - wait_start_time < wait_timeout:
             if self.process.poll() is not None:
-                print(f"✓ Gateway process exited cleanly after {time.time() - wait_start_time:.2f}s")
+                print(f"Gateway process exited cleanly after {time.time() - wait_start_time:.2f}s")
                 return
             time.sleep(0.1)
     
         # Step 5: Force kill only if graceful shutdown failed
-        print(f"⚠ Gateway process did not exit after {wait_timeout}s, force killing...")
+        print(f"Gateway process did not exit after {wait_timeout}s, force killing...")
         try:
             self.process.kill()  # SIGKILL to single process
             self.process.wait(timeout=2)
-            print("✓ Gateway process force killed")
+            print("Gateway process force killed")
         except Exception as e:
-            print(f"⚠ Force kill warning: {e}")
+            print(f"Force kill warning: {e}")

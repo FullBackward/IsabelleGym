@@ -7,7 +7,7 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
-from server.app.core.config import Logging
+from server.app.core.config import Logging, Timeouts
 from server.app.core.logging import get_logger, logging_context
 from server.app.errors import SessionError, SessionLeaseError
 from server.app.services.threaded_backend import ThreadedBackend
@@ -86,7 +86,7 @@ class _Isabelle_Session:
     def update_activity(self):
         self.last_activity = time.time()
 
-    def is_idle(self, timeout: float = 300, now: Optional[float] = None) -> bool:
+    def is_idle(self, timeout: float = Timeouts.IDLE_DEFAULT, now: Optional[float] = None) -> bool:
         now = time.time() if now is None else now
         return (now - self.last_activity) > timeout
 
@@ -285,7 +285,7 @@ class _Isabelle_Session:
         logger.info("state restored successfully after big-step failure")
         return None
 
-    def execute_command(self, command: str, timeout: float = 30.0) -> SmallStepExecuteResult:
+    def execute_command(self, command: str, timeout: float = Timeouts.COMMAND_DEFAULT) -> SmallStepExecuteResult:
         self.update_activity()
         self._acquire_request()
         start_time = time.time()
@@ -357,7 +357,7 @@ class _Isabelle_Session:
         finally:
             self._release_request()
 
-    def big_step(self, theory_name: str, proof: str, timeout: float = 300.0) -> BigStepExecuteResult:
+    def big_step(self, theory_name: str, proof: str, timeout: float = Timeouts.BIGSTEP_DEFAULT) -> BigStepExecuteResult:
         self.update_activity()
         self._acquire_request()
         start_time = time.time()
@@ -473,7 +473,7 @@ class _Isabelle_Session:
         finally:
             self._release_request()
 
-    def get_proof_state(self, timeout: float = 30.0) -> ProofState | SessionExecutionError:
+    def get_proof_state(self, timeout: float = Timeouts.PROOF_STATE) -> ProofState | SessionExecutionError:
         self.update_activity()
         self._acquire_request()
         start_time = time.time()
@@ -495,7 +495,7 @@ class _Isabelle_Session:
         finally:
             self._release_request()
 
-    def save_checkpoint(self, timeout: float = 30.0) -> CheckPointInfo | SessionExecutionError:
+    def save_checkpoint(self, timeout: float = Timeouts.CHECKPOINT_SAVE) -> CheckPointInfo | SessionExecutionError:
         self.update_activity()
         self._acquire_request()
         start_time = time.time()
@@ -514,7 +514,7 @@ class _Isabelle_Session:
         finally:
             self._release_request()
 
-    def restore_checkpoint(self, checkpoint_id: int, timeout: float = 30.0) -> bool | SessionExecutionError:
+    def restore_checkpoint(self, checkpoint_id: int, timeout: float = Timeouts.CHECKPOINT_RESTORE) -> bool | SessionExecutionError:
         self.update_activity()
         self._acquire_request()
         start_time = time.time()

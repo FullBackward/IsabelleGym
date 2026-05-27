@@ -60,7 +60,7 @@ class Session_Manager(show_states: Boolean, enable_cache: Boolean = false, max_c
       } finally {
         source.close()
       }
-    }.getOrElse(4096L)
+    }.getOrElse(sys.env.get("ISABELLE_MEMORY_FALLBACK_SYSTEM_MB").flatMap(_.toLongOption).getOrElse(4096L))
   }
   
   private def get_validated_memory_metrics(): (Long, Long, Long, Long, Double, Boolean) = {
@@ -145,9 +145,10 @@ class Session_Manager(show_states: Boolean, enable_cache: Boolean = false, max_c
       val (used, available, max, _, pressure, _) = get_validated_memory_metrics()
       val system_memory_mb = get_system_memory_mb()
       
-      val pressure_threshold = 85.0  
-      val min_available_mb = 256L * 1024L * 1024L 
-      val session_count_limit = 20  
+      val pressure_threshold   = sys.env.get("ISABELLE_MEMORY_PRESSURE_THRESHOLD").flatMap(_.toDoubleOption).getOrElse(85.0)
+      val min_available_mb     = sys.env.get("ISABELLE_MEMORY_MIN_AVAILABLE_MB").flatMap(_.toLongOption).getOrElse(256L) * 1024L * 1024L
+      val session_count_limit  = sys.env.get("ISABELLE_MEMORY_SESSION_COUNT_LIMIT").flatMap(_.toIntOption).getOrElse(20)
+
       
       val system_memory_bytes = system_memory_mb * 1024 * 1024
       val system_memory_safe = used < (system_memory_bytes * 0.8)
@@ -185,11 +186,13 @@ class Session_Manager(show_states: Boolean, enable_cache: Boolean = false, max_c
       }
       
       val (after_used, _, _, _, after_pressure, _) = get_validated_memory_metrics()
-      if (after_pressure > 90.0) {
+      val gc_trigger = sys.env.get("ISABELLE_MEMORY_GC_TRIGGER_THRESHOLD").flatMap(_.toDoubleOption).getOrElse(90.0)
+      val gc_sleep_ms = sys.env.get("ISABELLE_MEMORY_GC_SLEEP_MS").flatMap(_.toLongOption).getOrElse(100L)
+      if (after_pressure > gc_trigger) {
         println(s"High memory pressure (${f"$after_pressure%.1f"}%), suggesting GC...")
         System.gc()
-        
-        Thread.sleep(100)
+
+        Thread.sleep(gc_sleep_ms)
         val (final_used, _, _, _, final_pressure, _) = get_validated_memory_metrics()
         val memory_freed = before_used - final_used
         println(s"Memory cleanup completed: freed ${format_bytes_to_mb(memory_freed)}MB, pressure: ${f"$before_pressure%.1f"}% → ${f"$final_pressure%.1f"}%")

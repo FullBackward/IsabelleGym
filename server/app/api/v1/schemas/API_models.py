@@ -1,6 +1,7 @@
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
+from server.app.core.config import Timeouts
 
 
 class SessionCreateRequest(BaseModel):
@@ -18,7 +19,7 @@ class SessionResponse(BaseModel):
 
 class CommandRequest(BaseModel):
     command: str
-    timeout: Optional[float] = 30.0
+    timeout: Optional[float] = Timeouts.COMMAND_DEFAULT
 
 
 class FailureLocationResponse(BaseModel):
@@ -49,13 +50,6 @@ class ProofStateResponse(BaseModel):
 class StateCheckpoint(BaseModel):
     checkpoint_id: int
     timestamp: float
-
-
-class ProofAttemptRequest(BaseModel):
-    theorem: str
-    agent_type: str = "simple_mcts"
-    max_steps: int = 100
-    timeout: float = 60.0
 
 
 class ProofAttemptResponse(BaseModel):
@@ -95,4 +89,4 @@ class BigStepTheoryRequest(BaseModel):
     dependencies: List[str] = Field(default_factory=list)
     field: str | None = None
     theory: str
-    timeout: float = 300.0
+    timeout: float = Timeouts.BIGSTEP_DEFAULT

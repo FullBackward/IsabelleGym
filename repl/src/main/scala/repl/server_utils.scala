@@ -27,8 +27,9 @@ object Server_Utils {
     def retry_attempt_start_server(max_retries: Int): Option[(Server.Info, Server)] =
       LazyList.continually(attempt_start_server()).take(max_retries).find(_.isDefined).flatten
 
-    val max_retries = 5
+    val max_retries = sys.env.get("ISABELLE_SERVER_START_RETRIES").flatMap(_.toIntOption).getOrElse(5)
     retry_attempt_start_server(max_retries) match {
+
       case None => error(s"Unable to start server after ${max_retries} attempts.")
       case Some((server_info, server)) =>
         Output.writeln(s"Started server ${server_info.name}.")

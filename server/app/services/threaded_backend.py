@@ -24,6 +24,7 @@ class _Job:
 class ThreadedBackend:
     EXIT_TIMEOUT: float = Repl.BACKEND_EXIT_TIMEOUT
     JOIN_TIMEOUT: float = Repl.BACKEND_JOIN_TIMEOUT
+    QUEUE_POLL_TIMEOUT: float = Repl.BACKEND_QUEUE_POLL
     def __init__(self, backend: ReplBackend, name: str):
         self._backend = backend
         self._name = name
@@ -47,7 +48,7 @@ class ThreadedBackend:
         logger.info("threaded backend worker loop running worker=%s", self._name)
         while not self._stop.is_set():
             try:
-                job = self._q.get(timeout=0.1)
+                job = self._q.get(timeout=self.QUEUE_POLL_TIMEOUT)
             except queue.Empty:
                 continue
             try:

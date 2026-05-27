@@ -22,7 +22,9 @@ object Document_Utils {
       val state = session.get_state()
       commands_to_process = commands_to_process.filterNot { command =>
         val states = state.command_states(version, command)
-        states.exists(st => st.maybe_consolidated || st.consolidated)
+        // Try with both `maybe_consolidated` and `consolidated` for showing sledgehammer outputs
+        // states.exists(st => st.maybe_consolidated || st.consolidated)
+        states.exists(st => st.consolidated)
       }
       commands_to_process.isEmpty
     }
