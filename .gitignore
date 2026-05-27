@@ -273,3 +273,7 @@ metals.sbt
 
 .vscode/**
 .vscode
+
+.claude
+ClAUDE.md
+ISSUES.md
