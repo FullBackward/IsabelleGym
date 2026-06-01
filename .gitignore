@@ -272,7 +272,7 @@ metals.sbt
 **/HOL_corpus/**/**/
 
 .vscode/*
-!.vscode/settings.json
+.vscode/settings.json
 !.vscode/tasks.json
 !.vscode/launch.json
 !.vscode/extensions.json
