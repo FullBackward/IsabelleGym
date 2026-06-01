@@ -147,6 +147,31 @@ class IsabelleGymAsyncClient:
         )
         response.raise_for_status()
         return response.json()
+    
+    async def sledgehammer(
+        self,
+        session_id: str,
+        timeout_s: int = 30,
+        *,
+        lease_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Run Isabelle's sledgehammer on the current proof goal.
+
+        Returns a dict with keys: success (bool), suggestions (list of strings),
+        raw_output (str), execution_time (float).
+
+        The session must already be in an active proof state.
+        """
+        http_timeout = timeout_s + 30.0
+        response = await self._request(
+            "POST",
+            f"{BASE_URL}/{session_id}/sledgehammer",
+            json_body={"timeout_s": timeout_s},
+            headers=self._lease_headers(lease_id),
+            timeout=http_timeout,
+        )
+        response.raise_for_status()
+        return response.json()
 
     async def verify_bigstep_text(
         self,

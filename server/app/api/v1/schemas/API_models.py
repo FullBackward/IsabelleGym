@@ -90,3 +90,19 @@ class BigStepTheoryRequest(BaseModel):
     field: str | None = None
     theory: str
     timeout: float = Timeouts.BIGSTEP_DEFAULT
+
+
+class SledgehammerRequest(BaseModel):
+    timeout_s: int = Field(
+        default=30,
+        ge=1,
+        le=300,
+        description="Isabelle sledgehammer timeout in seconds (1–300).",
+    )
+
+
+class SledgehammerResponse(BaseModel):
+    success: bool
+    suggestions: List[str]
+    raw_output: str
+    execution_time: float

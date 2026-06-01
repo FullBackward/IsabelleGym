@@ -16,6 +16,8 @@ from .schemas.API_models import (
     SessionCreateRequest,
     SessionResponse,
     StateCheckpoint,
+    SledgehammerRequest,
+    SledgehammerResponse, 
 )
 from server.app.core.config import API, Logging
 from server.app.core.logging import get_logger, logging_context
@@ -280,6 +282,39 @@ async def rollback(session_id: str, x_lease_id: str | None = Header(None, alias=
         result = await asyncio.to_thread(session.rollback)
         output = result.total_output() if hasattr(result, "total_output") else None
         return {"success": True, "output": output}
+
+@router.post(
+    "/api/v1/sessions/{session_id}/sledgehammer",
+    response_model=SledgehammerResponse,
+)
+async def sledgehammer(
+    session_id: str,
+    request: SledgehammerRequest,
+    x_lease_id: str | None = Header(None, alias="X-Lease-Id"),
+    session_manager=Depends(get_session_manager),
+):
+    with logging_context(session_id=session_id):
+        lease_id = _require_lease_id(x_lease_id)
+        session = session_manager.get_session(
+            session_id, lease_id=lease_id, require_lease=True
+        )
+        logger.info("sledgehammer requested timeout_s=%s", request.timeout_s)
+        start = time.time()
+        suggestions: list = await asyncio.to_thread(
+            session.sledgehammer, request.timeout_s
+        )
+        elapsed = time.time() - start
+        found = len(suggestions) > 0
+        logger.info(
+            "sledgehammer finished found=%s suggestions=%s elapsed=%.2f",
+            found, len(suggestions), elapsed,
+        )
+        return SledgehammerResponse(
+            success=found,
+            suggestions=suggestions,
+            raw_output="\n".join(suggestions),
+            execution_time=elapsed,
+        )
 
 
 @router.post("/api/v1/sessions/{session_id}/enter_theory/{theory_name}")

@@ -94,6 +94,23 @@ class ReplBackend(show_states: Boolean, enable_cache: Boolean = false, max_cache
     global_facts.asJava
   }
 
+  def sledgehammer(timeout_s: Int): java.util.List[String] = {
+    val suggestions =
+      if (!repl_session.current_thy_begun) List()
+      else {
+        Repl_ML_Communication.waiting_for_sledgehammer_message(
+          {
+            send_ml_command(
+              s"""Repl.send_sledgehammer_tagged "${channel_id}" ${timeout_s} @{Isar.state}"""
+            )
+          },
+          channel_id,
+          timeout_s
+        )
+      }
+    suggestions.asJava
+  }
+
   def get_proof_state(): Repl_Result = build_result {
     if (!repl_session.current_thy_begun)
       Repl_Output.add_error(

@@ -10,6 +10,7 @@ sig
   val send_open_subgoals_tagged: string -> Toplevel.state -> unit
   val send_local_facts_tagged: string -> Toplevel.state -> unit
   val send_global_facts_tagged: string -> Toplevel.state -> int -> unit
+  val send_sledgehammer_tagged: string -> int -> Toplevel.state -> unit
 
 end;
 
@@ -114,7 +115,39 @@ fun send_global_facts_tagged channel_id state limit =
     ("CH:" ^ channel_id) :: facts |> \<^scala>\<open>add_global_facts\<close> |> ignore
   end
 
-end
+fun sledgehammer_results timeout_s state =
+  if Toplevel.is_proof state then
+    let
+      val proof_state = Toplevel.proof_of state;
+      val ctxt        = Proof.context_of proof_state;
+      (* default_params takes a context, not a theory *)
+      val params      = Sledgehammer_Commands.default_params ctxt
+                          [("timeout",  string_of_int timeout_s),
+                           ("blocking", "true")];
+      (* Collect every "Try this:" line via the output callback *)
+      val collected   = Unsynchronized.ref [];
+      fun on_output s = collected := (s :: !collected);
+      val (_, (_, suggestion)) =
+        Sledgehammer.run_sledgehammer
+          params
+          Sledgehammer.Normal
+          (SOME on_output)               (* route output here, not to PIDE buffer *)
+          1                              (* first subgoal *)
+          Sledgehammer.no_fact_override  (* use all available facts *)
+          proof_state;
+      (* on_output captures intermediate "Try this:" lines;
+         suggestion holds the best proof found (may duplicate the last line) *)
+      val extra = if suggestion = "" then [] else [suggestion]
+    in
+      List.rev (!collected) @ extra
+    end
+  else
+    []
+
+fun send_sledgehammer_tagged channel_id timeout_s state =
+  let val results = sledgehammer_results timeout_s state
+  in ("CH:" ^ channel_id) :: results |> \<^scala>\<open>add_sledgehammer_results\<close> |> ignore 
+  end
 
 val send_open_subgoals = Repl.send_open_subgoals;
 val send_local_facts = Repl.send_local_facts;
@@ -122,3 +155,4 @@ val send_global_facts = Repl.send_global_facts;
 val send_open_subgoals_tagged = Repl.send_open_subgoals_tagged;
 val send_local_facts_tagged = Repl.send_local_facts_tagged;
 val send_global_facts_tagged = Repl.send_global_facts_tagged;
+val send_sledgehammer_tagged = Repl.send_sledgehammer_tagged;

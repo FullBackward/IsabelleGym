@@ -7,6 +7,8 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
+import py4j
+
 from server.app.core.config import Logging, Timeouts
 from server.app.core.logging import get_logger, logging_context
 from server.app.errors import SessionError, SessionLeaseError
@@ -182,6 +184,25 @@ class _Isabelle_Session:
     def rollback(self, timeout: Optional[float] = None):
         logger.info("rolling back backend state")
         return self._call_backend(lambda: self.backend.raw.rollback(), timeout=timeout)
+
+    def sledgehammer(
+        self,
+        timeout_s: int = 30,
+        http_timeout: Optional[float] = None,
+    ) -> list:
+        """Call Isabelle's sledgehammer via the dedicated ML channel.
+
+        Returns a list of proof method strings (e.g. ['by (metis foo)',
+        'by (simp add: bar)']).  Returns an empty list if no proof is found
+        within timeout_s or if the session is not in a proof state.
+        """
+        logger.info("running sledgehammer timeout_s=%s", timeout_s)
+        effective_http_timeout = http_timeout or (timeout_s + 30.0)
+        raw: "py4j.java_collections.JavaList[str]" = self._call_backend(
+            lambda: self.backend.raw.sledgehammer(timeout_s),
+            timeout=effective_http_timeout,
+        )
+        return list(raw) if raw is not None else []
 
     def enter_thy(self, thy_name: str, timeout: Optional[float] = None):
         self.entered_thy = thy_name

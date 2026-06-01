@@ -34,7 +34,9 @@ object Repl_ML_Communication {
   private val LOCAL_FACTS_TIMEOUT_SECONDS: Int =
     sys.env.get("ISABELLE_REPL_LOCAL_FACTS_TIMEOUT").flatMap(_.toIntOption).getOrElse(20)
   private val GLOBAL_FACTS_TIMEOUT_MINUTES: Int =
-  sys.env.get("ISABELLE_REPL_GLOBAL_FACTS_TIMEOUT_MINUTES").flatMap(_.toIntOption).getOrElse(5)
+    sys.env.get("ISABELLE_REPL_GLOBAL_FACTS_TIMEOUT_MINUTES").flatMap(_.toIntOption).getOrElse(5)
+  private val SLEDGEHAMMER_TIMEOUT_SECONDS: Int =
+    sys.env.get("ISABELLE_REPL_SLEDGEHAMMER_TIMEOUT").flatMap(_.toIntOption).getOrElse(30)
 
   private val DEFAULT_CHANNEL = "__default__"
 
@@ -44,6 +46,8 @@ object Repl_ML_Communication {
   private val local_fact_channels =
     new ConcurrentHashMap[String, LinkedBlockingQueue[List[String]]]()
   private val global_fact_channels =
+    new ConcurrentHashMap[String, LinkedBlockingQueue[List[String]]]()
+  private val sledgehammer_channels =
     new ConcurrentHashMap[String, LinkedBlockingQueue[List[String]]]()
 
   private def get_or_create_queue(
@@ -57,6 +61,7 @@ object Repl_ML_Communication {
     subgoal_channels.remove(channel)
     local_fact_channels.remove(channel)
     global_fact_channels.remove(channel)
+    sledgehammer_channels.remove(channel)
   }
 
   // -----------------------------------------------------------------------
@@ -106,6 +111,17 @@ object Repl_ML_Communication {
     }
   }
 
+  object Sledgehammer_Results_Function extends Scala.Fun_Strings("add_sledgehammer_results") {
+    val here = Scala_Project.here
+
+    def apply(received_results: List[String]): List[String] = {
+      val (channel, results) = extract_channel(received_results)
+      val q = get_or_create_queue(sledgehammer_channels, channel)
+      if (!q.offer(results))
+        error(s"more sledgehammer messages arrived than requested (channel=$channel)")
+      List()
+    }
+  }
   // -----------------------------------------------------------------------
   // Blocking receive helpers (called from ReplBackend on the Scala side)
   // -----------------------------------------------------------------------
@@ -136,6 +152,17 @@ object Repl_ML_Communication {
     if (result == null) error(s"Timeout waiting for global facts message (channel=$channel)")
     result
   }
+
+  def waiting_for_sledgehammer_message[T](block: => T, channel: String = DEFAULT_CHANNEL, timeout_s: Int = SLEDGEHAMMER_TIMEOUT_SECONDS ): List[String] = {
+    val q = get_or_create_queue(sledgehammer_channels, channel)
+    q.clear()   // discard any stale message from a previous call
+    block
+    // give the ML side `timeout_s` (the Isabelle-level timeout) plus a
+    // 10-second grace period for overhead before declaring a Scala-side timeout
+    val result = q.poll((timeout_s + 10).toLong, TimeUnit.SECONDS)
+    if (result == null) error(s"Timeout waiting for sledgehammer message (channel=$channel)")
+    result
+  }
 }
 
 
@@ -143,5 +170,6 @@ class Scala_Functions
     extends Scala.Functions(
       Repl_ML_Communication.Open_Subgoals_Function,
       Repl_ML_Communication.Local_Facts_Function,
-      Repl_ML_Communication.Global_Facts_Function
+      Repl_ML_Communication.Global_Facts_Function,
+      Repl_ML_Communication.Sledgehammer_Results_Function
     )
