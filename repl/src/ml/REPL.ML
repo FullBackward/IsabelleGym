@@ -10,7 +10,7 @@ sig
   val send_open_subgoals_tagged: string -> Toplevel.state -> unit
   val send_local_facts_tagged: string -> Toplevel.state -> unit
   val send_global_facts_tagged: string -> Toplevel.state -> int -> unit
-  (* val send_sledgehammer_tagged: string -> int -> Toplevel.state -> unit *)
+  val send_sledgehammer_tagged: string -> int -> Toplevel.state -> unit
 
 end;
 
@@ -115,39 +115,60 @@ fun send_global_facts_tagged channel_id state limit =
     ("CH:" ^ channel_id) :: facts |> \<^scala>\<open>add_global_facts\<close> |> ignore
   end
 
-(* fun sledgehammer_results timeout_s state =
+(* Run sledgehammer on the first subgoal and collect every line it would
+   normally print (e.g. "metis found a proof...", "Try this: by (metis ...)",
+   "No proof found").  Runs SYNCHRONOUSLY in the caller's thread, so this must
+   only ever be invoked from a forked thread (see send_sledgehammer_tagged)
+   to avoid blocking the document node. *)
+fun sledgehammer_results timeout_s state =
   if Toplevel.is_proof state then
     let
       val proof_state = Toplevel.proof_of state;
       val ctxt        = Proof.context_of proof_state;
-      (* default_params takes a context, not a theory *)
-      val params      = Sledgehammer_Commands.default_params ctxt
-                          [("timeout",  string_of_int timeout_s),
-                           ("blocking", "true")];
-      (* Collect every "Try this:" line via the output callback *)
-      val collected   = Unsynchronized.ref [];
-      fun on_output s = collected := (s :: !collected);
-      val (_, (_, suggestion)) =
+      val thy         = Proof_Context.theory_of ctxt;
+      (* default_params takes a theory; "timeout" is the Isabelle-level budget
+         in seconds.  ("blocking", _) was removed in recent Isabelle and is no
+         longer a valid parameter. *)
+      val params      = Sledgehammer_Commands.default_params thy
+                          [("timeout", string_of_int timeout_s)];
+      (* Collect every message via the output callback instead of letting it
+         go to the PIDE buffer.  The actual proof methods ("Try this: ...")
+         arrive here, not in the return value (which is "" on success).
+         Strip the YXML markup (sendback/break/block control codes) so the
+         caller gets plain text, consistent with the other channels. *)
+      val collected   = Unsynchronized.ref ([] : string list);
+      fun clean_string s = XML.content_of (YXML.parse_body s);
+      fun on_output s = collected := (clean_string s :: !collected);
+      val (_, (_, message)) =
         Sledgehammer.run_sledgehammer
           params
-          Sledgehammer.Normal
-          (SOME on_output)               (* route output here, not to PIDE buffer *)
-          1                              (* first subgoal *)
-          Sledgehammer.no_fact_override  (* use all available facts *)
+          Sledgehammer_Prover.Normal
+          (SOME on_output)                   (* route output here, not to PIDE buffer *)
+          1                                  (* first subgoal *)
+          Sledgehammer_Fact.no_fact_override (* use all available facts *)
           proof_state;
-      (* on_output captures intermediate "Try this:" lines;
-         suggestion holds the best proof found (may duplicate the last line) *)
-      val extra = if suggestion = "" then [] else [suggestion]
+      val extra = if message = "" then [] else [clean_string message]
     in
       List.rev (!collected) @ extra
     end
   else
     []
 
+(* Standalone, non-blocking sledgehammer channel.
+
+   The ML command that calls this returns immediately after forking, so the
+   document node is freed and other ML channels (open_subgoals, local_facts,
+   ...) keep working while sledgehammer runs.  When the forked thread finishes
+   it pushes the results back through the tagged Scala callback, where the
+   Scala side is blocking on the matching per-channel queue. *)
 fun send_sledgehammer_tagged channel_id timeout_s state =
-  let val results = sledgehammer_results timeout_s state
-  in ("CH:" ^ channel_id) :: results |> \<^scala>\<open>add_sledgehammer_results\<close> |> ignore 
-  end*)
+  let
+    fun run () =
+      let val results = sledgehammer_results timeout_s state
+      in ("CH:" ^ channel_id) :: results |> \<^scala>\<open>add_sledgehammer_results\<close> |> ignore end
+  in
+    ignore (Isabelle_Thread.fork (Isabelle_Thread.params "repl_sledgehammer") run)
+  end
 
 end
 
@@ -157,4 +178,4 @@ val send_global_facts = Repl.send_global_facts;
 val send_open_subgoals_tagged = Repl.send_open_subgoals_tagged;
 val send_local_facts_tagged = Repl.send_local_facts_tagged;
 val send_global_facts_tagged = Repl.send_global_facts_tagged;
-(* val send_sledgehammer_tagged = Repl.send_sledgehammer_tagged; *)
+val send_sledgehammer_tagged = Repl.send_sledgehammer_tagged;
