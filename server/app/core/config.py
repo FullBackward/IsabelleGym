@@ -62,7 +62,7 @@ class RegularExp:
     IMPORT_RE = re.compile(r'(?ms)\bimports\b(?P<imports>.*?)\bbegin\b')
     IMPORT_TOKEN_RE = re.compile(r'"[^"]+"|[A-Za-z_][A-Za-z0-9_./-]*')
     THEORY_RE = re.compile(r'(?ms)^[ \t]*theory\s+(?:"([^"\n]+)"|([A-Za-z0-9_\'.-]+))')
-    
+    THEORY_HEADER_RE = re.compile(r'(?ms)\btheory\b.+?\bimports\b.+?\bbegin\b')
 
 
 class Logging:

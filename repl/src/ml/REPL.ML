@@ -156,3 +156,5 @@ val send_open_subgoals_tagged = Repl.send_open_subgoals_tagged;
 val send_local_facts_tagged = Repl.send_local_facts_tagged;
 val send_global_facts_tagged = Repl.send_global_facts_tagged;
 val send_sledgehammer_tagged = Repl.send_sledgehammer_tagged;
+
+val _ = Repl.send_open_subgoals_tagged

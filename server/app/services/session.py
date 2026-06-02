@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import py4j
 
-from server.app.core.config import Logging, Timeouts
+from server.app.core.config import Logging, Timeouts, RegularExp
 from server.app.core.logging import get_logger, logging_context
 from server.app.errors import SessionError, SessionLeaseError
 from server.app.services.threaded_backend import ThreadedBackend
@@ -330,7 +330,8 @@ class _Isabelle_Session:
                     success = is_syntax_successful(result)
                     error_message = self._result_error(result)
                     subgoal_error: Optional[str] = None
-                    if command == "end" or command == "end\n":
+                    if command == "end" or command == "end\n" or \
+                            RegularExp.THEORY_HEADER_RE.search(command):
                         subgoals = []
                     else:
                         try:
