@@ -282,3 +282,4 @@ metals.sbt
 .claude
 ClAUDE.md
 claude-work/
+repl/thys/wrap_*.thy

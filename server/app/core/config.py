@@ -23,6 +23,7 @@ class Server:
     DEFAULT_FIELD: Final = os.getenv("ISABELLE_DEFAULT_FIELD", "HOL")
     HOST: Final = os.getenv("ISABELLE_SERVER_HOST", "0.0.0.0")
     PORT: Final = int(os.getenv("ISABELLE_SERVER_PORT", "8000"))
+    MAX_LEASE_AGE: Final = int(os.getenv("ISABELLE_MAX_LEASE_AGE", "7200")) # 2 hours
 
 class Repl:
     SUBGOALS_TIMEOUT_S: Final       = int(os.getenv("ISABELLE_REPL_SUBGOALS_TIMEOUT", "20"))

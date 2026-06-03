@@ -33,6 +33,7 @@ class SessionManager:
         initial_sessions: int = Server.INITIAL_SESSIONS,
     ):
         self.idle_timeout = idle_timeout
+        self.max_lease_age = Server.MAX_LEASE_AGE
         self.pool_size = pool_size
         self.cleanup_interval = cleanup_interval
         self.initial_sessions = initial_sessions
@@ -43,6 +44,7 @@ class SessionManager:
         self._lru: "OrderedDict[uuid.UUID, _Isabelle_Session]" = OrderedDict()
         self._lock = threading.Lock()
         self._cleanup_task: Optional[asyncio.Task] = None
+
 
         # add this here
         self.build_verifier = BuildVerifier(
@@ -513,6 +515,12 @@ class SessionManager:
             if session.in_use:
                 raise SessionBusyError(f"Session {sid} is busy and cannot be closed")
             self._lru.pop(sid, None)
+            if session.in_use:
+                self._lru[sid] = session
+                self._lru.move_to_end(sid)
+                raise SessionBusyError(
+                    f"Session {sid} became busy between in_use check and pop"
+                )
             if session.leased:
                 session.release_lease()
         with logging_context(session_id=sid, field=session.field):
@@ -544,6 +552,8 @@ class SessionManager:
             ]
 
     async def cleanup_idle_sessions(self) -> None:
+        max_lease_age = self.max_lease_age
+
         while True:
             await asyncio.sleep(self.cleanup_interval)
             now = time.time()
@@ -551,14 +561,26 @@ class SessionManager:
 
             with self._lock:
                 for sid, session in list(self._lru.items()):
+                    if session.status == SessionStatus.CLOSED:
+                        continue
                     if session.leased:
-                        continue  # never evict a leased session
-                    if session.status != SessionStatus.CLOSED and session.is_idle(self.idle_timeout, now=now):
+                        if session.is_idle(max_lease_age, now=now):
+                            logger.warning(
+                                "force-closing abandoned leased session "
+                                "session_id=%s lease_id=%s idle_for=%.0fs",
+                                sid, session.lease_id, now - session.last_activity,
+                            )
+                            to_close.append(sid)
+                        continue
+                    if session.is_idle(self.idle_timeout, now=now):
                         to_close.append(sid)
 
             for sid in to_close:
                 logger.info("closing idle session session_id=%s", sid)
-                self.close_session(sid, require_lease=False)
+                try:
+                    self.close_session(sid, require_lease=False)
+                except Exception:
+                    logger.exception("failed to close idle session session_id=%s", sid)
 
     def start_cleanup_task(self) -> None:
         if self._cleanup_task is None:
