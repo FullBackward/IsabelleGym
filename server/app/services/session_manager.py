@@ -148,8 +148,11 @@ class SessionManager:
             self._cleanup_task.cancel()
             try:
                 await self._cleanup_task
-            except Exception:
+            except asyncio.CancelledError:
                 pass
+            except Exception:
+                logger.exception("error awaiting cancelled cleanup task")
+            self._cleanup_task = None
 
         with self._lock:
             sessions = list(self._lru.values())

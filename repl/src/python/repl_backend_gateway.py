@@ -236,46 +236,73 @@ class ReplBackendGatewayProcess:
             enable_memory_management, initial_thys, field,
         )
     
-    def terminate(self) -> None:
+    def _signal_group(self, sig: int) -> None:
+        """Send ``sig`` to the gateway's whole process group.
+
+        The gateway is started with ``preexec_fn=os.setsid`` so that the
+        ``isabelle scala`` launcher, the JVM it spawns, and every Isabelle
+        child live in one process group. Signalling only ``self.process``
+        reaches the launcher shell but leaves the JVM grandchild orphaned
+        (reparented to init), which leaks a multi-GB heap on every shutdown.
+        Signalling the group takes the whole tree down together.
         """
-    Gracefully terminate the Scala REPL gateway.
-    
-    FIXED: Proper shutdown sequence without process group signals
-    """
-    
-        # Step 1: Shutdown Py4J gateway (tells Scala we're done)
+        try:
+            pgid = os.getpgid(self.process.pid)
+        except (ProcessLookupError, OSError):
+            pgid = None
+        if pgid is not None:
+            try:
+                os.killpg(pgid, sig)
+                return
+            except (ProcessLookupError, OSError):
+                pass
+        # Fallback: group already gone or getpgid failed — signal the process.
+        try:
+            self.process.send_signal(sig)
+        except (ProcessLookupError, OSError, ValueError):
+            pass
+
+    def terminate(self) -> None:
+        """Gracefully terminate the Scala REPL gateway and all its children.
+
+        Sends SIGTERM to the gateway process group, waits up to
+        ``TERMINATE_WAIT`` for a clean exit, then SIGKILLs the group as a
+        backstop so no orphaned JVM/Isabelle processes survive.
+        """
+        # Step 1: Shutdown Py4J gateway (tells Scala we're done).
         try:
             self.gateway.shutdown()
             print("Gateway shutdown initiated")
         except Exception as e:
             print(f"Gateway shutdown warning: {e}")
-    
-        # Step 2: Give Isabelle time to cleanup gracefully
-        # This is CRITICAL - Isabelle needs time to cleanup threads
-        time.sleep(0.5)  # 500ms for graceful cleanup
-    
-        # Step 3: Politely ask process to terminate (SIGTERM to process, not group)
-        try:
-            self.process.terminate()  # Sends SIGTERM to single process
-            print("Terminate signal sent to gateway process")
-        except Exception as e:
-            print(f"Terminate warning: {e}")
-    
-        # Step 4: Wait for graceful shutdown (with timeout)
+
+        # Step 2: Give Isabelle time to cleanup threads gracefully.
+        time.sleep(0.5)
+
+        # Step 3: SIGTERM the whole process group (not just the launcher shell).
+        self._signal_group(signal.SIGTERM)
+        print("Terminate signal sent to gateway process group")
+
+        # Step 4: Wait for graceful shutdown.
         wait_start_time = time.time()
-        wait_timeout = self.TERMINATE_WAIT
-    
-        while time.time() - wait_start_time < wait_timeout:
+        while time.time() - wait_start_time < self.TERMINATE_WAIT:
             if self.process.poll() is not None:
-                print(f"Gateway process exited cleanly after {time.time() - wait_start_time:.2f}s")
-                return
+                print(
+                    f"Gateway leader exited after {time.time() - wait_start_time:.2f}s"
+                )
+                break
             time.sleep(0.1)
-    
-        # Step 5: Force kill only if graceful shutdown failed
-        print(f"Gateway process did not exit after {wait_timeout}s, force killing...")
+        else:
+            print(
+                f"Gateway leader did not exit after {self.TERMINATE_WAIT}s"
+            )
+
+        # Step 5: SIGKILL the group unconditionally as a backstop. If the group
+        # already exited this is a no-op (ESRCH is swallowed); if the JVM
+        # grandchild outlived its launcher, this reaps it instead of leaking it.
+        self._signal_group(signal.SIGKILL)
         try:
-            self.process.kill()  # SIGKILL to single process
             self.process.wait(timeout=2)
-            print("Gateway process force killed")
-        except Exception as e:
-            print(f"Force kill warning: {e}")
+        except Exception:
+            pass
+        print("Gateway process group terminated")
