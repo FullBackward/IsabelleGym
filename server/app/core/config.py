@@ -24,6 +24,13 @@ class Server:
     HOST: Final = os.getenv("ISABELLE_SERVER_HOST", "0.0.0.0")
     PORT: Final = int(os.getenv("ISABELLE_SERVER_PORT", "8000"))
     MAX_LEASE_AGE: Final = int(os.getenv("ISABELLE_MAX_LEASE_AGE", "7200")) # 2 hours
+    # Bound concurrent sledgehammer (and other heavy ML) calls. sledgehammer is
+    # itself a multi-prover parallel job; too many at once spikes memory and can
+    # OOM-kill the shared gateway JVM. Defaults to ~half the cores (capped), which
+    # tracks the empirical throughput knee.
+    MAX_CONCURRENT_SLEDGEHAMMER: Final = int(
+        os.getenv("ISABELLE_MAX_CONCURRENT_SLEDGEHAMMER", str(max(1, min(8, (os.cpu_count() or 4) // 8))))
+    )
 
 class Repl:
     SUBGOALS_TIMEOUT_S: Final       = int(os.getenv("ISABELLE_REPL_SUBGOALS_TIMEOUT", "20"))
@@ -40,11 +47,11 @@ class Repl:
 
 
 class Memory:
+    # Python/cgroup-based memory management (server-side). The pressure %, the
+    # available-memory floor, and the host-memory fallback are read from the
+    # container cgroup by server.app.services.memory_monitor.MemoryMonitor.
     PRESSURE_THRESHOLD: Final   = float(os.getenv("ISABELLE_MEMORY_PRESSURE_THRESHOLD", "85.0"))
     MIN_AVAILABLE_MB: Final     = int(os.getenv("ISABELLE_MEMORY_MIN_AVAILABLE_MB", "256"))
-    SESSION_COUNT_LIMIT: Final  = int(os.getenv("ISABELLE_MEMORY_SESSION_COUNT_LIMIT", "20"))
-    GC_TRIGGER_THRESHOLD: Final = float(os.getenv("ISABELLE_MEMORY_GC_TRIGGER_THRESHOLD", "90.0"))
-    GC_SLEEP_MS: Final          = int(os.getenv("ISABELLE_MEMORY_GC_SLEEP_MS", "100"))
     FALLBACK_SYSTEM_MB: Final   = int(os.getenv("ISABELLE_MEMORY_FALLBACK_SYSTEM_MB", "4096"))
     SERVER_START_RETRIES: Final = int(os.getenv("ISABELLE_SERVER_START_RETRIES", "5"))
 

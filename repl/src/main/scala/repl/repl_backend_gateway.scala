@@ -12,24 +12,24 @@ object ReplBackendGateway {
   def get_repl_backend_with_full_cache_config(show_states: Boolean, enable_cache: Boolean, max_cache_size: Int, field: String = "HOL"): ReplBackend = 
     new ReplBackend(show_states, enable_cache, max_cache_size, field = field)
 
-  def get_repl_backend_with_memory_management(show_states: Boolean, enable_cache: Boolean, max_cache_size: Int, enable_memory_management: Boolean, field: String = "HOL"): ReplBackend = 
-    new ReplBackend(show_states, enable_cache, max_cache_size, enable_memory_management, field = field)
+  def get_repl_backend_with_memory_management(show_states: Boolean, enable_cache: Boolean, max_cache_size: Int, field: String = "HOL"): ReplBackend =
+    new ReplBackend(show_states, enable_cache, max_cache_size, field = field)
 
-  def get_repl_backend_with_initial_theories(show_states: Boolean, enable_cache: Boolean, max_cache_size: Int, enable_memory_management: Boolean, initial_thys: java.util.List[String], field: String = "HOL"): ReplBackend = 
-    new ReplBackend(show_states, enable_cache, max_cache_size, enable_memory_management, initial_thys.asScala.toList, field = field)
-  
+  def get_repl_backend_with_initial_theories(show_states: Boolean, enable_cache: Boolean, max_cache_size: Int, initial_thys: java.util.List[String], field: String = "HOL"): ReplBackend =
+    new ReplBackend(show_states, enable_cache, max_cache_size, initial_thys.asScala.toList, field = field)
+
   private var shared_session_manager: Option[Session_Manager] = None
-  
-  def get_shared_session_manager(show_states: Boolean, enable_cache: Boolean, max_cache_size: Int, enable_memory_management: Boolean): Session_Manager = {
+
+  def get_shared_session_manager(show_states: Boolean, enable_cache: Boolean, max_cache_size: Int): Session_Manager = {
     if (shared_session_manager.isEmpty) {
-      shared_session_manager = Some(new Session_Manager(show_states, enable_cache, max_cache_size, enable_memory_management))
+      shared_session_manager = Some(new Session_Manager(show_states, enable_cache, max_cache_size))
     }
     shared_session_manager.get
   }
-  
-  def get_repl_backend_with_shared_cache(show_states: Boolean, enable_cache: Boolean, max_cache_size: Int, enable_memory_management: Boolean, initial_thys: java.util.List[String], field: String = "HOL"): ReplBackend = {
-    val session_manager = get_shared_session_manager(show_states, enable_cache, max_cache_size, enable_memory_management)
-    new ReplBackend(show_states, enable_cache, max_cache_size, enable_memory_management, initial_thys.asScala.toList, Some(session_manager), field)
+
+  def get_repl_backend_with_shared_cache(show_states: Boolean, enable_cache: Boolean, max_cache_size: Int, initial_thys: java.util.List[String], field: String = "HOL"): ReplBackend = {
+    val session_manager = get_shared_session_manager(show_states, enable_cache, max_cache_size)
+    new ReplBackend(show_states, enable_cache, max_cache_size, initial_thys.asScala.toList, Some(session_manager), field)
   }
   
   def clear_shared_session_manager(): Unit = {

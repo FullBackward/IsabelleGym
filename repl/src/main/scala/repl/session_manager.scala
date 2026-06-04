@@ -6,7 +6,7 @@ import scala.collection.mutable
 
 case class Session_Data(id: UUID.T, session: Headless.Session)
 
-class Session_Manager(show_states: Boolean, enable_cache: Boolean = false, max_cache_size: Int = 10, enable_memory_management: Boolean = true) {
+class Session_Manager(show_states: Boolean, enable_cache: Boolean = false, max_cache_size: Int = 10) {
   private val (server_info, server) = Server_Utils.start_server()
   private val running_sessions: Synchronized[mutable.Set[UUID.T]] =
     Synchronized(mutable.Set.empty)
@@ -29,179 +29,13 @@ class Session_Manager(show_states: Boolean, enable_cache: Boolean = false, max_c
     Synchronized(mutable.Set.empty)
 
   def get_cache_stats(): Map[String, Int] = cache_stats.value.toMap
-  
-  private def format_bytes_to_mb(bytes: Long): String = {
-    val mb = bytes / (1024.0 * 1024.0)
-    f"$mb%.1f"
-  }
-  
-  private def get_system_memory_mb(): Long = {
-    scala.util.Try {
-      val source = scala.io.Source.fromFile("/proc/meminfo")
-      try {
-        val lines = source.getLines()
-        var result: Option[Long] = None
-        for (line <- lines if result.isEmpty) {
-          if (line.startsWith("MemTotal:")) {
-            val parts = line.split("\\s+")
-            if (parts.length >= 2) {
-              val kb = parts(1).toLong
-              result = Some(kb / 1024)  
-            }
-          }
-        }
-        result.getOrElse {
-          val runtime = Runtime.getRuntime
-          val totalMemory = runtime.totalMemory()
-          val maxMemory = runtime.maxMemory()
-          val estimatedSystemMemory = Math.max(totalMemory, maxMemory) / 0.8
-          (estimatedSystemMemory / (1024 * 1024)).toLong
-        }
-      } finally {
-        source.close()
-      }
-    }.getOrElse(sys.env.get("ISABELLE_MEMORY_FALLBACK_SYSTEM_MB").flatMap(_.toLongOption).getOrElse(4096L))
-  }
-  
-  private def get_validated_memory_metrics(): (Long, Long, Long, Long, Double, Boolean) = {
-    val runtime = Runtime.getRuntime
-    val jvm_max = runtime.maxMemory()
-    val total = runtime.totalMemory()
-    val free = runtime.freeMemory()
-    
-    val system_memory_mb = get_system_memory_mb()
-    val system_memory_bytes = system_memory_mb * 1024 * 1024
-    
-    val jvm_max_mb = jvm_max / (1024 * 1024)
-    val is_jvm_report_suspicious = jvm_max_mb > system_memory_mb * 10 
-    
-    val effective_max = if (is_jvm_report_suspicious) {
-      (system_memory_bytes * 0.8).toLong
-    } else {
-      jvm_max
-    }
-    
-    val used_in_allocated = total - free
-    val unallocated = effective_max - total
-    val total_available = free + unallocated
-    val memory_pressure = if (effective_max > 0) (used_in_allocated.toDouble / effective_max) * 100 else 0.0
-    
-    if (is_jvm_report_suspicious) {
-      println(s"WARNING: JVM reports ${jvm_max_mb}MB max memory, but system only has ${system_memory_mb}MB")
-      println(s"Using corrected limit: ${effective_max / (1024 * 1024)}MB (80% of system memory)")
-    }
-    
-    (used_in_allocated, total_available, effective_max, total, memory_pressure, is_jvm_report_suspicious)
-  }
 
   def get_cache_status(): String = {
     val stats = cache_stats.value
     val cache_size = session_cache.value.values.map(_.size).sum
-    val memoryInfo = if (enable_memory_management) {
-      val (_, _, _, _, pressure, _) = get_validated_memory_metrics()
-      s", Memory: ${f"$pressure%.1f"}%"
-    } else ""
-    s"Cache: ${cache_size} sessions, Hits: ${stats("hits")}, Misses: ${stats("misses")}, Creates: ${stats("creates")}, Evictions: ${stats("evictions")}, Enabled: ${enable_cache}, MaxSize: ${max_cache_size}${memoryInfo}"
+    s"Cache: ${cache_size} sessions, Hits: ${stats("hits")}, Misses: ${stats("misses")}, Creates: ${stats("creates")}, Evictions: ${stats("evictions")}, Enabled: ${enable_cache}, MaxSize: ${max_cache_size}"
   }
-  
-  def get_memory_report(): String = {
-    if (enable_memory_management) {
-      val (used, available, max, allocated, pressure, is_corrected) = get_validated_memory_metrics()
-      val system_memory_mb = get_system_memory_mb()
-      
-      val correction_note = if (is_corrected) {
-        s"\nNOTE: JVM memory report was corrected (system memory: ${system_memory_mb}MB)"
-      } else {
-        ""
-      }
-      
-      s"""Memory Report:
-         |Memory Pressure: ${f"$pressure%.1f"}% 
-         |Used Memory: ${format_bytes_to_mb(used)} MB
-         |Available Memory: ${format_bytes_to_mb(available)} MB  
-         |Effective Max: ${format_bytes_to_mb(max)} MB
-         |System Memory: ${system_memory_mb} MB
-         |Total Allocated: ${format_bytes_to_mb(allocated)} MB
-         |Memory management enabled: $enable_memory_management
-         |Session count: ${running_sessions.value.size}
-         |Cache size: ${session_cache.value.values.map(_.size).sum}${correction_note}
-         |""".stripMargin
-    } else {
-      "Memory management disabled"
-    }
-  }
-  
-  def get_memory_status(): String = {
-    if (enable_memory_management) {
-      val (used, available, max, _, pressure, _) = get_validated_memory_metrics()
-      s"Memory: ${f"$pressure%.1f"}% (${format_bytes_to_mb(used)}MB used / ${format_bytes_to_mb(available)}MB available / ${format_bytes_to_mb(max)}MB max)"
-    } else {
-      "Memory management disabled"
-    }
-  }
-  
-  def can_create_new_session(): Boolean = {
-    if (enable_memory_management) {
-      val (used, available, max, _, pressure, _) = get_validated_memory_metrics()
-      val system_memory_mb = get_system_memory_mb()
-      
-      val pressure_threshold   = sys.env.get("ISABELLE_MEMORY_PRESSURE_THRESHOLD").flatMap(_.toDoubleOption).getOrElse(85.0)
-      val min_available_mb     = sys.env.get("ISABELLE_MEMORY_MIN_AVAILABLE_MB").flatMap(_.toLongOption).getOrElse(256L) * 1024L * 1024L
-      val session_count_limit  = sys.env.get("ISABELLE_MEMORY_SESSION_COUNT_LIMIT").flatMap(_.toIntOption).getOrElse(20)
 
-      
-      val system_memory_bytes = system_memory_mb * 1024 * 1024
-      val system_memory_safe = used < (system_memory_bytes * 0.8)
-      
-      val memory_ok = pressure < pressure_threshold && available > min_available_mb && system_memory_safe
-      val session_count_ok = running_sessions.value.size < session_count_limit
-      
-      if (!memory_ok) {
-        println(s"Memory pressure too high: ${f"$pressure%.1f"}%, available: ${format_bytes_to_mb(available)}MB")
-        if (!system_memory_safe) {
-          println(s"System memory protection: using ${used / (1024*1024)}MB of ${system_memory_mb}MB system memory")
-        }
-      }
-      if (!session_count_ok) {
-        println(s"Too many active sessions: ${running_sessions.value.size}")
-      }
-      
-      memory_ok && session_count_ok
-    } else {
-      true // always create new sessions if memory management disabled
-    }
-  }
-  
-  def perform_memory_cleanup(): Unit = {
-    if (enable_memory_management) {
-      val (before_used, _, _, _, before_pressure, _) = get_validated_memory_metrics()
-      
-      if (enable_cache && session_cache.value.nonEmpty) {
-        val cache_size_before = session_cache.value.values.map(_.size).sum
-        evict_if_needed()
-        val cache_size_after = session_cache.value.values.map(_.size).sum
-        if (cache_size_before > cache_size_after) {
-          println(s"Cache cleanup: evicted ${cache_size_before - cache_size_after} sessions")
-        }
-      }
-      
-      val (after_used, _, _, _, after_pressure, _) = get_validated_memory_metrics()
-      val gc_trigger = sys.env.get("ISABELLE_MEMORY_GC_TRIGGER_THRESHOLD").flatMap(_.toDoubleOption).getOrElse(90.0)
-      val gc_sleep_ms = sys.env.get("ISABELLE_MEMORY_GC_SLEEP_MS").flatMap(_.toLongOption).getOrElse(100L)
-      if (after_pressure > gc_trigger) {
-        println(s"High memory pressure (${f"$after_pressure%.1f"}%), suggesting GC...")
-        System.gc()
-
-        Thread.sleep(gc_sleep_ms)
-        val (final_used, _, _, _, final_pressure, _) = get_validated_memory_metrics()
-        val memory_freed = before_used - final_used
-        println(s"Memory cleanup completed: freed ${format_bytes_to_mb(memory_freed)}MB, pressure: ${f"$before_pressure%.1f"}% → ${f"$final_pressure%.1f"}%")
-      } else {
-        println(s"Memory cleanup completed: pressure: ${f"$before_pressure%.1f"}% → ${f"$after_pressure%.1f"}%")
-      }
-    }
-  }
-  
   private def increment_session_ref(session_id: UUID.T): Unit = {
     session_refs.change(refs => {
       refs.update(session_id, refs.getOrElse(session_id, 0) + 1)

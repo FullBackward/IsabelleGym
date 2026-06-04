@@ -1,6 +1,6 @@
 # IsabelleGym Server — Issue Investigation & Fix Plan
 
-**Date:** 2026-06-02 (revised)
+**Date:** 2026-06-04 (revised)
 **Scope:** Server layer (`server/`), REPL layer (`repl/`)
 **Status:** Sledgehammer is implemented and verified — its section has been removed from this file (see `claude-work/impl-sledgehammer/` for the test/demonstration artifacts and notes). What remains below is the memory-management / session-closing review, re-checked against the current code.
 
@@ -11,9 +11,11 @@
 1. [Memory Management / Session Closing](#memory-management--session-closing)
    - [Bug 1: Race Condition in `ThreadedBackend.close()` — RESOLVED](#bug-1-race-condition-in-threadedbackendclose--resolved)
    - [Bug 2: Join Timeout Too Short — RESOLVED](#bug-2-join-timeout-too-short--resolved)
-   - [Bug 3: Leased Sessions Never Idle-Evicted — OPEN](#bug-3-leased-sessions-never-idle-evicted--open)
-   - [Bug 4: TOCTOU on `in_use` Check — OPEN](#bug-4-toctou-on-in_use-check--open)
-   - [Bug 5: Isabelle Processes Persist After Close — OPEN](#bug-5-isabelle-processes-persist-after-close--open)
+   - [Bug 3: Leased Sessions Never Idle-Evicted — RESOLVED](#bug-3-leased-sessions-never-idle-evicted--open)
+   - [Bug 4: TOCTOU on `in_use` Check — RESOLVED](#bug-4-toctou-on-in_use-check--open)
+   - [Bug 5: Isabelle Processes Persist After Close — RESOLVED](#bug-5-isabelle-processes-persist-after-close--open)
+2. [Bug 6: Gateway OOM Under Concurrent Sledgehammer — RESOLVED](#bug-6-gateway-oom-under-concurrent-sledgehammer--resolved)
+3. [Claude Work Log (dated)](#claude-work-log-dated)
 
 ---
 
@@ -33,7 +35,7 @@ HTTP DELETE /sessions/{id}
   → remove_session_async(...) per running session  +  Server_Utils.stop_server(...)
 ```
 
-**Status summary:** Bugs 1 and 2 (the original high-severity Python-side close bugs) are now fixed in the current code. Bugs 3 and 4 remain open; the suggested fixes were re-checked against the current code and still apply. Bug 5 is new: it captures the still-observed symptom that Isabelle OS processes linger after a session is closed, which the Python-side fixes do **not** explain — the remaining cause is in the Scala/Isabelle shutdown path.
+**Status summary:** Bugs 1–6 are resolved in the current code. Bug 5 (Isabelle OS processes lingering after close) was re-checked on 2026-06-04 and is **not reproducible** — clean reaping verified for normal close and close-during-sledgehammer; the accumulation-to-OOM it described is explained by the now-fixed gateway-orphan-on-shutdown (`killpg`, `claude-work/fix-shutdown/`) and gateway-OOM-under-concurrency (Bug 6) issues. A narrow optional hardening item remains (force-kill fallback for a genuinely wedged ML process). See the [Claude Work Log](#claude-work-log-dated) for the dated history.
 
 ---
 
@@ -98,11 +100,11 @@ class ThreadedBackend:
 
 ### Bug 3: Leased Sessions Never Idle-Evicted — OPEN
 
-**File:** `server/app/services/session_manager.py`, `cleanup_idle_sessions()` (lines ~546–561)
+**File:** `server/app/services/session_manager.py`, `cleanup_idle_sessions()`
 **Severity:** Medium
-**Status:** ❌ Open — fix below re-verified against current code and ready to apply.
+**Status:** ✅ Resolved — current code force-evicts abandoned leased sessions older than `self.max_lease_age` (`Server.MAX_LEASE_AGE`, env `ISABELLE_MAX_LEASE_AGE`), exactly as in the fix below.
 
-#### Root cause (still present)
+#### Original root cause
 
 ```python
 async def cleanup_idle_sessions(self) -> None:
@@ -161,11 +163,11 @@ Optionally make `max_lease_age` configurable via `ISABELLE_MAX_LEASE_AGE_SECONDS
 
 ### Bug 4: TOCTOU on `in_use` Check — OPEN
 
-**File:** `server/app/services/session_manager.py`, `close_session()` (lines ~497–521)
+**File:** `server/app/services/session_manager.py`, `close_session()`
 **Severity:** Low
-**Status:** ❌ Open — suggestion still valid; tiny residual race.
+**Status:** ✅ Resolved — current code re-checks `in_use` after `pop()` and restores + raises `SessionBusyError` ("became busy between in_use check and pop"), as in the fix below.
 
-#### Root cause (still present)
+#### Original root cause
 
 ```python
 with self._lock:
@@ -214,9 +216,23 @@ Once `pop()` succeeds, no new `get_session()` can return this session, so no new
 
 **Files:** `repl/src/main/scala/repl/session_manager.scala` (`shutdown`, `remove_session_async`), `repl/src/main/scala/repl/server_utils.scala` (`stop_server`, `stop_session`)
 **Severity:** High (operational — causes OOM over time)
-**Status:** ❌ Open / not yet root-caused. This is the observed symptom: after sessions are closed, `isabelle`/`poly` processes keep running in the background and accumulate until the container is OOM-killed (exit 137). Bugs 1–2 being fixed means the Python side now correctly waits for `exit()` to return, so the remaining cause is in the Scala/Isabelle shutdown path.
+**Status:** ✅ Resolved — re-checked 2026-06-04 and **not reproducible** in current code; the accumulation-to-OOM symptom is explained by two *other* issues fixed since (gateway orphan on shutdown → `killpg`, `claude-work/fix-shutdown/`; gateway OOM under concurrency → Bug 6). See `claude-work/bug5-session-close-leak/NOTES.md`.
 
-#### Leads to investigate
+#### Verification (2026-06-04, container `isabelle-gym`)
+
+Each `ReplBackend` owns its own Scala `Session_Manager` + Isabelle server, so a close
+(`session.close() → ReplBackend.exit() → session_manager_instance.shutdown() → stop_server`)
+tears down that backend's whole Isabelle server and its `poly` process. Measured:
+
+- **Normal create → work → close:** poly 2 → 4 (after create) → **2 within ~2 s** of `DELETE`, stable.
+- **Close WHILE sledgehammer runs (lead #3):** (poly, provers) = (2,0) baseline → (4,3) mid-run → **(2,0) within 1 s** of `DELETE`, stable for 20 s. The forked sledgehammer thread and its ATP subprocesses (`eprover`/`z3`/`cvc5`/`vampire`) are reaped together with the session.
+
+**Residual (separate hardening, not the OOM symptom):** a session whose ML process is
+*genuinely wedged* (a non-terminating tactic that ignores interrupts) may not respond to
+`Server.exit`, and there is no OS-level force-kill fallback (`kill -9` on the tracked
+server PID). Tracked as an optional follow-up below.
+
+#### Original leads (investigated; symptom no longer present)
 
 1. **Async removals may outrace server stop.** `Session_Manager.shutdown()` forks `remove_session_async` per running session, then joins `pending_removals`, then calls `Server_Utils.stop_server`. Each backend has its **own** `Session_Manager` and therefore its **own** Isabelle server process (`Server.init` in `start_server`). Confirm every `remove_session_async` future is actually in `pending_removals` before the join (it is added synchronously today) and that `stop_session` (`Server_Commands.Session_Stop`) returns a success `return_code` rather than erroring out silently.
 
@@ -226,9 +242,49 @@ Once `pop()` succeeds, no new `get_session()` can return this session, so no new
 
 4. **No OS-level reaping.** There is no fallback that force-kills a server PID if graceful `Server.exit` fails. Consider tracking the spawned server PID and `kill`-ing it (and orphaned ATP children) as a last resort during `shutdown()`.
 
-#### Suggested next step
+#### Optional follow-up (hardening only)
 
-Add `ps -ef | grep -E "isabelle|poly|server"` probes around a single create→close cycle in the container to confirm which process survives, then decide whether the fix belongs in `stop_session` (per-session ML), `stop_server` (`Server.exit`), or a new force-kill fallback. Until then, the operational workaround is to **restart the container between runs** (already the established dev workflow).
+The poly-probe check above (`claude-work/bug5-session-close-leak/`) confirmed normal and
+sledgehammer-interrupt closes reap cleanly. The only remaining gap is a last-resort
+**force-kill fallback** in `stop_server`/`shutdown` that `kill -9`s the tracked Isabelle
+server PID (and orphaned ATP children) if graceful `Server.exit` does not return within a
+timeout — to cover a genuinely wedged ML process. Low priority; not the OOM symptom.
+
+---
+
+### Bug 6: Gateway OOM Under Concurrent Sledgehammer — RESOLVED
+
+**Files:** `server/app/core/config.py`, `server/app/services/session_manager.py`, `server/app/api/v1/router.py`
+**Severity:** High (operational — bricked the whole server)
+**Status:** ✅ Resolved — fixed and verified 2026-06-04 (see `claude-work/impl-sledgehammer/SCALING_NOTES.md`).
+
+#### Root cause
+
+Found by the scale harness `claude-work/impl-sledgehammer/test_sledgehammer_scaling.py`. At ~16 concurrent `sledgehammer` calls, the single shared Py4J **gateway JVM** was OOM-killed by the kernel:
+
+```
+scala: line 68: 15680 Killed   ".../java" -Xmx4g ... repl_backend_gateway.scala
+py4j.java_gateway: An error occurred while trying to connect to the Java server (127.0.0.1:39143)
+```
+
+Each `sledgehammer` is itself a multi-prover parallel job (balloons its `poly` heap + forks several ATP processes). A burst of them spikes memory; the OOM killer takes the gateway JVM; and because there was **no gateway recovery**, every subsequent request returned HTTP 500 — the server stayed bricked until manual restart. The Python cgroup admission gate (Bug-fix from 2026-06-03, see Work Log) did not prevent this: it gates memory at session-*create* time, but the spike is from *running* a heavy op on already-admitted idle sessions.
+
+#### Fix (two parts)
+
+1. **Concurrency semaphore** — bound in-flight sledgehammers server-wide.
+   - `config.py`: `Server.MAX_CONCURRENT_SLEDGEHAMMER` (env `ISABELLE_MAX_CONCURRENT_SLEDGEHAMMER`, default `~cores/8`, i.e. 4 on a 32-core box — tracks the empirical throughput knee).
+   - `session_manager.py`: `self.sledgehammer_sem = asyncio.Semaphore(...)`.
+   - `router.py`: the sledgehammer endpoint runs under `async with session_manager.sledgehammer_sem:`; excess requests queue (backpressure) instead of oversubscribing.
+2. **Gateway health-check + auto-restart** — `session_manager.py`:
+   - `gateway_alive()` (via `ReplBackendGatewayProcess.has_terminated()`).
+   - `_ensure_gateway()` now detects a dead gateway and calls `_recover_gateway_locked()` — purges the now-invalid sessions and rebuilds the gateway — so the next request recovers instead of 500-ing.
+   - the background cleanup loop also recovers a dead gateway proactively.
+   - `GET /` reports `gateway_alive` (status `degraded` when false) and `max_concurrent_sledgehammer`.
+
+#### Verification (2026-06-04, container `isabelle-gym`, 32 cores)
+
+- **Semaphore:** re-running the harness at W=16 (which previously OOM-killed the gateway) now completes **32/32** with memory flat at ~3.2 GB; no 500s, isolation still PASS.
+- **Auto-restart:** `claude-work/impl-sledgehammer/test_gateway_recovery.sh` SIGKILLs the gateway process group → `GET /` shows `status=degraded, gateway_alive=false` → `POST /sessions` returns **200** (auto-recovered) → `GET /` shows `status=healthy, gateway_alive=true`. Previously this was 500-forever.
 
 ---
 
@@ -237,6 +293,24 @@ Add `ps -ef | grep -E "isabelle|poly|server"` probes around a single create→cl
 | File | Change | Status |
 |---|---|---|
 | `server/app/services/threaded_backend.py` | Queue `exit()` + configurable `EXIT_TIMEOUT`/`JOIN_TIMEOUT` | ✅ Done (Bug 1, Bug 2) |
-| `server/app/services/session_manager.py` | `cleanup_idle_sessions()`: add `max_lease_age` force-eviction path | ❌ Pending (Bug 3) |
-| `server/app/services/session_manager.py` | `close_session()`: re-check `in_use` after `pop()` | ❌ Pending (Bug 4) |
-| `repl/.../session_manager.scala`, `repl/.../server_utils.scala` | Ensure Isabelle server/session OS processes actually terminate on close | ❌ Pending / investigate (Bug 5) |
+| `server/app/services/session_manager.py` | `cleanup_idle_sessions()`: add `max_lease_age` force-eviction path | ✅ Done (Bug 3) |
+| `server/app/services/session_manager.py` | `close_session()`: re-check `in_use` after `pop()` | ✅ Done (Bug 4) |
+| (none — verification only) | Isabelle server/session OS processes confirmed to terminate on close (incl. mid-sledgehammer) | ✅ Verified not-reproducible (Bug 5); optional force-kill fallback remains |
+| `server/app/core/config.py`, `session_manager.py`, `router.py` | Sledgehammer concurrency semaphore + gateway auto-restart | ✅ Done (Bug 6) |
+
+---
+
+## Claude Work Log (dated)
+
+Test/demonstration artifacts live under `claude-work/<task>/` (each with a `NOTES.md`). Summary of work completed:
+
+| Date | Task | What was done | Artifacts |
+|---|---|---|---|
+| 2026-06-03 | **Shutdown fix** | Two bugs: (1) `SessionManager.shutdown()` let `asyncio.CancelledError` escape (it's a `BaseException`, not caught by `except Exception`) → uvicorn "Application shutdown failed" + teardown skipped; (2) `ReplBackendGatewayProcess.terminate()` signalled only the launcher shell, leaving the JVM orphaned (4 GB-heap leak → container OOM `Exited 137`). Fixed: catch `CancelledError`; `killpg` the gateway process group. | `claude-work/fix-shutdown/` |
+| 2026-06-03 | **Memory-mgmt investigation** | Found the Scala memory management was dead three ways: never called by the server, wrong layer (per-backend, 1 session each), wrong metric (JVM heap, not the `poly` processes). | `claude-work/investigate-memory-management/` |
+| 2026-06-03 | **Memory mgmt → Python** | Moved memory management into the Python `SessionManager`, measuring real container memory via cgroup v2 (`MemoryMonitor`). Under pressure: evict idle LRU sessions, then 503 (never kill busy/leased). Removed the dead Scala code (rebuilt `repl.jar`) and synced the Py4J layer. Also fixed `PoolExhausted` being mis-mapped to 500. | `claude-work/impl-python-memory-mgmt/` |
+| 2026-06-04 | **Sledgehammer concurrency at scale** | Built an N-way isolation + throughput-scaling harness. Result: isolation PASS at N=6 (no crossed channels); throughput knee ≈ 4 on 32 cores; **surfaced Bug 6** (gateway OOM at W=16). | `claude-work/impl-sledgehammer/SCALING_NOTES.md`, `test_sledgehammer_scaling.py` |
+| 2026-06-04 | **Bug 6 fix** | Sledgehammer concurrency semaphore + gateway health-check/auto-restart (see Bug 6 above). Verified: W=16 no longer OOMs; killed gateway auto-recovers on next request. | `claude-work/impl-sledgehammer/test_gateway_recovery.sh` |
+| 2026-06-04 | **Bug 5 re-check** | Measured poly/prover process counts across create→close and close-during-sledgehammer. Both reap cleanly (≤2 s), so Bug 5 is not reproducible; marked resolved. Optional force-kill fallback for wedged ML processes noted. | `claude-work/bug5-session-close-leak/` |
+
+*Last updated: 2026-06-04 02:00 GMT.*

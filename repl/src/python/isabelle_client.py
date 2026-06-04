@@ -13,18 +13,16 @@ class IsabelleClient:
         show_states: bool = False,
         enable_cache: bool = False,
         max_cache_size: int = 10,
-        enable_memory_management: bool = False,
         shared_cache: bool = False,
         initial_thys: list[str] = None,
         field: str = "HOL"
     ) -> None:
         self.repl_backend_gateway_process = ReplBackendGatewayProcess()
         self.repl_backend_gateway_process_init = True
-        
+
         self.show_states = show_states
         self.enable_cache = enable_cache
         self.max_cache_size = max_cache_size
-        self.enable_memory_management = enable_memory_management
         self.shared_cache = shared_cache
         self.thy_init = ThyInit()
         self.main_session_field = field
@@ -43,7 +41,7 @@ class IsabelleClient:
         
         if shared_cache:
             self.repl_backend = self.repl_backend_gateway_process.get_repl_backend_with_shared_cache(
-                show_states, enable_cache, max_cache_size, enable_memory_management, java_list, self.main_session_field
+                show_states, enable_cache, max_cache_size, java_list, self.main_session_field
             )
 
             self.use_multi_session = True
@@ -53,7 +51,7 @@ class IsabelleClient:
         else:
 
             self.repl_backend = self.repl_backend_gateway_process.get_repl_backend_with_initial_theories(
-                show_states, enable_cache, max_cache_size, enable_memory_management, java_list, self.main_session_field
+                show_states, enable_cache, max_cache_size, java_list, self.main_session_field
             )
             self.use_multi_session = False
             self.sessions = None
@@ -219,7 +217,7 @@ class IsabelleClient:
 
         # use shared cache in multi-session mode
         new_backend = self.repl_backend_gateway_process.get_repl_backend_with_shared_cache(
-            self.show_states, self.enable_cache, self.max_cache_size, self.enable_memory_management, java_list, field
+            self.show_states, self.enable_cache, self.max_cache_size, java_list, field
         )
 
         self.sessions[session_id] = {
@@ -321,58 +319,3 @@ class IsabelleClient:
         
         backend = self.sessions[session_id]['backend']
         return backend.get_cache_status()
-    
-    # memory management methods
-    def get_memory_report(self) -> str:
-        if self.use_multi_session:
-            backend = self._get_active_backend()
-        else:
-            backend = self.repl_backend
-            
-        if backend is None:
-            return "Backend not available"
-        try:
-            return backend.get_memory_report()
-        except Exception as e:
-            return f"Error getting memory report: {e}"
-    
-    def get_memory_status(self) -> str:
-        if self.use_multi_session:
-            backend = self._get_active_backend()
-        else:
-            backend = self.repl_backend
-            
-        if backend is None:
-            return "Backend not available"
-        try:
-            return backend.get_memory_status()
-        except Exception as e:
-            return f"Error getting memory status: {e}"
-    
-    def can_create_new_session(self) -> bool:
-        if self.use_multi_session:
-            backend = self._get_active_backend()
-        else:
-            backend = self.repl_backend
-            
-        if backend is None:
-            return False
-        try:
-            return backend.can_create_new_session()
-        except Exception as e:
-            print(f"Error checking session creation capability: {e}")
-            return False
-    
-    def perform_memory_cleanup(self) -> None:
-        if self.use_multi_session:
-            backend = self._get_active_backend()
-        else:
-            backend = self.repl_backend
-            
-        if backend is None:
-            print("Backend not available for memory cleanup")
-            return
-        try:
-            backend.perform_memory_cleanup()
-        except Exception as e:
-            print(f"Error performing memory cleanup: {e}")

@@ -13,6 +13,7 @@ from repl.src.python.thy_init import ThyInit
 from server.app.core.config import Server, Timeouts
 from server.app.core.logging import get_logger, logging_context
 from server.app.errors import GatewayUnavailable, PoolExhausted, SessionBusyError, SessionError, SessionLeaseError, SessionNotFound, SessionStartError
+from server.app.services.memory_monitor import MemoryMonitor
 from server.app.services.session import SessionStatus, _Isabelle_Session
 from server.app.services.threaded_backend import ThreadedBackend
 
@@ -45,6 +46,19 @@ class SessionManager:
         self._lock = threading.Lock()
         self._cleanup_task: Optional[asyncio.Task] = None
 
+        # Container-aware memory management (replaces the old Scala JVM-heap
+        # logic). Gated by ENABLE_MEMORY_MANAGEMENT; the monitor itself is cheap
+        # and always constructed so reporting works even when gating is off.
+        self.memory_management_enabled = Server.ENABLE_MEMORY_MANAGEMENT
+        self.memory = MemoryMonitor()
+
+        # Bound concurrent sledgehammer (heavy ML) calls server-wide. Without
+        # this, a burst of simultaneous sledgehammers spikes memory and can
+        # OOM-kill the shared gateway JVM (see ISSUES.md). Lazily bound to the
+        # running loop on first use.
+        self.sledgehammer_sem = asyncio.Semaphore(Server.MAX_CONCURRENT_SLEDGEHAMMER)
+        self.max_concurrent_sledgehammer = Server.MAX_CONCURRENT_SLEDGEHAMMER
+
 
         # add this here
         self.build_verifier = BuildVerifier(
@@ -61,6 +75,12 @@ class SessionManager:
         where = self._where("_ensure_gateway")
         try:
             with _gateway_lock:
+                # If the gateway JVM died (e.g. OOM-killed under a sledgehammer
+                # burst), its sessions are all invalid. Purge them and rebuild
+                # instead of leaving the server bricked with 500s.
+                if self.gateway is not None and self.gateway.has_terminated():
+                    logger.error("REPL gateway has terminated (likely OOM-killed); recovering")
+                    self._recover_gateway_locked()
                 if self.gateway is None:
                     logger.info("starting REPL gateway")
                     self.gateway = ReplBackendGatewayProcess()
@@ -68,6 +88,40 @@ class SessionManager:
         except Exception as e:
             logger.exception("failed to start REPL gateway")
             raise GatewayUnavailable(f"{where}: failed to start REPL gateway: {e}") from e
+
+    def gateway_alive(self) -> bool:
+        gw = self.gateway
+        if gw is None:
+            return False
+        try:
+            return not gw.has_terminated()
+        except Exception:
+            return False
+
+    def _recover_gateway_locked(self) -> None:
+        """Tear down a dead gateway and its now-invalid sessions so the next
+        ``_ensure_gateway`` rebuilds. Caller holds ``_gateway_lock``.
+
+        The sessions' backends point at the dead JVM, so close() is best-effort
+        only. thy_init is reset and recreated lazily on the next create.
+        """
+        with self._lock:
+            dead = list(self._lru.values())
+            self._lru.clear()
+        logger.error("purging %d session(s) belonging to the dead gateway", len(dead))
+        for s in dead:
+            try:
+                s.close()
+            except Exception:
+                pass  # backend is dead; nothing to talk to
+        old = self.gateway
+        self.gateway = None
+        self.thy_init = None
+        if old is not None:
+            try:
+                old.terminate()
+            except Exception:
+                pass
 
     def _normalize_field(self, field: Optional[str]) -> str:
         if field is None:
@@ -187,6 +241,44 @@ class SessionManager:
             self.thy_init = None
         logger.info("session manager shutdown finished")
 
+    def _pop_oldest_idle_locked(self) -> Optional[Tuple[uuid.UUID, _Isabelle_Session]]:
+        """Pop the oldest idle (not in_use, not leased) session. Caller holds _lock."""
+        for sid in self._lru:
+            s = self._lru[sid]
+            if not s.in_use and not s.leased:
+                return sid, self._lru.pop(sid)
+        return None
+
+    def _relieve_memory_pressure(self, where: str):
+        """Evict idle LRU sessions oldest-first while under memory pressure.
+
+        Returns the latest MemorySnapshot. Closes sessions outside the manager
+        lock. Stops when memory can admit again or no idle session remains.
+        Synchronous (closing a session blocks); call via asyncio.to_thread from
+        async contexts.
+        """
+        snap = self.memory.read()
+        if self.memory.can_admit(snap):
+            return snap
+        while not self.memory.can_admit(snap):
+            with self._lock:
+                popped = self._pop_oldest_idle_locked()
+            if popped is None:
+                break  # nothing idle left to reclaim
+            sid, sess = popped
+            try:
+                with logging_context(session_id=sid, field=sess.field):
+                    logger.warning(
+                        "evicting idle session under memory pressure "
+                        "pressure=%.1f%% used=%.0fMB available=%.0fMB where=%s",
+                        snap.pressure_pct, snap.used_mb, snap.available_mb, where,
+                    )
+                    sess.close()
+            except Exception:
+                logger.exception("failed to close session during memory eviction sid=%s", sid)
+            snap = self.memory.read()
+        return snap
+
     async def _create_session(
         self,
         initial_thys: Optional[List[str]] = None,
@@ -229,6 +321,20 @@ class SessionManager:
                 logger.exception("failed to prepare initial theory file")
                 raise RuntimeError(f"{where}: failed to generate initial theory file: {e}") from e
 
+            # Memory admission control: before allocating a new backend (the real
+            # memory consumer), make sure the container has room. Reclaim idle
+            # sessions first; only refuse if pressure persists with nothing idle
+            # left to evict. Busy/leased sessions are never touched.
+            if self.memory_management_enabled:
+                snap = await asyncio.to_thread(self._relieve_memory_pressure, where)
+                if not self.memory.can_admit(snap):
+                    raise PoolExhausted(
+                        f"{where}: cannot create session: memory pressure too high "
+                        f"({snap.pressure_pct:.0f}%, {snap.available_mb:.0f}MB available) "
+                        f"and no idle sessions to evict. Try again later or raise the "
+                        f"container memory limit / ISABELLE_MEMORY_PRESSURE_THRESHOLD."
+                    )
+
             session_id = uuid.uuid4()
 
             try:
@@ -240,7 +346,6 @@ class SessionManager:
                             show_states=Server.SHOW_STATES,
                             enable_cache=Server.ENABLE_CACHE,
                             max_cache_size=Server.MAX_CACHE_SIZE,
-                            enable_memory_management=Server.ENABLE_MEMORY_MANAGEMENT,
                             initial_thys=java_list,
                             field=normalized_field,
                         )
@@ -352,6 +457,8 @@ class SessionManager:
     ) -> _Isabelle_Session:
         try:
             return await self._create_session(theories, field)
+        except PoolExhausted:
+            raise  # preserve 503 mapping (pool full / memory pressure)
         except Exception as e:
             logger.exception("create_session failed")
             raise SessionStartError(f"{self._where('create_session')}: Failed to create session: {e}") from e
@@ -365,6 +472,8 @@ class SessionManager:
         try:
             session = await self._create_session(theories, field, lease_id=lease_id)
             return session, lease_id
+        except PoolExhausted:
+            raise  # preserve 503 mapping (pool full / memory pressure)
         except Exception as e:
             logger.exception("create_leased_session failed")
             raise SessionStartError(f"{self._where('create_leased_session')}: Failed to create leased session: {e}") from e
@@ -585,6 +694,20 @@ class SessionManager:
                 except Exception:
                     logger.exception("failed to close idle session session_id=%s", sid)
 
+            # Proactively reclaim idle sessions if the container is under memory
+            # pressure, independent of the idle-timeout sweep above.
+            if self.memory_management_enabled and not self.memory.can_admit():
+                self._relieve_memory_pressure(self._where("cleanup_idle_sessions"))
+
+            # Proactively recover a dead gateway (e.g. OOM-killed) so the server
+            # doesn't sit bricked until the next create request comes in.
+            if self.gateway is not None and not self.gateway_alive():
+                logger.error("cleanup detected dead gateway; recovering")
+                try:
+                    self._ensure_gateway()
+                except Exception:
+                    logger.exception("background gateway recovery failed")
+
     def start_cleanup_task(self) -> None:
         if self._cleanup_task is None:
             logger.info("starting idle session cleanup task")
@@ -593,9 +716,15 @@ class SessionManager:
     def get_lru_info(self) -> Dict[str, Any]:
         with self._lock:
             sessions = list(self._lru.values())
-            return {
+            info = {
                 "active_sessions": len(sessions),
                 "max_pool_size": self.pool_size,
                 "busy_sessions": sum(1 for s in sessions if s.in_use),
                 "leased_sessions": sum(1 for s in sessions if s.leased),
             }
+        # Read memory outside the lock (file reads, no shared state).
+        info["memory_management_enabled"] = self.memory_management_enabled
+        info.update(self.memory.status_dict())
+        info["gateway_alive"] = self.gateway_alive()
+        info["max_concurrent_sledgehammer"] = self.max_concurrent_sledgehammer
+        return info

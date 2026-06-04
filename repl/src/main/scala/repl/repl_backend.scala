@@ -5,8 +5,8 @@ import scala.jdk.CollectionConverters._
 
 import scala.collection.mutable
 
-class ReplBackend(show_states: Boolean, enable_cache: Boolean = false, max_cache_size: Int = 10, enable_memory_management: Boolean = true, initial_thys: List[String] = List("$ISABELLE_REPL_HOME/thys/IsabelleREPL"), session_manager: Option[Session_Manager] = None, field: String = "HOL") {
-  private val session_manager_instance = session_manager.getOrElse(new Session_Manager(show_states, enable_cache, max_cache_size, enable_memory_management))
+class ReplBackend(show_states: Boolean, enable_cache: Boolean = false, max_cache_size: Int = 10, initial_thys: List[String] = List("$ISABELLE_REPL_HOME/thys/IsabelleREPL"), session_manager: Option[Session_Manager] = None, field: String = "HOL") {
+  private val session_manager_instance = session_manager.getOrElse(new Session_Manager(show_states, enable_cache, max_cache_size))
   private var repl_session = new Repl_Session(session_manager_instance, initial_thys, field)
 
   /** Unique channel ID for this backend instance, used to isolate ML
@@ -168,15 +168,6 @@ class ReplBackend(show_states: Boolean, enable_cache: Boolean = false, max_cache
 
   def scalarise(index_to_keep: Int): Unit =
     repl_session.scalarise(index_to_keep)
-  
-  // memory management
-  def get_memory_report(): String = session_manager_instance.get_memory_report()
-  
-  def get_memory_status(): String = session_manager_instance.get_memory_status()
-  
-  def can_create_new_session(): Boolean = session_manager_instance.can_create_new_session()
-  
-  def perform_memory_cleanup(): Unit = session_manager_instance.perform_memory_cleanup()
   
   // validate session
   def is_session_valid(): Boolean = {

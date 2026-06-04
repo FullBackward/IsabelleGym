@@ -31,7 +31,6 @@ class IsabelleGym:
         show_states: bool = False,
         enable_cache: bool = False,
         max_cache_size: int = 10,
-        enable_memory_management: bool = False,
         shared_cache: bool = False,
         initial_thys: list[str] = None,
         init_field: str = "HOL",
@@ -41,7 +40,6 @@ class IsabelleGym:
             show_states=show_states,
             enable_cache=enable_cache,
             max_cache_size=max_cache_size,
-            enable_memory_management=enable_memory_management,
             shared_cache=shared_cache,
             initial_thys=initial_thys,
             field=init_field,
@@ -155,24 +153,7 @@ class IsabelleGym:
     def get_cache_status(self) -> dict:
         """Return the cache status."""
         return self.isabelle_client.get_cache_status()
-    
-    # Memory management methods
-    def get_memory_report(self) -> str:
-        """Get detailed memory report."""
-        return self.isabelle_client.get_memory_report()
-    
-    def get_memory_status(self) -> str:
-        """Get current memory status."""
-        return self.isabelle_client.get_memory_status()
-    
-    def can_create_new_session(self) -> bool:
-        """Check if memory allows creating a new session."""
-        return self.isabelle_client.can_create_new_session()
-    
-    def perform_memory_cleanup(self) -> None:
-        """Perform memory cleanup operations."""
-        self.isabelle_client.perform_memory_cleanup()
-    
+
     # Vectorised environment support (multiple parallel proof states)
 
     def vectorise(self, size: int) -> None:

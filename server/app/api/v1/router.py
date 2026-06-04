@@ -47,13 +47,20 @@ def _preview(text: str | None, limit: int) -> str:
 async def root(session_manager=Depends(get_session_manager)):
     lru = session_manager.get_lru_info() if hasattr(session_manager, "get_lru_info") else {}
     logger.debug("root health endpoint requested")
+    gateway_alive = lru.get("gateway_alive", True)
     return {
         "service": "IsabelleGym Server",
         "version": API.VERSION,
-        "status": "healthy",
+        "status": "healthy" if gateway_alive else "degraded",
+        "gateway_alive": gateway_alive,
         "active_sessions": lru.get("active_sessions", 0),
         "busy_sessions": lru.get("busy_sessions", 0),
         "max_pool_size": lru.get("max_pool_size", 0),
+        "max_concurrent_sledgehammer": lru.get("max_concurrent_sledgehammer", 0),
+        "memory_management_enabled": lru.get("memory_management_enabled", False),
+        "memory_used_mb": lru.get("memory_used_mb", 0),
+        "memory_limit_mb": lru.get("memory_limit_mb", 0),
+        "memory_pressure_pct": lru.get("memory_pressure_pct", 0),
         "timestamp": datetime.now().isoformat(),
     }
 
@@ -300,9 +307,18 @@ async def sledgehammer(
         )
         logger.info("sledgehammer requested timeout_s=%s", request.timeout_s)
         start = time.time()
-        suggestions: list = await asyncio.to_thread(
-            session.sledgehammer, request.timeout_s
-        )
+        # Bound concurrent sledgehammers so a burst cannot OOM-kill the gateway.
+        # Extra requests queue here (backpressure) rather than oversubscribing.
+        sem = getattr(session_manager, "sledgehammer_sem", None)
+        if sem is not None:
+            async with sem:
+                suggestions: list = await asyncio.to_thread(
+                    session.sledgehammer, request.timeout_s
+                )
+        else:
+            suggestions = await asyncio.to_thread(
+                session.sledgehammer, request.timeout_s
+            )
         elapsed = time.time() - start
         found = len(suggestions) > 0
         logger.info(

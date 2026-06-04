@@ -65,12 +65,6 @@ class ReplBackend(Protocol):
     def get_cache_status(self) -> str: ...
     def get_cache_stats(self) -> py4j.java_collections.JavaMap[str, int]: ...
 
-    # --- memory management ---
-    def get_memory_report(self) -> str: ...
-    def get_memory_status(self) -> str: ...
-    def can_create_new_session(self) -> bool: ...
-    def perform_memory_cleanup(self) -> None: ...
-
     # --- session health ---
     def is_session_valid(self) -> bool: ...
     def recreate_session_if_needed(self) -> None: ...
@@ -186,16 +180,13 @@ class ReplBackendGatewayProcess:
         show_states: bool,
         enable_cache: bool,
         max_cache_size: int,
-        enable_memory_management: bool,
         field: str = "HOL",
     ) -> ReplBackend:
         # Scala: get_repl_backend_with_memory_management(
-        #     show_states, enable_cache, max_cache_size,
-        #     enable_memory_management, field: String = "HOL")
+        #     show_states, enable_cache, max_cache_size, field: String = "HOL")
         return self._poll_gateway(
             "get_repl_backend_with_memory_management",
-            show_states, enable_cache, max_cache_size,
-            enable_memory_management, field,
+            show_states, enable_cache, max_cache_size, field,
         )
 
     def get_repl_backend_with_initial_theories(
@@ -203,18 +194,16 @@ class ReplBackendGatewayProcess:
         show_states: bool,
         enable_cache: bool,
         max_cache_size: int,
-        enable_memory_management: bool,
         initial_thys: "py4j.java_collections.JavaList[str]",
         field: str = "HOL",
     ) -> ReplBackend:
         # Scala: get_repl_backend_with_initial_theories(
         #     show_states, enable_cache, max_cache_size,
-        #     enable_memory_management, initial_thys: java.util.List[String],
-        #     field: String = "HOL")
+        #     initial_thys: java.util.List[String], field: String = "HOL")
         return self._poll_gateway(
             "get_repl_backend_with_initial_theories",
             show_states, enable_cache, max_cache_size,
-            enable_memory_management, initial_thys, field,
+            initial_thys, field,
         )
 
     def get_repl_backend_with_shared_cache(
@@ -222,18 +211,16 @@ class ReplBackendGatewayProcess:
         show_states: bool,
         enable_cache: bool,
         max_cache_size: int,
-        enable_memory_management: bool,
         initial_thys: "py4j.java_collections.JavaList[str]",
         field: str = "HOL",
     ) -> ReplBackend:
         # Scala: get_repl_backend_with_shared_cache(
         #     show_states, enable_cache, max_cache_size,
-        #     enable_memory_management, initial_thys: java.util.List[String],
-        #     field: String = "HOL")
+        #     initial_thys: java.util.List[String], field: String = "HOL")
         return self._poll_gateway(
             "get_repl_backend_with_shared_cache",
             show_states, enable_cache, max_cache_size,
-            enable_memory_management, initial_thys, field,
+            initial_thys, field,
         )
     
     def _signal_group(self, sig: int) -> None:

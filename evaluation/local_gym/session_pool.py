@@ -51,7 +51,6 @@ def _create_backend():
         show_states=False,
         enable_cache=True,
         max_cache_size=100,
-        enable_memory_management=True,
         initial_thys=java_list
     )
     
