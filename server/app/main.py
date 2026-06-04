@@ -8,7 +8,10 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from prometheus_fastapi_instrumentator import Instrumentator
+
 from server.app.api.v1.router import router as api_router
+from server.app.core import metrics
 from server.app.core.config import API, Logging, Server
 from server.app.core.logging import get_logger, reset_logging_context, set_logging_context, setup_logging
 from server.app.errors import GatewayUnavailable, PoolExhausted, SessionBusyError, SessionLeaseError, SessionNotFound, SessionStartError
@@ -27,6 +30,8 @@ async def lifespan(app: FastAPI):
         await sm.startup()
         sm.start_cleanup_task()
         app.state.session_manager = sm
+        # Expose pool/memory/gateway gauges on /metrics (reads sm.get_lru_info()).
+        metrics.register_pool_collector(sm.get_lru_info)
         logger.info(
             "application startup completed",
             extra={"startup_seconds": round(time.time() - with_startup, 3)},
@@ -142,6 +147,11 @@ app.add_middleware(
 )
 
 app.include_router(api_router)
+
+# HTTP request metrics (count + latency histograms, grouped by route template)
+# and the /metrics endpoint serving the default registry — which also includes
+# the isabellegym_* counters/gauges defined in server.app.core.metrics.
+Instrumentator().instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,105 @@
+{
+  "uid": "isabellegym",
+  "title": "IsabelleGym Server",
+  "tags": ["isabellegym"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": { "from": "now-30m", "to": "now" },
+  "templating": { "list": [] },
+  "annotations": { "list": [] },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "HTTP request rate (by route)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (handler) (rate(http_request_duration_seconds_count[5m]))", "legendFormat": "{{handler}}" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "HTTP latency (p50/p95/p99)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.50, sum(rate(http_request_duration_seconds_bucket[5m])) by (le))", "legendFormat": "p50" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le))", "legendFormat": "p95" },
+        { "refId": "C", "expr": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket[5m])) by (le))", "legendFormat": "p99" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Errors: 5xx rate + pool exhausted (503)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(http_request_duration_seconds_count{status=~\"5.*\"}[5m]))", "legendFormat": "5xx/s" },
+        { "refId": "B", "expr": "sum by (reason) (rate(isabellegym_pool_exhausted_total[5m]))", "legendFormat": "503 {{reason}}/s" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Memory pressure %",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "percent", "max": 100, "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "isabellegym_memory_pressure_pct", "legendFormat": "pressure %" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Sessions (active / busy / leased)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "isabellegym_sessions_active", "legendFormat": "active" },
+        { "refId": "B", "expr": "isabellegym_sessions_busy", "legendFormat": "busy" },
+        { "refId": "C", "expr": "isabellegym_sessions_leased", "legendFormat": "leased" },
+        { "refId": "D", "expr": "isabellegym_pool_size", "legendFormat": "pool size" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Sledgehammer (inflight, p95, outcome rate)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "isabellegym_sledgehammer_inflight", "legendFormat": "inflight" },
+        { "refId": "B", "expr": "isabellegym_max_concurrent_sledgehammer", "legendFormat": "limit" },
+        { "refId": "C", "expr": "histogram_quantile(0.95, sum(rate(isabellegym_sledgehammer_seconds_bucket[5m])) by (le))", "legendFormat": "p95 s" },
+        { "refId": "D", "expr": "sum by (result) (rate(isabellegym_sledgehammer_total[5m]))", "legendFormat": "{{result}}/s" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Gateway up + restarts",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "isabellegym_gateway_up", "legendFormat": "gateway up (1/0)" },
+        { "refId": "B", "expr": "increase(isabellegym_gateway_restarts_total[15m])", "legendFormat": "restarts /15m" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Container memory + OOM (cAdvisor)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "container_memory_working_set_bytes{name=\"isabelle-gym\"}", "legendFormat": "working set" },
+        { "refId": "B", "expr": "increase(container_oom_events_total{name=\"isabelle-gym\"}[15m])", "legendFormat": "OOM /15m" }
+      ]
+    }
+  ]
+}

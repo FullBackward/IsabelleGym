@@ -20,3 +20,6 @@ watchfiles
 fastapi[standard]
 
 httpx
+
+prometheus-client
+prometheus-fastapi-instrumentator

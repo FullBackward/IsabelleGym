@@ -4,7 +4,8 @@ import asyncio
 import time
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, Header
+from fastapi import APIRouter, Depends, Header, Request
+from fastapi.responses import JSONResponse
 
 from .schemas.API_models import (
     BigStepTheoryRequest,
@@ -21,6 +22,7 @@ from .schemas.API_models import (
 )
 from server.app.core.config import API, Logging
 from server.app.core.logging import get_logger, logging_context
+from server.app.core import metrics
 from server.app.dependencies import get_session_manager
 from server.app.errors import SessionLeaseError
 
@@ -63,6 +65,31 @@ async def root(session_manager=Depends(get_session_manager)):
         "memory_pressure_pct": lru.get("memory_pressure_pct", 0),
         "timestamp": datetime.now().isoformat(),
     }
+
+
+@router.get("/healthz")
+async def healthz():
+    """Liveness probe: 200 as long as the process serves requests.
+
+    Deliberately does NOT depend on the session manager / gateway — a live but
+    not-yet-ready process should restart on readiness, not liveness.
+    """
+    return {"status": "alive"}
+
+
+@router.get("/readyz")
+async def readyz(request: Request):
+    """Readiness probe: 200 only when the session manager is up and the REPL
+    gateway is alive; 503 otherwise (so traffic isn't routed to a degraded
+    instance)."""
+    sm = getattr(request.app.state, "session_manager", None)
+    alive = bool(sm is not None and sm.gateway_alive())
+    if alive:
+        return {"status": "ready", "gateway_alive": True}
+    return JSONResponse(
+        status_code=503,
+        content={"status": "not_ready", "gateway_alive": alive},
+    )
 
 
 @router.post("/api/v1/sessions", response_model=SessionResponse)
@@ -310,17 +337,26 @@ async def sledgehammer(
         # Bound concurrent sledgehammers so a burst cannot OOM-kill the gateway.
         # Extra requests queue here (backpressure) rather than oversubscribing.
         sem = getattr(session_manager, "sledgehammer_sem", None)
-        if sem is not None:
-            async with sem:
-                suggestions: list = await asyncio.to_thread(
-                    session.sledgehammer, request.timeout_s
-                )
-        else:
-            suggestions = await asyncio.to_thread(
-                session.sledgehammer, request.timeout_s
-            )
+
+        async def _run() -> list:
+            return await asyncio.to_thread(session.sledgehammer, request.timeout_s)
+
+        metrics.sledgehammer_inflight.inc()
+        try:
+            if sem is not None:
+                async with sem:
+                    suggestions: list = await _run()
+            else:
+                suggestions = await _run()
+        except Exception:
+            metrics.sledgehammer_total.labels("failure").inc()
+            raise
+        finally:
+            metrics.sledgehammer_inflight.dec()
+            metrics.sledgehammer_seconds.observe(time.time() - start)
         elapsed = time.time() - start
         found = len(suggestions) > 0
+        metrics.sledgehammer_total.labels("success" if found else "failure").inc()
         logger.info(
             "sledgehammer finished found=%s suggestions=%s elapsed=%.2f",
             found, len(suggestions), elapsed,

@@ -12,6 +12,7 @@ from repl.src.python.repl_backend_gateway import ReplBackendGatewayProcess
 from repl.src.python.thy_init import ThyInit
 from server.app.core.config import Server, Timeouts
 from server.app.core.logging import get_logger, logging_context
+from server.app.core import metrics
 from server.app.errors import GatewayUnavailable, PoolExhausted, SessionBusyError, SessionError, SessionLeaseError, SessionNotFound, SessionStartError
 from server.app.services.memory_monitor import MemoryMonitor
 from server.app.services.session import SessionStatus, _Isabelle_Session
@@ -105,6 +106,7 @@ class SessionManager:
         The sessions' backends point at the dead JVM, so close() is best-effort
         only. thy_init is reset and recreated lazily on the next create.
         """
+        metrics.gateway_restarts.inc()
         with self._lock:
             dead = list(self._lru.values())
             self._lru.clear()
@@ -274,6 +276,7 @@ class SessionManager:
                         snap.pressure_pct, snap.used_mb, snap.available_mb, where,
                     )
                     sess.close()
+                    metrics.sessions_evicted.labels("memory").inc()
             except Exception:
                 logger.exception("failed to close session during memory eviction sid=%s", sid)
             snap = self.memory.read()
@@ -328,6 +331,7 @@ class SessionManager:
             if self.memory_management_enabled:
                 snap = await asyncio.to_thread(self._relieve_memory_pressure, where)
                 if not self.memory.can_admit(snap):
+                    metrics.pool_exhausted.labels("memory").inc()
                     raise PoolExhausted(
                         f"{where}: cannot create session: memory pressure too high "
                         f"({snap.pressure_pct:.0f}%, {snap.available_mb:.0f}MB available) "
@@ -401,6 +405,7 @@ class SessionManager:
                             # exhausted.
                             self._lru.pop(session_id, None)
                             session.close()
+                            metrics.pool_exhausted.labels("all_busy").inc()
                             raise PoolExhausted(
                                 f"Session pool is full ({self.pool_size} sessions) "
                                 f"and all sessions are actively processing requests or leased. "
@@ -415,6 +420,7 @@ class SessionManager:
                         with logging_context(session_id=oldest_id, field=oldest.field):
                             logger.info("evicting idle LRU session because pool is full")
                             oldest.close()
+                            metrics.sessions_evicted.labels("lru").inc()
                     except Exception:
                         logger.exception("failed to close evicted session session_id=%s", oldest_id)
             except PoolExhausted:
@@ -430,6 +436,7 @@ class SessionManager:
                 dependency_key[:12],
                 wrapper_theory,
             )
+            metrics.sessions_created.inc()
             return session
 
     async def verify_big_step_build(
@@ -691,6 +698,7 @@ class SessionManager:
                 logger.info("closing idle session session_id=%s", sid)
                 try:
                     self.close_session(sid, require_lease=False)
+                    metrics.sessions_evicted.labels("idle").inc()
                 except Exception:
                     logger.exception("failed to close idle session session_id=%s", sid)
 
