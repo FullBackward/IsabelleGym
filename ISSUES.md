@@ -286,6 +286,10 @@ Each `sledgehammer` is itself a multi-prover parallel job (balloons its `poly` h
 - **Semaphore:** re-running the harness at W=16 (which previously OOM-killed the gateway) now completes **32/32** with memory flat at ~3.2 GB; no 500s, isolation still PASS.
 - **Auto-restart:** `claude-work/impl-sledgehammer/test_gateway_recovery.sh` SIGKILLs the gateway process group → `GET /` shows `status=degraded, gateway_alive=false` → `POST /sessions` returns **200** (auto-recovered) → `GET /` shows `status=healthy, gateway_alive=true`. Previously this was 500-forever.
 
+### [To-do]Issue 1: How Isabelle do parallel
+When have parallel "have x" statements, can we do this in step. And how do we retrive information when one line is stucked in loop. That is, we need error retrieval for a proof chunk, the server should not just return a timeout error, it should tell, when we build the MCP server, the agent what part of that proof chunk just went wrong.
+
+
 ---
 
 ## Summary of Changes
