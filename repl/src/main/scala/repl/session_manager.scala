@@ -190,12 +190,25 @@ class Session_Manager(show_states: Boolean, enable_cache: Boolean = false, max_c
     }
   }
 
+  // Per-session parallelism (configurable; conservative defaults to bound peak heap
+  // under concurrent sessions — see claude-work/research-parallel-proof + impl-parallel-sessions).
+  //   parallel_proofs=2 forks nested `have`/`show` proof bodies (independent haves run
+  //     concurrently); 1 = top-level proofs only; 0 = sequential.
+  //   threads is CAPPED (default 4, not 0=auto) so M concurrent sessions do not each
+  //     grab all cores and oversubscribe / spike peak heap into an OOM (cf. Bug 6).
+  private val parallel_proofs_opt: String =
+    sys.env.getOrElse("ISABELLE_PARALLEL_PROOFS", "2")
+  private val session_threads_opt: String =
+    sys.env.getOrElse("ISABELLE_SESSION_THREADS", "4")
+
   private def create_new_session_internal(initial_thys: List[String], field: String = "HOL"): Session_Data = {
     val session_delay_options_to_minimise =
       List("headless_consolidate_delay", "headless_check_delay", "headless_nodes_status_delay")
     val min_delay = "0.1"
     val session_option_pairs =
       ("show_states", show_states.toString) ::
+        ("parallel_proofs", parallel_proofs_opt) ::
+        ("threads", session_threads_opt) ::
         session_delay_options_to_minimise.map(option_name => (option_name, min_delay))
     val session_options = session_option_pairs.map { case (name, value) => s"${name}=${value}" }
     val session_id = Server_Utils.start_session(server_info, server, session_options, field)
