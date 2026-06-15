@@ -8,7 +8,6 @@ version = "0.1.0"
 dependencies = [
     "py4j",
     "numpy",
-    "torch",
     "matplotlib",
     "tqdm",
 ]
@@ -17,7 +16,6 @@ dependencies = [
 dev = [
     "pre-commit",
     "pytest",
-    "expecttest",
     "pytest-cov",
     "pylint",
     "isort",
