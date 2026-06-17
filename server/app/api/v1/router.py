@@ -9,8 +9,12 @@ from fastapi.responses import JSONResponse
 
 from .schemas.API_models import (
     BigStepTheoryRequest,
+    ChunkVerifyRequest,
+    ChunkVerifyResponse,
+    CommandMessage,
     CommandRequest,
     CommandResponse,
+    CommandStatus,
     ProofStateResponse,
     SessionAcquireRequest,
     SessionAcquireResponse,
@@ -18,7 +22,7 @@ from .schemas.API_models import (
     SessionResponse,
     StateCheckpoint,
     SledgehammerRequest,
-    SledgehammerResponse, 
+    SledgehammerResponse,
 )
 from server.app.core.config import API, Logging
 from server.app.core.logging import get_logger, logging_context
@@ -233,6 +237,45 @@ async def execute_command(session_id: str, request: CommandRequest, x_lease_id: 
             subgoal_error=getattr(result, "subgoal_error", None),
             subgoals=getattr(result, "subgoals", []) or [],
             execution_time=float(getattr(result, "execution_time", 0.0) or 0.0),
+        )
+
+
+@router.post("/api/v1/sessions/{session_id}/verify_chunk", response_model=ChunkVerifyResponse)
+async def verify_chunk(session_id: str, request: ChunkVerifyRequest, x_lease_id: str | None = Header(None, alias="X-Lease-Id"), session_manager=Depends(get_session_manager)):
+    with logging_context(session_id=session_id):
+        lease_id = _require_lease_id(x_lease_id)
+        session = session_manager.get_session(session_id, lease_id=lease_id, require_lease=True)
+        logger.info(
+            "verify_chunk timeout=%s preview=%s",
+            request.timeout,
+            _preview(request.chunk, Logging.COMMAND_PREVIEW_CHARS),
+        )
+        result = await asyncio.to_thread(session.verify_chunk, request.chunk, request.timeout)
+        report = result.get("report", {}) or {}
+        commands = [
+            CommandStatus(
+                index=int(c.get("i", 0)),
+                line=int(c.get("line", 0)),
+                kind=str(c.get("kind", "")),
+                status=str(c.get("status", "unprocessed")),
+                messages=[CommandMessage(sev=str(m.get("sev", "")), text=str(m.get("text", "")))
+                          for m in (c.get("messages", []) or [])],
+            )
+            for c in (report.get("commands", []) or [])
+        ]
+        timed_out = bool(report.get("timed_out", False))
+        stuck_line = next((c.line for c in commands if c.status == "running"), None)
+        success = (not timed_out) and len(commands) > 0 and all(c.status == "ok" for c in commands)
+        logger.info(
+            "verify_chunk done success=%s timed_out=%s commands=%s stuck_line=%s",
+            success, timed_out, len(commands), stuck_line,
+        )
+        return ChunkVerifyResponse(
+            success=success,
+            timed_out=timed_out,
+            stuck_line=stuck_line,
+            commands=commands,
+            execution_time=float(result.get("execution_time", 0.0) or 0.0),
         )
 
 

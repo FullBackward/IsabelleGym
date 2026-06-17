@@ -106,3 +106,36 @@ class SledgehammerResponse(BaseModel):
     suggestions: List[str]
     raw_output: str
     execution_time: float
+
+
+class CommandMessage(BaseModel):
+    sev: str = Field(description="Message severity: 'error' or 'warning'.")
+    text: str
+
+
+class CommandStatus(BaseModel):
+    index: int = Field(description="Command position in the node (source order).")
+    line: int = Field(description="1-based start line of the command in the chunk.")
+    kind: str = Field(description="Command keyword, e.g. 'have', 'lemma', 'by'.")
+    status: str = Field(description="One of: ok | failed | running | unprocessed.")
+    messages: List[CommandMessage] = Field(default_factory=list)
+
+
+class ChunkVerifyRequest(BaseModel):
+    chunk: str = Field(description="A whole proof chunk (one or more Isar commands).")
+    timeout: float = Field(
+        default=Timeouts.COMMAND_DEFAULT,
+        description="Single overall wall budget (seconds) for checking the chunk. "
+                    "On expiry the report is partial; no per-command timeouts are raised.",
+    )
+
+
+class ChunkVerifyResponse(BaseModel):
+    success: bool = Field(description="True iff every command is 'ok' and not timed out.")
+    timed_out: bool = Field(description="True if the overall wall budget elapsed.")
+    stuck_line: int | None = Field(
+        default=None,
+        description="On timeout, the line still 'running' (the likely loop), if any.",
+    )
+    commands: List[CommandStatus]
+    execution_time: float

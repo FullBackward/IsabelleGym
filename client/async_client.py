@@ -147,7 +147,74 @@ class IsabelleGymAsyncClient:
         )
         response.raise_for_status()
         return response.json()
-    
+
+    async def verify_chunk(
+        self,
+        session_id: str,
+        chunk: str,
+        timeout: float | None = None,
+        *,
+        lease_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Verify a whole proof chunk in one call under a SINGLE wall budget.
+
+        Returns a per-command status report in source order:
+        ``{success, timed_out, stuck_line, commands: [{index, line, kind, status,
+        messages}], execution_time}``. On timeout the report is partial and ``stuck_line``
+        names the still-``running`` command (the likely loop) — no intermediate timeouts.
+        """
+        budget = timeout if timeout is not None else self.timeout
+        response = await self._request(
+            "POST",
+            f"{BASE_URL}/{session_id}/verify_chunk",
+            json_body={"chunk": chunk, "timeout": budget},
+            headers=self._lease_headers(lease_id),
+            # client waits a bit beyond the server's wall budget (server bounds the work)
+            timeout=(budget + 60.0) if budget is not None else None,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    @staticmethod
+    def format_chunk_report(report: dict[str, Any], *, max_msg: int = 300) -> str:
+        """Render a ``verify_chunk`` report as a readable, source-ordered table.
+
+        Saves callers from writing their own loop. ``report`` is the dict returned by
+        :meth:`verify_chunk`. Per-command rows show a status marker, line, command kind,
+        status, and any error/warning messages (whitespace-collapsed, truncated to
+        ``max_msg`` chars). Returns a string; see :meth:`print_chunk_report` to print it.
+        """
+        marker = {"ok": "OK ", "failed": "ERR", "running": "RUN", "unprocessed": "..."}
+        lines = [
+            "verify_chunk: success={success} timed_out={timed_out} "
+            "stuck_line={stuck_line} time={t:.2f}s".format(
+                success=report.get("success"),
+                timed_out=report.get("timed_out"),
+                stuck_line=report.get("stuck_line"),
+                t=float(report.get("execution_time", 0.0) or 0.0),
+            )
+        ]
+        commands = report.get("commands") or []
+        if not commands:
+            lines.append("  (no commands reported)")
+        for c in commands:
+            status = str(c.get("status", "?"))
+            lines.append(
+                f"  [{marker.get(status, ' ? ')}] line {int(c.get('line', 0)):>3}  "
+                f"{str(c.get('kind', '')):<7} {status}"
+            )
+            for m in c.get("messages") or []:
+                text = " ".join(str(m.get("text", "")).split())
+                if len(text) > max_msg:
+                    text = text[: max_msg - 1] + "…"
+                lines.append(f"        {m.get('sev', '')}: {text}")
+        return "\n".join(lines)
+
+    @staticmethod
+    def print_chunk_report(report: dict[str, Any], *, max_msg: int = 300) -> None:
+        """Pretty-print a :meth:`verify_chunk` report (see :meth:`format_chunk_report`)."""
+        print(IsabelleGymAsyncClient.format_chunk_report(report, max_msg=max_msg))
+
     async def sledgehammer(
         self,
         session_id: str,

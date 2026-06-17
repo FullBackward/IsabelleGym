@@ -92,6 +92,20 @@ class Repl_Session(session_manager: Session_Manager, initial_thys: List[String] 
       )
     )
 
+  /** Wall-bounded per-command status report (JSON) for the just-inserted chunk. */
+  def chunk_status_report(wall_budget_ms: Long): String =
+    current_thy_info match {
+      case Some(thy_info) =>
+        Document_Utils.node_status_report(
+          session,
+          current_thy_node_name,
+          thy_info.last_insertion_line,
+          wall_budget_ms
+        )
+      case None =>
+        """{"timed_out":false,"elapsed_ms":0,"commands":[]}"""
+    }
+
   def send_edit(isar_string: String, node: Option[Document.Node.Name] = None): Unit = {
     val edits = current_thy_info match {
       case None =>

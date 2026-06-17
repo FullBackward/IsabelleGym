@@ -109,6 +109,105 @@ object Document_Utils {
     }
   }
 
+  /**
+   * Status-aware, WALL-BOUNDED per-command report for a freshly inserted chunk.
+   *
+   * Unlike `output_node_results` (which collapses everything into a flat buffer and waits
+   * on an UNBOUNDED whole-node barrier), this:
+   *   - polls until every command is consolidated/failed OR `wall_budget_ms` elapses
+   *     (exactly ONE timeout; no per-command timeouts);
+   *   - classifies each command (at/after `since_line`, i.e. the inserted chunk) as
+   *     ok | failed | running | unprocessed via `Document_Status.Command_Status`;
+   *   - on budget expiry returns the PARTIAL status (the still-`running` line is the loop),
+   *     never throws.
+   * Parallel proof checking (parallel_proofs) stays on underneath; the report is just
+   * enumerated in source order.
+   *
+   * Returns a JSON string: {"timed_out":bool,"elapsed_ms":int,
+   *   "commands":[{"i":int,"line":int,"kind":str,"status":str,
+   *                "messages":[{"sev":"error|warning","text":str}]}]}
+   */
+  def node_status_report(
+      session: Headless.Session,
+      node_name: Document.Node.Name,
+      since_line: Int,
+      wall_budget_ms: Long
+  ): String = {
+    val start_ms = System.currentTimeMillis()
+    val deadline = start_ms + wall_budget_ms
+
+    def snap(): Document.Snapshot = session.await_stable_snapshot().switch(node_name)
+
+    def all_settled(snapshot: Document.Snapshot): Boolean = {
+      val version = snapshot.version
+      val state = session.get_state()
+      snapshot.node.commands.forall { command =>
+        scala.util.Try(state.command_status(version, command)).fold(
+          _ => true, // version no longer tracked -> PIDE advanced -> done
+          st => st.maybe_consolidated || st.is_failed
+        )
+      }
+    }
+
+    var snapshot = snap()
+    var timed_out = false
+    while (!timed_out && !all_settled(snapshot)) {
+      if (System.currentTimeMillis() >= deadline) timed_out = true
+      else { session.output_delay.sleep(); snapshot = snap() }
+    }
+
+    val version = snapshot.version
+    val state = session.get_state()
+
+    def message_objs(command: Command): List[JSON.T] = {
+      val results = snapshot.command_results(command)
+      results.iterator.toList.flatMap {
+        case (_, XML.Elem(Markup(markup_type, _), body)) =>
+          val sev = markup_type match {
+            case Markup.ERROR_MESSAGE   => Some("error")
+            case Markup.WARNING_MESSAGE => Some("warning")
+            case _                      => None
+          }
+          sev.flatMap { s =>
+            val text = Pretty.string_of(body)
+            if (text.nonEmpty) Some(JSON.Object("sev" -> s, "text" -> text): JSON.T)
+            else None
+          }
+        case _ => None
+      }
+    }
+
+    val command_objs: List[JSON.T] =
+      snapshot.node.commands.toList.zipWithIndex.flatMap { case (command, i) =>
+        val start_line = snapshot.node.command_start_line(command).getOrElse(1)
+        if (start_line < since_line || command.is_ignored) None
+        else {
+          val st = scala.util.Try(state.command_status(version, command)).toOption
+          val status =
+            st match {
+              case Some(s) if s.is_failed         => "failed"
+              case Some(s) if s.maybe_consolidated => "ok"
+              case Some(s) if s.is_running        => "running"
+              case Some(_)                        => "unprocessed"
+              case None                           => "ok" // PIDE advanced past this version
+            }
+          Some(JSON.Object(
+            "i" -> i,
+            "line" -> start_line,
+            "kind" -> command.span.name,
+            "status" -> status,
+            "messages" -> message_objs(command)
+          ): JSON.T)
+        }
+      }
+
+    JSON.Format(JSON.Object(
+      "timed_out" -> timed_out,
+      "elapsed_ms" -> (System.currentTimeMillis() - start_ms).toInt,
+      "commands" -> command_objs
+    ))
+  }
+
   def node_source(session: Headless.Session, node_name: Document.Node.Name) = stable_node_snapshot(
     session,
     node_name,

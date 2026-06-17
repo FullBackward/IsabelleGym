@@ -136,6 +136,22 @@ class ReplBackend(show_states: Boolean, enable_cache: Boolean = false, max_cache
     repl_session.output_current_node_results()
   }
 
+  /**
+   * Verify a whole proof CHUNK in one shot: insert it as a single edit (parallel proof
+   * checking stays on per parallel_proofs), then return a JSON per-command status report
+   * under ONE wall budget (no per-command timeouts). On budget expiry the report is partial
+   * and names the still-`running` line (the loop). Requires the theory to be begun.
+   */
+  def verify_chunk(isar_string: String, wall_budget_ms: Long): String = {
+    Repl_Output.reset()
+    if (!repl_session.current_thy_begun)
+      """{"timed_out":false,"elapsed_ms":0,"commands":[],"error":"theory not begun"}"""
+    else {
+      repl_session.send_edit(isar_string)
+      repl_session.chunk_status_report(wall_budget_ms)
+    }
+  }
+
   def vector_step(isar_strings: java.util.List[String]): Repl_Result = build_result {
     repl_session.send_vector_edit(isar_strings.asScala.toList)
     repl_session.output_current_node_results()
