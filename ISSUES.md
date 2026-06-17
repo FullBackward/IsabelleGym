@@ -15,7 +15,8 @@
    - [Bug 4: TOCTOU on `in_use` Check — RESOLVED](#bug-4-toctou-on-in_use-check--open)
    - [Bug 5: Isabelle Processes Persist After Close — RESOLVED](#bug-5-isabelle-processes-persist-after-close--open)
 2. [Bug 6: Gateway OOM Under Concurrent Sledgehammer — RESOLVED](#bug-6-gateway-oom-under-concurrent-sledgehammer--resolved)
-3. [Claude Work Log (dated)](#claude-work-log-dated)
+3. [Bug 7: Stale `isabelle_user_data` Volume Shadows Component Registration — RESOLVED (workaround)](#bug-7-stale-isabelle_user_data-volume-shadows-component-registration-after-image-rebuild--resolved-workaround)
+4. [Claude Work Log (dated)](#claude-work-log-dated)
 
 ---
 
@@ -286,6 +287,42 @@ Each `sledgehammer` is itself a multi-prover parallel job (balloons its `poly` h
 - **Semaphore:** re-running the harness at W=16 (which previously OOM-killed the gateway) now completes **32/32** with memory flat at ~3.2 GB; no 500s, isolation still PASS.
 - **Auto-restart:** `claude-work/impl-sledgehammer/test_gateway_recovery.sh` SIGKILLs the gateway process group → `GET /` shows `status=degraded, gateway_alive=false` → `POST /sessions` returns **200** (auto-recovered) → `GET /` shows `status=healthy, gateway_alive=true`. Previously this was 500-forever.
 
+### Bug 7: Stale `isabelle_user_data` Volume Shadows Component Registration After Image Rebuild — RESOLVED (workaround)
+
+**Files:** `Dockerfile`, `docker-compose.yml`, `repl/Admin/init`
+**Severity:** Medium (operational — server cannot start after an image rebuild when the old volume exists)
+**Status:** ✅ Worked around 2026-06-10 by re-running `./repl/Admin/init` inside the container; a permanent fix (entrypoint init) is proposed below.
+
+#### Symptom
+
+After rebuilding the image (`docker compose build isabelle-gym`) and starting a fresh container, `python -m server.app.main` dies during startup with:
+
+```
+-- [E006] Not Found Error: .../repl_backend_gateway.scala:4:7
+4 |import py4j.GatewayServer
+  |       Not found: py4j
+...
+ValueError: invalid literal for int() with base 10: ''   # gateway printed no port
+server.app.errors.GatewayUnavailable: ... failed to start REPL gateway
+```
+
+#### Root cause
+
+The Dockerfile runs `./repl/Admin/init` at build time, which registers the `repl` component (and downloads `py4j`/`spliff` contribs) under `/root/.isabelle`. But docker-compose mounts the named volume `isabelle_user_data` over `/root/.isabelle`, and Docker only copies image content into a named volume **when the volume is empty**. Any pre-existing volume (from a previous image) therefore shadows the build-time registration: the new container sees the *old* volume's state, `isabelle scala` finds no `py4j`/`repl.jar` on its classpath, the gateway script fails to compile, prints no port, and the server exits.
+
+This bites every time the image is rebuilt while the old volume survives — exactly the standard upgrade path.
+
+#### Workaround (verified 2026-06-10)
+
+```bash
+docker compose exec isabelle-gym ./repl/Admin/init   # re-registers into the live volume
+# then start the server as usual
+```
+
+#### Proposed permanent fix
+
+Run a cheap idempotent check at container start (entrypoint or server startup): if `$ISABELLE_HOME_USER/etc/components` does not list `/app/repl`, run `repl/Admin/init` before launching the gateway. Alternatively, drop the named volume from compose (heaps would rebuild per fresh container) or version the volume name with the image.
+
 ### [To-do]Issue 1: How Isabelle do parallel
 When have parallel "have x" statements, can we do this in step. And how do we retrive information when one line is stucked in loop. That is, we need error retrieval for a proof chunk, the server should not just return a timeout error, it should tell, when we build the MCP server, the agent what part of that proof chunk just went wrong.
 
@@ -318,4 +355,6 @@ Test/demonstration artifacts live under `claude-work/<task>/` (each with a `NOTE
 | 2026-06-04 | **Bug 5 re-check** | Measured poly/prover process counts across create→close and close-during-sledgehammer. Both reap cleanly (≤2 s), so Bug 5 is not reproducible; marked resolved. Optional force-kill fallback for wedged ML processes noted. | `claude-work/bug5-session-close-leak/` |
 | 2026-06-04 | **Phase 0 monitoring** | Added a Prometheus `/metrics` endpoint (HTTP histograms via instrumentator + `isabellegym_*` counters/gauges/histogram in `server/app/core/metrics.py`, fed by `get_lru_info()`/`MemoryMonitor`/gateway-recovery), `/healthz`+`/readyz` probes, and a Prometheus+Grafana+cAdvisor stack in `docker-compose.yml` with `mem_limit: 12g` and a starter dashboard. Verified end-to-end: all 3 Prometheus targets UP, Grafana dashboard provisioned, domain counters move, `memory_limit_mb` reflects the 12g cgroup. NB: image must be rebuilt (`docker compose build isabelle-gym`) to bake in the two new pip deps. | `claude-work/impl-monitoring/`, `monitoring/` |
 
-*Last updated: 2026-06-04 02:31 GMT.*
+| 2026-06-10 | **Image rebuild + Bug 7** | Rebuilt the image with trimmed deps (removed `torch` — sole source of the multi-GB `nvidia-*-cu12` CUDA wheels, only imported by archival `previous works/` code — and unused `expecttest`, from `requirement.txt` + `pyproject.toml`; image 24.9 GB → ~2 GB). First server start after the rebuild failed with `Not found: py4j` in the gateway — surfaced **Bug 7** (pre-existing `isabelle_user_data` volume shadows the build-time `repl/Admin/init` registration). Worked around by re-running `./repl/Admin/init` in the container. | — |
+
+*Last updated: 2026-06-10.*

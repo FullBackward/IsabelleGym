@@ -28,6 +28,9 @@ services:
     volumes:
       - .:/app
       - isabelle_user_data:/root/.isabelle
+    env_file:
+      - .env
+    # `environment` entries override .env on conflict
     environment:
       - ISABELLE_HOME=/opt/isabelle
       - PYTHONPATH=/app
