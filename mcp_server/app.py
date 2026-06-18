@@ -1,0 +1,220 @@
+"""IsabelleGym MCP server: tools / resources / prompts over IsabelleGymAsyncClient.
+
+Tools wrap the (now-complete) async client only — no direct HTTP. Sessions/leases are
+auto-managed and isolated per MCP connection (see pool.py). Parallelism is exposed at two
+levels: intra-proof via `verify_chunk` (parallel_proofs=2) and inter-session via
+`verify_batch` (concurrent fan-out across the pool in one call).
+"""
+from __future__ import annotations
+
+import json
+from typing import Any, Dict, List, Optional
+
+from mcp.server.fastmcp import Context, FastMCP
+
+from client.async_client import IsabelleGymAsyncClient
+
+from .config import Config
+from .pool import SessionPool
+
+mcp = FastMCP("isabellegym", host=Config.HOST, port=Config.PORT)
+pool = SessionPool()
+
+
+def _render_chunk(report: Dict[str, Any], detail: bool) -> str:
+    """Terse-by-default: summary + only failed/running rows. detail=True → full table."""
+    if detail:
+        return IsabelleGymAsyncClient.format_chunk_report(report)
+    cmds = report.get("commands", []) or []
+    proof_open = report.get("proof_open")
+    used_sorry = report.get("used_sorry")
+    head = (
+        f"success={report.get('success')} proof_open={proof_open} used_sorry={used_sorry} "
+        f"timed_out={report.get('timed_out')} stuck_line={report.get('stuck_line')} "
+        f"time={float(report.get('execution_time', 0) or 0):.2f}s commands={len(cmds)}"
+    )
+    bad = [c for c in cmds if c.get("status") in ("failed", "running")]
+    lines = [head]
+    for c in bad:
+        msgs = "; ".join((m.get("text", "") or "")[:200] for m in (c.get("messages") or []))
+        lines.append(f"  line {c.get('line')} {c.get('kind')} {c.get('status')} {msgs}".rstrip())
+    if cmds and not bad:
+        lines.append("  (all commands ok)")
+    if report.get("success") and proof_open:
+        # No command errored, but the proof is still OPEN (e.g. `using assms`/trailing `have`
+        # with no `qed`): the theorem is NOT proved. Warn so the agent closes/rolls back the
+        # goal before declaring a new theorem (else: "Bad context for command ...").
+        lines.append("  NOTE: proof is still OPEN (theorem NOT proved). Close it (qed / "
+                     "terminal method) or rollback before a new theorem/lemma.")
+    if used_sorry:
+        lines.append("  NOTE: chunk uses sorry/oops — the theorem is NOT actually proved.")
+    lines.append("  [call with detail=True for the full per-command table]")
+    return "\n".join(lines)
+
+
+# --------------------------------------------------------------------------- tools
+
+@mcp.tool()
+async def enter_theory(
+    name: str, ctx: Context, imports: Optional[List[str]] = None, field: str = "HOL",
+) -> str:
+    """Start (or restart) a proof session for this connection in theory `name`.
+
+    Acquires a leased session, enters the theory, and processes its `begin` header so that
+    `verify_chunk`/`step` work immediately. Closes any prior theory on this connection.
+    """
+    imps = imports or ["Main"]
+    cur = await pool.open_theory(ctx, name, imps, field)
+    return f"entered theory '{name}' (imports {imps}, field {field}); session bound to this connection"
+
+
+@mcp.tool()
+async def verify_chunk(text: str, ctx: Context, timeout: float = Config.CHUNK_TIMEOUT, detail: bool = False) -> str:
+    """Submit Isar text — one command or a whole proof — and verify it in one call under a
+    SINGLE wall budget. This is the only execution tool (it subsumes single-stepping).
+
+    Returns per-command status in source order (ok/failed/running/unprocessed). On timeout
+    the report is partial and names the still-`running` line (the likely loop). Terse by
+    default; pass detail=True for the full per-command table. (For the resulting goal/
+    subgoals, call proof_state.)
+
+    success=True means NO command errored — NOT that the theorem is proved. The theorem is
+    proved ONLY when success=True AND proof_open=False AND used_sorry=False:
+      - proof_open=True  -> the chunk left an open proof (e.g. `theorem ... using assms`, or a
+        trailing `have ...` with no `qed`). It is kept so you can sledgehammer the open goal,
+        but the theorem is NOT proved. Do NOT declare a new theorem/lemma while proof_open=True
+        (it triggers "Bad context for command ... -- using reset state") — close the goal or
+        rollback first.
+      - used_sorry=True  -> the chunk used `sorry`/`oops`; the theorem is NOT proved. Never use
+        sorry/oops to "pass".
+    """
+    c = await pool.client()
+    cur = pool.require_current(ctx)
+    report = await c.verify_chunk(cur.session_id, text, timeout=timeout, lease_id=cur.lease_id)
+    return _render_chunk(report, detail)
+
+
+@mcp.tool()
+async def proof_state(ctx: Context) -> str:
+    """Current goal / open subgoals."""
+    c = await pool.client()
+    cur = pool.require_current(ctx)
+    return json.dumps(await c.get_proof_state(cur.session_id, lease_id=cur.lease_id), default=str)
+
+
+@mcp.tool()
+async def source(ctx: Context) -> str:
+    """Current theory source as the prover sees it."""
+    c = await pool.client()
+    cur = pool.require_current(ctx)
+    return json.dumps(await c.get_source(cur.session_id, lease_id=cur.lease_id), default=str)
+
+
+@mcp.tool()
+async def sledgehammer(ctx: Context, timeout_s: int = 30) -> str:
+    """Run Isabelle's sledgehammer on the current goal; returns proof-method suggestions."""
+    c = await pool.client()
+    cur = pool.require_current(ctx)
+    return json.dumps(await c.sledgehammer(cur.session_id, timeout_s=timeout_s, lease_id=cur.lease_id), default=str)
+
+
+@mcp.tool()
+async def checkpoint(ctx: Context) -> str:
+    """Save a checkpoint of the current proof state; returns {checkpoint_id, timestamp}."""
+    c = await pool.client()
+    cur = pool.require_current(ctx)
+    return json.dumps(await c.save_checkpoint(cur.session_id, lease_id=cur.lease_id), default=str)
+
+
+@mcp.tool()
+async def restore(checkpoint_id: int, ctx: Context) -> str:
+    """Restore a previously saved checkpoint."""
+    c = await pool.client()
+    cur = pool.require_current(ctx)
+    return json.dumps(await c.restore_checkpoint(cur.session_id, checkpoint_id, lease_id=cur.lease_id), default=str)
+
+
+@mcp.tool()
+async def rollback(ctx: Context) -> str:
+    """Roll back the most recent command/edit in the current theory."""
+    c = await pool.client()
+    cur = pool.require_current(ctx)
+    return json.dumps(await c.rollback(cur.session_id, lease_id=cur.lease_id), default=str)
+
+
+@mcp.tool()
+async def close_theory(ctx: Context) -> str:
+    """Release this connection's current session back to the pool."""
+    closed = await pool.close_for(ctx)
+    return "closed" if closed else "no active session"
+
+
+@mcp.tool()
+async def verify_batch(
+    items: List[Dict[str, Any]], ctx: Context,
+    max_parallel: int = Config.MAX_PARALLEL, timeout: float = Config.CHUNK_TIMEOUT,
+) -> str:
+    """Verify MANY independent proof chunks CONCURRENTLY in one call.
+
+    Each item = {"name": str, "imports": [str]?, "field": str?, "chunk": str}. Fans out
+    across the server's session pool (bounded by max_parallel) — this is how a sequential
+    agent exploits the server's inter-session parallelism. Returns a per-item summary.
+    """
+    results = await pool.verify_batch(items, max_parallel, timeout)
+    return json.dumps(results, default=str, indent=1)
+
+
+# ----------------------------------------------------------------------- resources
+
+@mcp.resource("isabellegym://health")
+async def health() -> str:
+    """Server health: gateway_alive, pool size, memory pressure."""
+    c = await pool.client()
+    return json.dumps(await c.health(), default=str, indent=1)
+
+
+@mcp.resource("isabellegym://sessions")
+async def sessions() -> str:
+    """Active sessions in the server pool."""
+    c = await pool.client()
+    return json.dumps(await c.list_sessions(), default=str, indent=1)
+
+
+# ------------------------------------------------------------------------- prompts
+
+@mcp.prompt()
+def prove_theorem(theorem: str, imports: str = "Main") -> str:
+    """Workflow prompt for proving an Isabelle theorem via this server."""
+    return (
+        f"Prove the following Isabelle/HOL theorem.\n\n```isabelle\n{theorem}\n```\n\n"
+        f"Workflow:\n"
+        f"1. `enter_theory(name=..., imports={imports.split()})`.\n"
+        f"2. Draft a COMPLETE `proof ... qed` and submit the whole thing with "
+        f"`verify_chunk(text=...)` (one call, one timeout).\n"
+        f"3. If a command is `failed`, read its message and fix that line; if a line is "
+        f"`running` at timeout (`stuck_line`), it is looping — replace that tactic.\n"
+        f"4. Use `sledgehammer()` to discover a proof method for a stuck goal.\n"
+        f"5. Use `checkpoint()`/`rollback()` to explore alternatives safely.\n\n"
+        f"WHAT COUNTS AS PROVED: the theorem is proved ONLY when `verify_chunk` reports "
+        f"success=True AND proof_open=False AND used_sorry=False.\n"
+        f"  - success=True alone just means no command errored.\n"
+        f"  - proof_open=True means the proof is still open (e.g. you ended at `using assms` or "
+        f"a trailing `have` with no `qed`) — finish it; and do NOT start a new theorem/lemma "
+        f"while a proof is open or you will get \"Bad context for command\" (re-enter_theory or "
+        f"rollback first).\n"
+        f"  - Never use `sorry`/`oops` to pass — that sets used_sorry=True and proves nothing.\n"
+        f"Stop as soon as success=True, proof_open=False, used_sorry=False.\n\n"
+        f"To verify several independent lemmas/theories at once, use `verify_batch(items=[...])`."
+    )
+
+
+def main() -> None:
+    transport = Config.TRANSPORT
+    if transport == "streamable-http":
+        mcp.run(transport="streamable-http")
+    else:
+        mcp.run(transport="stdio")
+
+
+if __name__ == "__main__":
+    main()

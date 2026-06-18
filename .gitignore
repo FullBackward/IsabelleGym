@@ -283,3 +283,5 @@ metals.sbt
 ClAUDE.md
 claude-work/
 repl/thys/wrap_*.thy
+
+**/miniF2F/**

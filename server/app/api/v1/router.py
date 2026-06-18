@@ -15,6 +15,7 @@ from .schemas.API_models import (
     CommandRequest,
     CommandResponse,
     CommandStatus,
+    EnterTheoryRequest,
     ProofStateResponse,
     SessionAcquireRequest,
     SessionAcquireResponse,
@@ -256,6 +257,7 @@ async def verify_chunk(session_id: str, request: ChunkVerifyRequest, x_lease_id:
             CommandStatus(
                 index=int(c.get("i", 0)),
                 line=int(c.get("line", 0)),
+                node_line=c.get("node_line"),
                 kind=str(c.get("kind", "")),
                 status=str(c.get("status", "unprocessed")),
                 messages=[CommandMessage(sev=str(m.get("sev", "")), text=str(m.get("text", "")))
@@ -264,14 +266,18 @@ async def verify_chunk(session_id: str, request: ChunkVerifyRequest, x_lease_id:
             for c in (report.get("commands", []) or [])
         ]
         timed_out = bool(report.get("timed_out", False))
+        proof_open = bool(report.get("proof_open", False))
+        used_sorry = bool(report.get("used_sorry", False))
         stuck_line = next((c.line for c in commands if c.status == "running"), None)
         success = (not timed_out) and len(commands) > 0 and all(c.status == "ok" for c in commands)
         logger.info(
-            "verify_chunk done success=%s timed_out=%s commands=%s stuck_line=%s",
-            success, timed_out, len(commands), stuck_line,
+            "verify_chunk done success=%s proof_open=%s used_sorry=%s timed_out=%s commands=%s stuck_line=%s",
+            success, proof_open, used_sorry, timed_out, len(commands), stuck_line,
         )
         return ChunkVerifyResponse(
             success=success,
+            proof_open=proof_open,
+            used_sorry=used_sorry,
             timed_out=timed_out,
             stuck_line=stuck_line,
             commands=commands,
@@ -413,13 +419,14 @@ async def sledgehammer(
 
 
 @router.post("/api/v1/sessions/{session_id}/enter_theory/{theory_name}")
-async def enter_theory(session_id: str, theory_name: str, x_lease_id: str | None = Header(None, alias="X-Lease-Id"), session_manager=Depends(get_session_manager)):
+async def enter_theory(session_id: str, theory_name: str, request: EnterTheoryRequest | None = None, x_lease_id: str | None = Header(None, alias="X-Lease-Id"), session_manager=Depends(get_session_manager)):
     with logging_context(session_id=session_id):
-        logger.info("entering theory theory_name=%s", theory_name)
+        imports = request.imports if request else None
+        logger.info("entering theory theory_name=%s imports=%s", theory_name, imports)
         lease_id = _require_lease_id(x_lease_id)
         session = session_manager.get_session(session_id, lease_id=lease_id, require_lease=True)
-        await asyncio.to_thread(session.enter_thy, theory_name)
-        return {"success": True, "message": f"Entered theory {theory_name}"}
+        await asyncio.to_thread(lambda: session.enter_thy(theory_name, imports=imports))
+        return {"success": True, "message": f"Entered theory {theory_name}", "imports": imports}
 
 
 @router.get("/api/v1/sessions/{session_id}/history")

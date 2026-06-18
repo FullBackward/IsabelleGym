@@ -2,6 +2,15 @@ package repl
 
 import isabelle._
 
+/** Result of a wall-bounded chunk verification: the JSON report `fields` plus a `success`
+ *  flag computed under the SAME rule the server uses (router.py): not timed out, at least
+ *  one reported command, and every reported command `ok`. `verify_chunk` uses `success` to
+ *  decide whether to keep the chunk in the node or roll it back transactionally, and may
+ *  enrich `fields` (e.g. with `proof_open`) before serialising. */
+case class Chunk_Report(success: Boolean, fields: JSON.Object.T) {
+  def json: String = JSON.Format(fields)
+}
+
 object Document_Utils {
   def thy_node_name(thy_name: String): Document.Node.Name = {
     val qualifier = Sessions.DRAFT
@@ -124,7 +133,8 @@ object Document_Utils {
    * enumerated in source order.
    *
    * Returns a JSON string: {"timed_out":bool,"elapsed_ms":int,
-   *   "commands":[{"i":int,"line":int,"kind":str,"status":str,
+   *   "commands":[{"i":int,"line":int (chunk-relative, 1-based),"node_line":int (absolute),
+   *                "kind":str,"status":str,
    *                "messages":[{"sev":"error|warning","text":str}]}]}
    */
   def node_status_report(
@@ -132,7 +142,7 @@ object Document_Utils {
       node_name: Document.Node.Name,
       since_line: Int,
       wall_budget_ms: Long
-  ): String = {
+  ): Chunk_Report = {
     val start_ms = System.currentTimeMillis()
     val deadline = start_ms + wall_budget_ms
 
@@ -177,7 +187,9 @@ object Document_Utils {
       }
     }
 
-    val command_objs: List[JSON.T] =
+    // Status per reported command, paired with its JSON object. We keep `status` alongside
+    // the JSON so `success` can be computed without re-parsing the JSON we just built.
+    val cmd_pairs: List[(String, JSON.T)] =
       snapshot.node.commands.toList.zipWithIndex.flatMap { case (command, i) =>
         val start_line = snapshot.node.command_start_line(command).getOrElse(1)
         if (start_line < since_line || command.is_ignored) None
@@ -191,21 +203,43 @@ object Document_Utils {
               case Some(_)                        => "unprocessed"
               case None                           => "ok" // PIDE advanced past this version
             }
-          Some(JSON.Object(
+          val obj: JSON.T = JSON.Object(
+            // chunk-relative line (1-based within the submitted chunk), so stuck_line /
+            // failed line maps to the text the caller sent — not the absolute line in the
+            // accumulated node. `node_line` keeps the absolute line for debugging.
             "i" -> i,
-            "line" -> start_line,
+            "line" -> (start_line - since_line + 1),
+            "node_line" -> start_line,
             "kind" -> command.span.name,
             "status" -> status,
             "messages" -> message_objs(command)
-          ): JSON.T)
+          )
+          Some((status, obj))
         }
       }
 
-    JSON.Format(JSON.Object(
+    // Match the server's success rule (router.py): not timed out, at least one reported
+    // command, and every reported command `ok`.
+    val success = !timed_out && cmd_pairs.nonEmpty && cmd_pairs.forall(_._1 == "ok")
+
+    // Authoritative `sorry`/`oops` detection: scan the chunk's PARSED commands (not the raw
+    // text) so a `sorry` in a comment or string literal is NOT a false positive, while a real
+    // `sorry`/`oops` command IS caught regardless of spacing. A theorem closed via sorry/oops
+    // is not actually proved, so callers must treat used_sorry=true as "not proved".
+    val used_sorry = snapshot.node.commands.exists { command =>
+      val start_line = snapshot.node.command_start_line(command).getOrElse(1)
+      start_line >= since_line && !command.is_ignored &&
+        (command.span.name == "sorry" || command.span.name == "oops")
+    }
+
+    val fields: JSON.Object.T = JSON.Object(
       "timed_out" -> timed_out,
+      "success" -> success,
+      "used_sorry" -> used_sorry,
       "elapsed_ms" -> (System.currentTimeMillis() - start_ms).toInt,
-      "commands" -> command_objs
-    ))
+      "commands" -> cmd_pairs.map(_._2)
+    )
+    Chunk_Report(success, fields)
   }
 
   def node_source(session: Headless.Session, node_name: Document.Node.Name) = stable_node_snapshot(

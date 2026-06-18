@@ -115,11 +115,15 @@ class IsabelleGymAsyncClient:
         return {}
 
     async def enter_theory(
-        self, session_id: str, theory_name: str, *, lease_id: str | None = None,
+        self, session_id: str, theory_name: str, *,
+        imports: list[str] | None = None, lease_id: str | None = None,
     ) -> dict[str, Any]:
+        """Enter a theory. If ``imports`` is given, the server begins the theory with a
+        correctly-quoted header (no need to send a 'theory ... begin' command yourself)."""
         response = await self._request(
             "POST",
             f"{BASE_URL}/{session_id}/enter_theory/{theory_name}",
+            json_body={"imports": imports} if imports is not None else None,
             headers=self._lease_headers(lease_id),
         )
         response.raise_for_status()
@@ -186,9 +190,11 @@ class IsabelleGymAsyncClient:
         """
         marker = {"ok": "OK ", "failed": "ERR", "running": "RUN", "unprocessed": "..."}
         lines = [
-            "verify_chunk: success={success} timed_out={timed_out} "
-            "stuck_line={stuck_line} time={t:.2f}s".format(
+            "verify_chunk: success={success} proof_open={proof_open} used_sorry={used_sorry} "
+            "timed_out={timed_out} stuck_line={stuck_line} time={t:.2f}s".format(
                 success=report.get("success"),
+                proof_open=report.get("proof_open"),
+                used_sorry=report.get("used_sorry"),
                 timed_out=report.get("timed_out"),
                 stuck_line=report.get("stuck_line"),
                 t=float(report.get("execution_time", 0.0) or 0.0),
@@ -279,3 +285,100 @@ class IsabelleGymAsyncClient:
             field=field,
             timeout=timeout,
         )
+
+    # --- proof state / source (read-only) ------------------------------------
+    async def get_proof_state(
+        self, session_id: str, *, lease_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Current goal: ``{subgoals, proof_finished, current_theory}``."""
+        response = await self._request(
+            "GET", f"{BASE_URL}/{session_id}/state",
+            headers=self._lease_headers(lease_id),
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def get_subgoals(
+        self, session_id: str, *, lease_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Open subgoals: ``{subgoals, count, proof_finished}``."""
+        response = await self._request(
+            "GET", f"{BASE_URL}/{session_id}/subgoals",
+            headers=self._lease_headers(lease_id),
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def get_source(
+        self, session_id: str, *, lease_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Theory source as the prover sees it: ``{source, theory}``."""
+        response = await self._request(
+            "GET", f"{BASE_URL}/{session_id}/source",
+            headers=self._lease_headers(lease_id),
+        )
+        response.raise_for_status()
+        return response.json()
+
+    # --- checkpoints / rollback ----------------------------------------------
+    async def save_checkpoint(
+        self, session_id: str, *, lease_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Save a checkpoint; returns ``{checkpoint_id, timestamp}``."""
+        response = await self._request(
+            "POST", f"{BASE_URL}/{session_id}/checkpoints",
+            headers=self._lease_headers(lease_id),
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def restore_checkpoint(
+        self, session_id: str, checkpoint_id: int, *, lease_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Restore a previously saved checkpoint; returns ``{success, checkpoint_id, message}``."""
+        response = await self._request(
+            "POST", f"{BASE_URL}/{session_id}/checkpoints/{checkpoint_id}/restore",
+            headers=self._lease_headers(lease_id),
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def rollback(
+        self, session_id: str, *, lease_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Roll back the most recent command/edit; returns ``{success, output}``."""
+        response = await self._request(
+            "POST", f"{BASE_URL}/{session_id}/rollback",
+            headers=self._lease_headers(lease_id),
+        )
+        response.raise_for_status()
+        return response.json()
+
+    # --- pool / session info -------------------------------------------------
+    async def list_sessions(self) -> dict[str, Any]:
+        """All sessions in the server pool: ``{sessions: [...]}`` (no lease required)."""
+        response = await self._request("GET", BASE_URL)
+        response.raise_for_status()
+        return response.json()
+
+    async def get_history(
+        self, session_id: str, limit: int = 50, *, lease_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Command history: ``{session_id, total_commands, history}``."""
+        response = await self._request(
+            "GET", f"{BASE_URL}/{session_id}/history?limit={int(limit)}",
+            headers=self._lease_headers(lease_id),
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def get_stats(
+        self, session_id: str, *, lease_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Per-session stats (command counts, etc.)."""
+        response = await self._request(
+            "GET", f"{BASE_URL}/{session_id}/stats",
+            headers=self._lease_headers(lease_id),
+        )
+        response.raise_for_status()
+        return response.json()

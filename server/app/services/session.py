@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import json
+import re
 import threading
 import time
 import uuid
@@ -199,10 +200,36 @@ class _Isabelle_Session(BigStepMixin):
         )
         return list(raw) if raw is not None else []
 
-    def enter_thy(self, thy_name: str, timeout: Optional[float] = None):
+    @staticmethod
+    def _build_theory_header(name: str, imports: List[str]) -> str:
+        """Build a valid Isar `theory <name> imports ... begin` header.
+
+        Session-qualified imports (e.g. HOL-Number_Theory.Number_Theory) contain '-'/'.'
+        and MUST be quoted, else Isabelle splits them ("Bad theory import HOL", "-", ...).
+        This Isar-syntax knowledge lives in the server so every client (demo, MCP, agents)
+        gets a correct header without re-implementing quoting.
+        """
+        def q(i: str) -> str:
+            return i if re.fullmatch(r"[A-Za-z][\w']*", i) else f'"{i}"'
+        names = [n for n in (imports or []) if n] or ["Main"]
+        return f"theory {name} imports {' '.join(q(n) for n in names)} begin"
+
+    def enter_thy(self, thy_name: str, timeout: Optional[float] = None,
+                  imports: Optional[List[str]] = None):
+        """Enter a theory node. If ``imports`` is given, the server also begins the theory
+        by processing a correctly-quoted ``theory ... begin`` header — so the client never
+        hand-builds Isar headers and verify_chunk/step work immediately. If ``imports`` is
+        omitted, behaviour is unchanged (caller supplies the header itself, e.g. corpus .thy)."""
         self.entered_thy = thy_name
-        logger.info("entering theory theory_name=%s", thy_name)
-        return self._call_backend(lambda: self.backend.raw.enter_thy(thy_name), timeout=timeout)
+        logger.info("entering theory theory_name=%s imports=%s", thy_name, imports)
+        result = self._call_backend(lambda: self.backend.raw.enter_thy(thy_name), timeout=timeout)
+        if imports:
+            header = self._build_theory_header(thy_name, imports)
+            hdr = self.step(header, timeout=timeout)
+            if not is_syntax_successful(hdr):
+                raise SessionError(
+                    error=f"theory header failed: {self._result_error(hdr)}", execution_time=0.0)
+        return result
 
     def _result_error(self, result) -> Optional[str]:
         return get_error_message(result)

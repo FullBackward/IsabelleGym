@@ -92,8 +92,8 @@ class Repl_Session(session_manager: Session_Manager, initial_thys: List[String] 
       )
     )
 
-  /** Wall-bounded per-command status report (JSON) for the just-inserted chunk. */
-  def chunk_status_report(wall_budget_ms: Long): String =
+  /** Wall-bounded per-command status report for the just-inserted chunk: JSON + success. */
+  def chunk_status_report(wall_budget_ms: Long): Chunk_Report =
     current_thy_info match {
       case Some(thy_info) =>
         Document_Utils.node_status_report(
@@ -103,7 +103,10 @@ class Repl_Session(session_manager: Session_Manager, initial_thys: List[String] 
           wall_budget_ms
         )
       case None =>
-        """{"timed_out":false,"elapsed_ms":0,"commands":[]}"""
+        Chunk_Report(false, JSON.Object(
+          "timed_out" -> false, "success" -> false, "used_sorry" -> false,
+          "elapsed_ms" -> 0, "commands" -> List.empty[JSON.T]
+        ))
     }
 
   def send_edit(isar_string: String, node: Option[Document.Node.Name] = None): Unit = {
@@ -156,6 +159,23 @@ class Repl_Session(session_manager: Session_Manager, initial_thys: List[String] 
             update_session_with_edits(List(Edit_Utils.edit_from_text_edit(remove_edit)))
             thy_info.rollback_last_text_edit_if_exists()
         }
+    }
+
+  /** Silently remove the most recent text edit, if any. Used to make proof-state ML
+   *  probes (open_subgoals / facts / sledgehammer / get_proof_state) TRANSIENT: the
+   *  `ML_val ‹…›` probe is inserted and evaluated, its result is read, then this drops
+   *  it — so probing leaves no trace in the document or the rollback chain. Without this,
+   *  every command left a trailing probe edit, so user `rollback` peeled the probe first
+   *  and needed two calls to undo one line. Unlike `rollback_last_text_edit`, this never
+   *  writes to Repl_Output (safe to call outside `build_result`). */
+  def discard_last_edit(): Unit =
+    current_thy_info.foreach { thy_info =>
+      thy_info.last_text_edit.foreach { last_edit =>
+        update_session_with_edits(
+          List(Edit_Utils.edit_from_text_edit(Edit_Utils.remove_insert_edit(last_edit)))
+        )
+        thy_info.rollback_last_text_edit_if_exists()
+      }
     }
 
   def save_state(): EnvStateID = {

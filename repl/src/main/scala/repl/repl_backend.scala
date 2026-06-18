@@ -54,6 +54,7 @@ class ReplBackend(show_states: Boolean, enable_cache: Boolean = false, max_cache
           },
           channel_id
         )
+        repl_session.discard_last_edit()  // probe is transient: no doc/rollback pollution
         message
       }
     subgoals.asJava
@@ -71,6 +72,7 @@ class ReplBackend(show_states: Boolean, enable_cache: Boolean = false, max_cache
           },
           channel_id
         )
+        repl_session.discard_last_edit()  // probe is transient
         message
       }
     local_facts.asJava
@@ -89,6 +91,7 @@ class ReplBackend(show_states: Boolean, enable_cache: Boolean = false, max_cache
           },
           channel_id
         )
+        repl_session.discard_last_edit()  // probe is transient
         message
       }
     global_facts.asJava
@@ -98,7 +101,7 @@ class ReplBackend(show_states: Boolean, enable_cache: Boolean = false, max_cache
     val suggestions =
       if (!repl_session.current_thy_begun) List()
       else {
-        Repl_ML_Communication.waiting_for_sledgehammer_message(
+        val message = Repl_ML_Communication.waiting_for_sledgehammer_message(
           {
             send_ml_command(
               s"""Repl.send_sledgehammer_tagged "${channel_id}" ${timeout_s} @{Isar.state}"""
@@ -107,6 +110,8 @@ class ReplBackend(show_states: Boolean, enable_cache: Boolean = false, max_cache
           channel_id,
           timeout_s
         )
+        repl_session.discard_last_edit()  // probe is transient
+        message
       }
     suggestions.asJava
   }
@@ -118,7 +123,8 @@ class ReplBackend(show_states: Boolean, enable_cache: Boolean = false, max_cache
       )
     else {
       send_ml_command("Repl.get_proof_state @{Isar.state}")
-      repl_session.output_current_node_results()
+      repl_session.output_current_node_results()  // read the probe's output first
+      repl_session.discard_last_edit()             // then drop the transient probe
     }
   }
 
@@ -141,14 +147,36 @@ class ReplBackend(show_states: Boolean, enable_cache: Boolean = false, max_cache
    * checking stays on per parallel_proofs), then return a JSON per-command status report
    * under ONE wall budget (no per-command timeouts). On budget expiry the report is partial
    * and names the still-`running` line (the loop). Requires the theory to be begun.
+   *
+   * TRANSACTIONAL: the chunk is kept in the theory node only if it verifies fully
+   * (`Chunk_Report.success`); on any failure OR timeout it is rolled back via
+   * `discard_last_edit` so the attempt leaves no trace. This makes repeated attempts
+   * independent: the next try can't hit "Duplicate fact declaration" (re-declaring the same
+   * lemma) or "Bad context for command ... -- using reset state" (a still-running command
+   * poisoning the node), and the removal edit cancels the obsolete (e.g. looping `metis`)
+   * command instead of leaving it churning. Since the theory is begun, send_edit always
+   * records the chunk as the last text edit, so discard removes exactly this chunk.
+   *
+   * The report carries `proof_open`: even a `success` chunk (no command errors) may leave an
+   * UNCLOSED proof — e.g. `theorem ... using assms` or a trailing `have ...` with no `qed`.
+   * Such a chunk is kept (so the caller can `sledgehammer` the open goal), but `proof_open`
+   * is true so the caller knows the theorem is NOT actually proved and must close it (or
+   * rollback) before starting a new `theorem`/`lemma` — declaring one while a proof is open
+   * is exactly what triggers "Bad context for command -- using reset state". `proof_open` is
+   * derived from whether any subgoals remain after the chunk; for a rolled-back (failed)
+   * chunk it is false (nothing was kept).
    */
   def verify_chunk(isar_string: String, wall_budget_ms: Long): String = {
     Repl_Output.reset()
     if (!repl_session.current_thy_begun)
-      """{"timed_out":false,"elapsed_ms":0,"commands":[],"error":"theory not begun"}"""
+      """{"timed_out":false,"success":false,"proof_open":false,"used_sorry":false,"elapsed_ms":0,"commands":[],"error":"theory not begun"}"""
     else {
       repl_session.send_edit(isar_string)
-      repl_session.chunk_status_report(wall_budget_ms)
+      val report = repl_session.chunk_status_report(wall_budget_ms)
+      val proof_open =
+        if (!report.success) { repl_session.discard_last_edit(); false }
+        else !open_subgoals().isEmpty  // kept chunk: any remaining subgoal => proof not closed
+      JSON.Format(report.fields + ("proof_open" -> proof_open))
     }
   }
 
