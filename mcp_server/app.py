@@ -111,6 +111,28 @@ async def source(ctx: Context) -> str:
 
 
 @mcp.tool()
+async def diagnostic(command: str, ctx: Context) -> str:
+    """Run a READ-ONLY Isabelle diagnostic/query command and return its output.
+
+    Use this to INSPECT state without changing the proof — it is the right tool when
+    `verify_chunk` would silently discard the output of a query:
+      - `thm <name>`              show a theorem's statement (e.g. `thm conjI`)
+      - `term "..."` / `prop "..."` / `typ "..."`   parse and print a term/prop/type
+      - `find_theorems "<pat>"`   search for matching theorems (e.g. `find_theorems "_ + 0 = _"`)
+      - `find_consts "<pat>"`     search for matching constants
+      - `prf <name>` / `full_prf <name>`            print proof terms
+      - `print_theorems` / `print_facts` / `print_statement <name>` / any `print_*`
+
+    The command runs transiently (the proof script and rollback chain are untouched).
+    Code-executing / IO commands (ML, setup, *_file, ...) are rejected. Requires a theory
+    to be entered first (`enter_theory`). Returns {success, output, error, execution_time}.
+    """
+    c = await pool.client()
+    cur = pool.require_current(ctx)
+    return json.dumps(await c.diagnostic(cur.session_id, command, lease_id=cur.lease_id), default=str)
+
+
+@mcp.tool()
 async def sledgehammer(ctx: Context, timeout_s: int = 30) -> str:
     """Run Isabelle's sledgehammer on the current goal; returns proof-method suggestions."""
     c = await pool.client()

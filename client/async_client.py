@@ -152,6 +152,38 @@ class IsabelleGymAsyncClient:
         response.raise_for_status()
         return response.json()
 
+    async def diagnostic(
+        self,
+        session_id: str,
+        command: str,
+        timeout: float | None = None,
+        *,
+        lease_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Run a single READ-ONLY Isabelle diagnostic command and return its output.
+
+        Use this for inspecting state WITHOUT changing the proof: ``thm <name>`` (show a
+        theorem), ``term``/``prop``/``typ`` (parse & print), ``find_theorems``/``find_consts``
+        (search), ``prf``, ``print_theorems``/``print_facts``/``print_*``. The command runs
+        transiently (it leaves the proof script and rollback chain untouched), so it is the
+        right call when ``verify_chunk`` would discard ``thm``/search output.
+
+        Code-executing / IO commands (``ML``, ``setup``, ``*_file``, ...) are rejected by the
+        server with HTTP 422. Returns ``{success, output, error, execution_time}``.
+        """
+        response = await self._request(
+            "POST",
+            f"{BASE_URL}/{session_id}/diagnostic",
+            json_body={
+                "command": command,
+                "timeout": timeout if timeout is not None else self.timeout,
+            },
+            headers=self._lease_headers(lease_id),
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        return response.json()
+
     async def verify_chunk(
         self,
         session_id: str,

@@ -16,6 +16,7 @@ from server.app.errors import SessionError, SessionLeaseError
 from server.app.services.threaded_backend import ThreadedBackend
 from server_gym.success_checker import (
     get_error_message,
+    get_output_message,
     is_syntax_successful,
 )
 
@@ -315,6 +316,56 @@ class _Isabelle_Session(BigStepMixin):
                     execution_time = time.time() - start_time
                     logger.exception("small-step result processing failed")
                     raise SessionError(error=str(e), execution_time=execution_time)
+        finally:
+            self._release_request()
+
+    def run_diagnostic(self, command: str, timeout: float = Timeouts.COMMAND_DEFAULT) -> SmallStepExecuteResult:
+        """Run a single READ-ONLY diagnostic command (thm, term, find_theorems, print_*, ...)
+        TRANSIENTLY and return its output.
+
+        The backend inserts the command, reads its writeln/state output, then discards the
+        edit (the same transient-probe pattern as get_proof_state), so the proof script and
+        rollback chain are untouched. Unlike execute_command, this computes no subgoals and
+        does not append to command_history — a diagnostic is a query, not a proof step. The
+        caller (router) MUST have validated the command against core.diagnostic_guard first.
+        """
+        self.update_activity()
+        self._acquire_request()
+        start_time = time.time()
+        try:
+            with logging_context(session_id=self.session_id, field=self.field):
+                logger.info(
+                    "diagnostic started timeout=%s preview=%s",
+                    timeout,
+                    preview_text(command, Logging.COMMAND_PREVIEW_CHARS),
+                )
+                try:
+                    result = self._call_backend(
+                        lambda: self.backend.raw.run_diagnostic(command), timeout=timeout
+                    )
+                    execution_time = time.time() - start_time
+                except Exception as e:
+                    execution_time = time.time() - start_time
+                    logger.exception("diagnostic backend call failed")
+                    raise SessionError(error=str(e), execution_time=execution_time)
+
+                output = get_output_message(result)
+                error_message = get_error_message(result)
+                success = is_syntax_successful(result)
+                logger.info(
+                    "diagnostic finished success=%s has_output=%s execution_time=%s",
+                    success,
+                    bool(output),
+                    round(execution_time, 3),
+                )
+                return SmallStepExecuteResult(
+                    success=success,
+                    output=output,
+                    error=error_message if not success else None,
+                    subgoal_error=None,
+                    subgoals=[],
+                    execution_time=execution_time,
+                )
         finally:
             self._release_request()
 

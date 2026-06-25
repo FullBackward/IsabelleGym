@@ -128,6 +128,22 @@ class ReplBackend(show_states: Boolean, enable_cache: Boolean = false, max_cache
     }
   }
 
+  /** Run a single READ-ONLY diagnostic command (thm, term, find_theorems, print_*, ...)
+   *  TRANSIENTLY: insert it, capture its writeln/state output, then discard the edit so the
+   *  theory node and rollback chain are untouched. Mirrors `get_proof_state`'s probe pattern,
+   *  but inserts the caller's command instead of an ML probe. The diagnostic commands are all
+   *  `Toplevel.keep` (non-state-modifying), so discarding leaves the proof exactly as it was.
+   *  Keyword allowlist/denylist gatekeeping is enforced upstream on the server side. */
+  def run_diagnostic(isar_string: String): Repl_Result = build_result {
+    if (!repl_session.current_thy_begun)
+      Repl_Output.add_error("Cannot run diagnostic without beginning theory.")
+    else {
+      repl_session.send_edit(isar_string)
+      repl_session.output_current_node_results()  // read the diagnostic's output first
+      repl_session.discard_last_edit()             // then drop the transient command
+    }
+  }
+
   def get_source(): Repl_Result = build_result {
     Repl_Output.add_output(repl_session.current_source)
   }

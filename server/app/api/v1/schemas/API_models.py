@@ -1,7 +1,8 @@
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from server.app.core.config import Timeouts
+from server.app.core.diagnostic_guard import validate_diagnostic_command
 
 
 class SessionCreateRequest(BaseModel):
@@ -114,6 +115,34 @@ class SledgehammerResponse(BaseModel):
     success: bool
     suggestions: List[str]
     raw_output: str
+    execution_time: float
+
+
+class DiagnosticRequest(BaseModel):
+    command: str = Field(
+        description="A single READ-ONLY Isabelle diagnostic command: thm, term, prop, typ, "
+        "prf, find_theorems, find_consts, or any print_*/find_* inspector. The command runs "
+        "transiently (it does NOT alter the proof script). Code-executing / IO commands (ML, "
+        "setup, *_file, ...) are rejected with HTTP 422.",
+    )
+    timeout: Optional[float] = Timeouts.COMMAND_DEFAULT
+
+    @field_validator("command")
+    @classmethod
+    def _gatekeep_command(cls, v: str) -> str:
+        # Raises ValueError -> FastAPI returns 422 with the reason. Keeps the
+        # allowlist/denylist policy in one place (core.diagnostic_guard).
+        return validate_diagnostic_command(v)
+
+
+class DiagnosticResponse(BaseModel):
+    success: bool = Field(description="False if the command produced an error message.")
+    output: str | None = Field(
+        default=None,
+        description="The diagnostic's writeln/state output, e.g. the theorem statement for "
+        "`thm`, the matches for `find_theorems`, the printed term for `term`.",
+    )
+    error: str | None = None
     execution_time: float
 
 

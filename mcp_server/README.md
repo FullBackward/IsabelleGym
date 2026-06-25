@@ -17,8 +17,9 @@ client wrappers added in Phase 0); it does **not** modify or patch Isabelle.
 
 ### Tools
 `enter_theory`, `verify_chunk` (the one execution tool — one command or a whole proof),
-`proof_state`, `source`, `sledgehammer`, `checkpoint`, `restore`, `rollback`,
-`close_theory`, `verify_batch`.
+`diagnostic` (read-only queries — `thm`/`term`/`find_theorems`/`print_*`, output that
+`verify_chunk` discards), `proof_state`, `source`, `sledgehammer`, `checkpoint`, `restore`,
+`rollback`, `close_theory`, `verify_batch`.
 ### Resources
 `isabellegym://health`, `isabellegym://sessions`.
 ### Prompts

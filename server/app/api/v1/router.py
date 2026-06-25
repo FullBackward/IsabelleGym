@@ -15,6 +15,8 @@ from .schemas.API_models import (
     CommandRequest,
     CommandResponse,
     CommandStatus,
+    DiagnosticRequest,
+    DiagnosticResponse,
     EnterTheoryRequest,
     ProofStateResponse,
     SessionAcquireRequest,
@@ -282,6 +284,33 @@ async def verify_chunk(session_id: str, request: ChunkVerifyRequest, x_lease_id:
             stuck_line=stuck_line,
             commands=commands,
             execution_time=float(result.get("execution_time", 0.0) or 0.0),
+        )
+
+
+@router.post("/api/v1/sessions/{session_id}/diagnostic", response_model=DiagnosticResponse)
+async def run_diagnostic(session_id: str, request: DiagnosticRequest, x_lease_id: str | None = Header(None, alias="X-Lease-Id"), session_manager=Depends(get_session_manager)):
+    """Run a single READ-ONLY diagnostic command (thm, term, find_theorems, print_*, ...)
+    and return its output. The command runs transiently and does not alter the proof. Input
+    is gatekept by the DiagnosticRequest validator (allowlist of diagnostic keywords + denylist
+    of code-execution/IO commands); rejected input returns HTTP 422 before reaching here."""
+    with logging_context(session_id=session_id):
+        lease_id = _require_lease_id(x_lease_id)
+        session = session_manager.get_session(session_id, lease_id=lease_id, require_lease=True)
+        logger.info(
+            "diagnostic requested preview=%s",
+            _preview(request.command, Logging.COMMAND_PREVIEW_CHARS),
+        )
+        result = await asyncio.to_thread(session.run_diagnostic, request.command, request.timeout)
+        logger.info(
+            "diagnostic finished success=%s execution_time=%s",
+            getattr(result, "success", False),
+            float(getattr(result, "execution_time", 0.0) or 0.0),
+        )
+        return DiagnosticResponse(
+            success=getattr(result, "success", False),
+            output=getattr(result, "output", None),
+            error=getattr(result, "error", None),
+            execution_time=float(getattr(result, "execution_time", 0.0) or 0.0),
         )
 
 
