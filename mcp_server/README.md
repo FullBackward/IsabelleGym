@@ -57,3 +57,44 @@ ISABELLE_MCP_TRANSPORT=streamable-http ISABELLE_MCP_PORT=8848 python -m mcp_serv
 `ISABELLE_MCP_MAX_PARALLEL` (`4`), `ISABELLE_MCP_CHUNK_TIMEOUT` (`180`),
 `ISABELLE_MCP_HTTP_TIMEOUT` (`600`), `ISABELLE_MCP_TRANSPORT` (`stdio`|`streamable-http`),
 `ISABELLE_MCP_HOST`, `ISABELLE_MCP_PORT` (`8848`).
+
+## Run an agent proof (Claude in the loop)
+
+`claude-work/impl-mcp-server/bench_mcp_agent.py` drives Claude through these MCP tools to
+prove theorems end-to-end and records **success rate, token usage, and latency** per theorem.
+It spawns the MCP server itself over stdio, lists its tools, and runs an agentic loop against
+the Anthropic API (Claude calls the tools; the harness executes them via MCP and feeds the
+results back). Token usage is the only metric that requires the model in the loop.
+
+**Prerequisites**
+- A running IsabelleGym server (default `http://localhost:8000`) — the MCP layer wraps it.
+- `ANTHROPIC_API_KEY` exported in the environment (the model must be in the loop).
+- Host deps: `anthropic`, `mcp`, plus the repo's client deps (`httpx`).
+- `PYTHONPATH` set to the repo root so `mcp_server` / `client` import (the harness forwards it
+  to the spawned MCP server as the subprocess's `PYTHONPATH`).
+
+**Commands**
+```bash
+# the two default theorems (rev_rev, gauss_sum), one pass:
+ANTHROPIC_API_KEY=... PYTHONPATH=. python claude-work/impl-mcp-server/bench_mcp_agent.py
+
+# stream Claude's reasoning + each tool call/result:
+... python claude-work/impl-mcp-server/bench_mcp_agent.py --verbose
+
+# prove one inline statement directly:
+... python claude-work/impl-mcp-server/bench_mcp_agent.py \
+    --theorem 'theorem foo: "rev (rev xs) = xs"' --name foo --imports Main
+
+# repeat 3x for averages, with Opus:
+... python claude-work/impl-mcp-server/bench_mcp_agent.py --repeats 3 --model claude-opus-4-8
+
+# over a miniF2F problem set (and save each proof as a .thy):
+... python claude-work/impl-mcp-server/bench_mcp_agent.py \
+    --minif2f-glob "evaluation/miniF2F/test/*.json" --limit 5 --save-proofs proofs/
+```
+
+Key flags: `--model` (default `claude-sonnet-4-6`), `--max-rounds` (12), `--repeats`,
+`--gym-url`, `--problems <json>` / `--minif2f-glob` / `--theorem`, `--select <substr>`,
+`--list`, `--limit`, `--output <json>` (default `mcp_bench_results.json`), `--save-proofs <dir>`.
+A run counts as proved only when `verify_chunk` reports `success=True` **and** `proof_open=False`
+with no `sorry`/`oops` and the chunk contains the target goal.
