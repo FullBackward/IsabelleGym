@@ -285,3 +285,9 @@ claude-work/
 repl/thys/wrap_*.thy
 
 **/miniF2F/**
+
+AGENTS.md
+
+.clinerules/**
+
+MCP-comparison/runs/**

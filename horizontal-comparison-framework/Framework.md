@@ -10,8 +10,7 @@ This is a unified framework for horizonally comparing current (2026.06) MCP serv
 
 ## Global constants
 
-Held identical across every system, problem, and repeat (the fairness controls). Recorded once
-for the whole run — **not** per result row.
+Held identical across every system, problem, and repeat (the fairness controls).
 
 - `model` — the model id, served via the facility's OpenAI-compatible endpoint (e.g. GPT-5.5). Same for all three systems.
 - `settings` — decoding: `temperature`, `max_tokens` (+ reasoning effort if the model exposes it).
@@ -22,7 +21,7 @@ for the whole run — **not** per result row.
 ## Metrics
 
 Each result row is identified by the **dimensions** `system` × `problem` × `repeat` (indices, not
-metrics). The metrics below are what we compare.
+metrics).
 
 ### Solved (outcome)
 - `arbiter_solved` (bool) — ground-truth success from the neutral arbiter (final `.thy` builds clean, no `sorry`/`oops`, target lemma proved). **The only success signal used in headline numbers.**
