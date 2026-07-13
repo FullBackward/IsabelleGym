@@ -17,6 +17,9 @@ class AttemptResult:
     system: str
     problem: str
     repeat: int
+    model_id: str = ""
+    model_provider: str = ""
+    model_temperature: float = 0.0
 
     # Outcome
     arbiter_solved: bool = False         # ground truth — used in headline numbers

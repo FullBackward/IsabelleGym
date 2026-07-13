@@ -161,7 +161,10 @@ async def rollback(ctx: Context) -> str:
     """Roll back the most recent command/edit in the current theory."""
     c = await pool.client()
     cur = pool.require_current(ctx)
-    return json.dumps(await c.rollback(cur.session_id, lease_id=cur.lease_id), default=str)
+    try:
+        return json.dumps(await c.rollback(cur.session_id, lease_id=cur.lease_id), default=str)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)})
 
 
 @mcp.tool()
@@ -206,27 +209,25 @@ async def sessions() -> str:
 
 @mcp.prompt()
 def prove_theorem(theorem: str, imports: str = "Main") -> str:
-    """Workflow prompt for proving an Isabelle theorem via this server."""
+    """Minimal prompt listing all available MCP tools."""
     return (
-        f"Prove the following Isabelle/HOL theorem.\n\n```isabelle\n{theorem}\n```\n\n"
-        f"Workflow:\n"
-        f"1. `enter_theory(name=..., imports={imports.split()})`.\n"
-        f"2. Draft a COMPLETE `proof ... qed` and submit the whole thing with "
-        f"`verify_chunk(text=...)` (one call, one timeout).\n"
-        f"3. If a command is `failed`, read its message and fix that line; if a line is "
-        f"`running` at timeout (`stuck_line`), it is looping — replace that tactic.\n"
-        f"4. Use `sledgehammer()` to discover a proof method for a stuck goal.\n"
-        f"5. Use `checkpoint()`/`rollback()` to explore alternatives safely.\n\n"
-        f"WHAT COUNTS AS PROVED: the theorem is proved ONLY when `verify_chunk` reports "
-        f"success=True AND proof_open=False AND used_sorry=False.\n"
-        f"  - success=True alone just means no command errored.\n"
-        f"  - proof_open=True means the proof is still open (e.g. you ended at `using assms` or "
-        f"a trailing `have` with no `qed`) — finish it; and do NOT start a new theorem/lemma "
-        f"while a proof is open or you will get \"Bad context for command\" (re-enter_theory or "
-        f"rollback first).\n"
-        f"  - Never use `sorry`/`oops` to pass — that sets used_sorry=True and proves nothing.\n"
-        f"Stop as soon as success=True, proof_open=False, used_sorry=False.\n\n"
-        f"To verify several independent lemmas/theories at once, use `verify_batch(items=[...])`."
+        f"Prove the following Isabelle/HOL theorem.\n\n"
+        f"```isabelle\n{theorem}\n```\n\n"
+        f"AVAILABLE TOOLS:\n"
+        f"- enter_theory(name, imports=[...]) — start a proof session\n"
+        f"- verify_chunk(text) — submit proof commands and check status\n"
+        f"- proof_state() — inspect current open subgoals\n"
+        f"- source() — view current theory source text\n"
+        f"- sledgehammer() — run automated proof search on open goal\n"
+        f"- diagnostic(command) — run read-only queries (thm, term, find_theorems, ...)\n"
+        f"- checkpoint() — save current proof state\n"
+        f"- restore(checkpoint_id) — restore a saved checkpoint\n"
+        f"- rollback() — undo the most recent edit\n"
+        f"- close_theory() — release the proof session\n"
+        f"- verify_batch(items=[...]) — verify multiple independent proof chunks in parallel\n"
+        f"\n"
+        f"PROVED WHEN: verify_chunk reports success=True, proof_open=False, used_sorry=False.\n"
+        f"Reply DONE when the theorem is proved.\n"
     )
 
 

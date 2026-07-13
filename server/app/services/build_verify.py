@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import re
 import tempfile
 import time
 from pathlib import Path
@@ -10,9 +11,48 @@ from typing import Dict, List, Optional
 from server.app.core.logging import get_logger
 from server.app.core.config import RegularExp
 from server.app.services.internal_models import BigStepExecuteResult
+
+try:
+    from server.app.services.unicode_normaliser import normalise_for_isabelle
+except ImportError:
+    normalise_for_isabelle = None
+
 from server.app.services.theory_parsing import extract_theory_name
 
 logger = get_logger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Safety net: strip transient ML_val commands that may have leaked into the
+# source from sledgehammer / diagnostic probes.
+# These are harmless no-ops in JEdit but `isabelle build` rejects them.
+# ---------------------------------------------------------------------------
+_MLVAL_RE = re.compile(r'^ML_val\b.*\n?', flags=re.MULTILINE)
+
+
+def _strip_mlval(text: str) -> str:
+    return _MLVAL_RE.sub("", text)
+
+
+def _inline_normalise(text: str) -> str:
+    """Inline fallback Unicode → Isabelle \<name> normalisation."""
+    _FALLBACK = {
+        "\u2200": "\\<forall>", "\u2203": "\\<exists>",
+        "\u2227": "\\<and>", "\u2228": "\\<or>",
+        "\u00ac": "\\<not>", "\u21d2": "\\<Rightarrow>",
+        "\u2261": "\\<equiv>", "\u2260": "\\<noteq>",
+        "\u2208": "\\<in>", "\u2286": "\\<subseteq>",
+        "\u222a": "\\<union>", "\u2229": "\\<inter>",
+        "\u2264": "\\<le>", "\u2265": "\\<ge>",
+        "\u03bb": "\\<lambda>",
+    }
+    normalised = text
+    for u, esc in _FALLBACK.items():
+        normalised = normalised.replace(u, esc)
+    # Strip lone surrogates (U+D800–U+DFFF) which are invalid in well-formed UTF-8.
+    normalised = "".join(ch for ch in normalised if not (0xD800 <= ord(ch) <= 0xDFFF))
+    return normalised
+
 
 def normalize_theories(theories: Optional[List[str]]) -> List[str]:
     if not theories:
@@ -78,8 +118,6 @@ class BuildVerifier:
         timeout: float,
     ) -> BigStepExecuteResult:
         parent_session = (field or "HOL").strip() or "HOL"
-        # Use explicitly-provided dependencies when available;
-        # fall back to extracting imports from the theory text.
         if dependencies:
             deps = normalize_theories(dependencies)
         else:
@@ -109,12 +147,11 @@ class BuildVerifier:
             if result.success:
                 self._cache[theory_hash] = result
             return result
-        
+
     def extract_imports(self, text: str) -> list[str]:
         m = RegularExp.IMPORT_RE.search(text)
         if not m:
             return ["Main"]
-
         raw = m.group("imports")
         out: list[str] = []
         for token in RegularExp.IMPORT_TOKEN_RE.findall(raw):
@@ -159,7 +196,21 @@ class BuildVerifier:
 
         try:
             temp_dir = Path(temp_ctx.name)
-            (temp_dir / f"{theory_name}.thy").write_text(theory_text, encoding="utf-8")
+            # Normalise Unicode symbols → Isabelle \<name> escapes before writing to disk.
+            # Strip transient ML_val commands that may have leaked from probes
+            normalised = _strip_mlval(theory_text)
+            try:
+                if normalise_for_isabelle is not None:
+                    normalised = normalise_for_isabelle(normalised)
+                    if normalised != theory_text:
+                        logger.info("unicode_normaliser: symbols were normalised (input=%d output=%d chars)",
+                                    len(theory_text), len(normalised))
+                # Inline fallback is disabled — testing symbol table only.
+                # else:
+                #     normalised = _inline_normalise(theory_text)
+            except Exception:
+                logger.exception("unicode_normaliser failed — using raw theory text")
+            (temp_dir / f"{theory_name}.thy").write_text(normalised, encoding="utf-8")
 
             session_name = f"Build_{dependency_key[:10]}_{hashlib.sha256(theory_text.encode()).hexdigest()[:10]}"
             write_root(

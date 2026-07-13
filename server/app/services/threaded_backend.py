@@ -30,6 +30,7 @@ class ThreadedBackend:
         self._name = name
         self._q: queue.Queue[_Job] = queue.Queue()
         self._stop = threading.Event()
+        self._shutting_down = threading.Event()
         self._t = threading.Thread(target=self._run, name=name, daemon=True)
         self._t.start()
         logger.info("threaded backend started worker=%s", name)
@@ -39,6 +40,10 @@ class ThreadedBackend:
         return self._backend
 
     def submit(self, fn: Callable[[], Any]) -> concurrent.futures.Future:
+        if self._shutting_down.is_set():
+            fut: concurrent.futures.Future = concurrent.futures.Future()
+            fut.set_exception(RuntimeError(f"Backend {self._name} is shutting down"))
+            return fut
         fut: concurrent.futures.Future = concurrent.futures.Future()
         self._q.put(_Job(fn=fn, fut=fut, ctx=contextvars.copy_context()))
         logger.debug("job submitted to threaded backend worker=%s queue_size=%s", self._name, self._q.qsize())
@@ -61,6 +66,24 @@ class ThreadedBackend:
 
     def close(self) -> None:
         logger.info("closing threaded backend worker=%s", self._name)
+
+        # 1. Signal shutdown — reject new submissions and drain the queue
+        #    so no stale jobs try to use a disconnected Py4J gateway.
+        self._shutting_down.set()
+        cancelled = 0
+        while True:
+            try:
+                job = self._q.get_nowait()
+                job.fut.set_exception(
+                    RuntimeError(f"Backend {self._name} shut down before job executed")
+                )
+                cancelled += 1
+            except queue.Empty:
+                break
+        if cancelled:
+            logger.info("cancelled %s pending jobs during shutdown worker=%s", cancelled, self._name)
+
+        # 2. Ask the JVM to exit gracefully.
         exit_fut = self.submit(self._backend.exit)
         try:
             exit_fut.result(timeout=self.EXIT_TIMEOUT)

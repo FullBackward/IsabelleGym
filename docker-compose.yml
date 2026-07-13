@@ -41,7 +41,7 @@ services:
       - "8000:8000"
     # Real cgroup ceiling so the memory admission gate bites at a known limit
     # and cAdvisor can report OOM events. Raise for bigger concurrent sweeps.
-    mem_limit: 12g
+    mem_limit: 24g
     command: bash
 
   prometheus:

@@ -284,14 +284,17 @@ class IsabelleGymAsyncClient:
         theory_text: str,
         *,
         field: str | None = "HOL",
+        dependencies: list[str] | None = None,
         timeout: float = 300.0,
     ) -> httpx.Response:
-        payload = {
+        payload: dict[str, Any] = {
             "theory_name": theory_name,
             "field": field,
             "theory": theory_text,
             "timeout": timeout,
         }
+        if dependencies:
+            payload["dependencies"] = dependencies
         return await self._request(
             "POST",
             f"{BASE_URL}/bigstep",

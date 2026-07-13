@@ -24,9 +24,16 @@ async def mcp_session(cfg: MCPServerConfig) -> AsyncIterator[ClientSession]:
 
 
 async def call_tool(session: ClientSession, name: str, arguments: dict[str, Any]) -> str:
-    result = await session.call_tool(name, arguments)
-    parts = [c.text for c in result.content if getattr(c, "type", "") == "text"]
-    return "\n".join(parts) or "(no output)"
+    try:
+        result = await session.call_tool(name, arguments)
+        parts = [c.text for c in result.content if getattr(c, "type", "") == "text"]
+        return "\n".join(parts) or "(no output)"
+    except BaseException as e:
+        # The MCP library occasionally raises TypeError("catching classes
+        # that do not inherit from BaseException") when the stdio transport
+        # encounters a malformed or dropped message.  Return a structured
+        # error string instead of letting the exception propagate.
+        return f"MCP tool error ({name}): {type(e).__name__}: {str(e)}"
 
 
 async def list_tools(session: ClientSession) -> list[dict[str, Any]]:

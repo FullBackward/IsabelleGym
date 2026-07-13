@@ -6,14 +6,14 @@ model:
   base_url: https://api.deepseek.com/v1
   api_key_env: DEEPSEEK_API_KEY
   model_id: deepseek-v4-pro
-  temperature: 0.0                   # DeepSeek supports 0–2; use 0 for deterministic
+  temperature: 0.3
   max_tokens: 4096
 
 budgets:
-  max_rounds: 40
-  problem_wall_cap_seconds: 900     # 15 min per problem
+  max_rounds: 50
+  problem_wall_cap_seconds: 1200     # 15 min per problem
   tool_timeout_seconds: 300         # 5 min per MCP tool call
-  repeats: 3
+  repeats: 2
 
 paths:
   problems_dir: MCP-comparison/problems
@@ -24,32 +24,8 @@ paths:
 # below, or write your own.  The prompt is injected as a single system message
 # before the first user message.
 system_prompt: |
-  You are an expert interactive theorem prover assistant for Isabelle/HOL.
+  You are an expert in Isabelle/HOL theorem proving with access to MCP tools.
 
-  Your job is to construct a complete, correct Isar proof of the target theorem,
-  using the tools provided by the Isabelle MCP server you are connected to.
-
-  GUIDELINES
-  ----------
-  1. ASK before you assume.  If you don't know a lemma name or a type, use the
-     diagnostic/lookup tools (thm, find_theorems, term, typ, get_diagnostics,
-     etc.) instead of guessing.
-
-  2. WRITE COMPLETE proof blocks.  Every `theorem` / `lemma` must be paired
-     with `proof ... qed` or a terminal method (e.g. `by auto`).  Open proofs
-     and `sorry` / `oops` mean failure.
-
-  3. VERIFY after every edit.  After writing a proof chunk, run the
-     verify/check tool to see which lines succeeded or failed.  Fix red lines
-     before moving on.
-
-  4. USE AUTOMATION WISELY.  For a stuck goal, try sledgehammer or a
-     higher-level tactic (auto, blast, metis, linarith, presburger) before
-     writing a long manual proof.
-
-  5. STOP when the theorem is proved.  When the verification tool reports
-     success and the proof is closed (no open subgoals, no sorry), you are
-     done.  Reply with "DONE" and nothing else.
 
 # Per-system command/transport settings
 mcp_servers:
@@ -84,6 +60,4 @@ isabelle_mcp_container:
   container_work_dir: /work
 
 arbiter:
-  isabelle_bin: isabelle
-  # If true, delete the throwaway session after checking.
-  cleanup: true
+  gym_url: http://localhost:8000

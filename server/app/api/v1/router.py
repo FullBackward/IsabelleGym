@@ -32,6 +32,7 @@ from server.app.core.logging import get_logger, logging_context
 from server.app.core import metrics
 from server.app.dependencies import get_session_manager
 from server.app.errors import SessionLeaseError
+from server.app.services.internal_models import SessionExecutionError
 
 router = APIRouter()
 logger = get_logger(__name__)
@@ -314,17 +315,23 @@ async def run_diagnostic(session_id: str, request: DiagnosticRequest, x_lease_id
         )
 
 
-@router.get("/api/v1/sessions/{session_id}/state", response_model=ProofStateResponse)
+@router.get("/api/v1/sessions/{session_id}/state")
 async def get_proof_state(session_id: str, x_lease_id: str | None = Header(None, alias="X-Lease-Id"), session_manager=Depends(get_session_manager)):
     with logging_context(session_id=session_id):
         logger.debug("fetching proof state")
         lease_id = _require_lease_id(x_lease_id)
         session = session_manager.get_session(session_id, lease_id=lease_id, require_lease=True)
         state = await asyncio.to_thread(session.get_proof_state)
+        if isinstance(state, SessionExecutionError):
+            logger.warning("proof state fetch failed: %s", state.error)
+            return JSONResponse(
+                status_code=500,
+                content={"error": state.error, "execution_time": state.execution_time},
+            )
         return ProofStateResponse(
-            subgoals=getattr(state, "subgoals", []) or [],
-            proof_finished=bool(getattr(state, "proof_finished", False)),
-            current_theory=getattr(state, "current_theory", None),
+            subgoals=state.subgoals or [],
+            proof_finished=state.proof_finished,
+            current_theory=state.current_theory,
         )
 
 
@@ -334,12 +341,18 @@ async def get_subgoals(session_id: str, x_lease_id: str | None = Header(None, al
         lease_id = _require_lease_id(x_lease_id)
         session = session_manager.get_session(session_id, lease_id=lease_id, require_lease=True)
         state = await asyncio.to_thread(session.get_proof_state)
-        subgoals = getattr(state, "subgoals", []) or []
+        if isinstance(state, SessionExecutionError):
+            logger.warning("subgoals fetch failed: %s", state.error)
+            return JSONResponse(
+                status_code=500,
+                content={"error": state.error, "execution_time": state.execution_time},
+            )
+        subgoals = state.subgoals or []
         logger.debug("returning %s subgoals", len(subgoals))
         return {
             "subgoals": subgoals,
             "count": len(subgoals),
-            "proof_finished": bool(getattr(state, "proof_finished", False)),
+            "proof_finished": state.proof_finished,
         }
 
 
@@ -392,7 +405,12 @@ async def rollback(session_id: str, x_lease_id: str | None = Header(None, alias=
         lease_id = _require_lease_id(x_lease_id)
         session = session_manager.get_session(session_id, lease_id=lease_id, require_lease=True)
         result = await asyncio.to_thread(session.rollback)
-        output = result.total_output() if hasattr(result, "total_output") else None
+        output = result.total_output() if hasattr(result, "total_output") else ""
+        if output and "No text edits have been made to rollback" in str(output):
+            return JSONResponse(
+                status_code=409,
+                content={"success": False, "error": "no edits to roll back", "output": output},
+            )
         return {"success": True, "output": output}
 
 @router.post(

@@ -86,8 +86,7 @@ class Config:
     paths: PathsConfig
     mcp_servers: dict[str, MCPServerConfig]
     isabelle_mcp_container: IsabelleMCPContainerConfig
-    arbiter_isabelle_bin: str
-    arbiter_cleanup: bool
+    arbiter_gym_url: str = "http://localhost:8000"
     system_prompt: str | None = None
 
 
@@ -121,7 +120,6 @@ def load() -> Config:
         paths=paths,
         mcp_servers=mcp_servers,
         isabelle_mcp_container=isabelle_mcp_container,
-        arbiter_isabelle_bin=arbiter_cfg.get("isabelle_bin", "isabelle"),
-        arbiter_cleanup=arbiter_cfg.get("cleanup", True),
+        arbiter_gym_url=arbiter_cfg.get("gym_url", "http://localhost:8000"),
         system_prompt=system_prompt,
     )

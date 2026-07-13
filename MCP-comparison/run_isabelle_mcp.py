@@ -85,7 +85,14 @@ async def run_attempt(problem: Problem, repeat: int, results_path: Path) -> None
 
     messages = [
         {"role": "user", "content": (
-            f"Prove the theorem in {thy_path_str}.\n"
+            f"Prove the target theorem below.  Write your proof into the theory file at "
+            f"{thy_path_str} using write_thy.\n\n"
+            f"Use the verification tool to check each edit.  If a command fails, read its "
+            f"error and fix that line.  If a tactic loops (timeout), replace it.\n\n"
+            f"IMPORTANT: the theorem is proved ONLY when the verification tool reports success "
+            f"with zero errors.  Never use sorry/oops — they do not count as proved.  After "
+            f"writing your final proof, call the verification tool to confirm it passes.\n\n"
+            f"Reply DONE only after the verification tool reports success with no errors.\n\n"
             f"Theory: {problem.name}\nImports: {problem.imports}\n"
             f"Target theorem:\n{problem.statement}\n"
         )},
@@ -98,6 +105,9 @@ async def run_attempt(problem: Problem, repeat: int, results_path: Path) -> None
         system="isabelle_mcp",
         problem=problem.name,
         repeat=repeat,
+        model_id=cfg.model.model_id,
+        model_provider=cfg.model.provider,
+        model_temperature=cfg.model.temperature,
     )
     timer = Timer()
     tokens = TokenAggregator()
@@ -140,6 +150,8 @@ async def run_attempt(problem: Problem, repeat: int, results_path: Path) -> None
                 })
 
                 if not round_result.tool_calls:
+                    if not (round_result.assistant_text or "").strip():
+                        result.error = "Model returned empty response (likely content filter)"
                     if "DONE" in (round_result.assistant_text or ""):
                         result.agent_claimed_solved = True
                     break
@@ -148,7 +160,11 @@ async def run_attempt(problem: Problem, repeat: int, results_path: Path) -> None
                 for tc in round_result.tool_calls:
                     result.n_tool_calls += 1
                     name = tc.function.name
-                    args = json.loads(tc.function.arguments)
+                    try:
+                        args = json.loads(tc.function.arguments)
+                    except json.JSONDecodeError as e:
+                        result.error = f"JSONDecodeError: {e}"
+                        break
                     # Sanitize string args — DeepSeek may emit lone surrogates
                     for k, v in list(args.items()):
                         if isinstance(v, str):
@@ -212,27 +228,57 @@ async def run_attempt(problem: Problem, repeat: int, results_path: Path) -> None
             shutil.copy(source, final_thy_path)
             result.final_thy_path = str(final_thy_path)
     except Exception as e:
-        logger.log_text("ERROR", f"{type(e).__name__}: {e}")
-        result.error = f"{type(e).__name__}: {e}"
+        import traceback as _tb
+        # Recursively unwrap nested ExceptionGroups to find the root cause
+        while hasattr(e, "exceptions") and getattr(e, "exceptions"):
+            subs = getattr(e, "exceptions")
+            if subs:
+                e = subs[0]
+            else:
+                break
+        msg = f"{type(e).__name__}: {e}"
+        _tb_str = _tb.format_exc()
+        logger.log_text("ERROR", msg)
+        logger.log_text("TRACEBACK", _tb_str)
+        # Include traceback summary in the error so it reaches results.jsonl
+        _lines = _tb_str.strip().split("\n")
+        _summary = "\n".join(_lines[-5:]) if len(_lines) > 5 else _tb_str
+        msg = f"{msg}\n[TRACEBACK]\n{_summary}"
+        result.error = msg
         result.wall_s = round(timer.stop(), 2) if timer.t0 is not None else 0.0
         result.input_tokens = tokens.input_tokens
         result.output_tokens = tokens.output_tokens
         result.cached_tokens = tokens.cached_tokens
         result.prover_s = round(sum(tool_times), 2) if tool_times else None
         result.round_latencies = round_latencies
-        if final_thy_path.exists():
-            result.final_thy_path = str(final_thy_path)
+        # Try to preserve the theory file from the work directory
+        try:
+            if host_thy_path.exists():
+                shutil.copy(host_thy_path, final_thy_path)
+                result.final_thy_path = str(final_thy_path)
+        except Exception:
+            pass
     finally:
+        # Arbiter (must be before logger.close())
+        if final_thy_path.exists():
+            verdict = await check(problem, final_thy_path, gym_url=cfg.arbiter_gym_url)
+            logger.log_text("ARBITER_VERDICT", (
+                f"solved={verdict['solved']} "
+                f"error={verdict.get('error')} "
+                f"build_log={verdict.get('build_log', '')}"
+            ))
+            result.arbiter_solved = verdict["solved"]
+            if not result.arbiter_solved and result.error is None:
+                result.error = verdict.get("error")
+        else:
+            result.arbiter_solved = False
+            if result.error is None:
+                result.error = "no final theory file available for arbiter"
+
+        append_result(results_path, result)
         logger.close()
-
-    verdict = check(problem, final_thy_path, isabelle_bin=cfg.arbiter_isabelle_bin, cleanup=cfg.arbiter_cleanup)
-    result.arbiter_solved = verdict["solved"]
-    if not result.arbiter_solved and result.error is None:
-        result.error = verdict.get("error")
-
-    append_result(results_path, result)
-    print(f"{problem.name} rep{repeat}: rounds={result.rounds} wall={result.wall_s}s "
-          f"tok={result.total_tokens} arbiter={result.arbiter_solved}")
+        print(f"{problem.name} rep{repeat}: rounds={result.rounds} wall={result.wall_s}s "
+              f"tok={result.total_tokens} arbiter={result.arbiter_solved}")
 
 
 async def main() -> None:
@@ -263,6 +309,9 @@ async def main() -> None:
                     system="isabelle_mcp",
                     problem=problem.name,
                     repeat=repeat,
+                    model_id=cfg.model.model_id,
+                    model_provider=cfg.model.provider,
+                    model_temperature=cfg.model.temperature,
                     error=str(e),
                 )
                 append_result(results_path, res)

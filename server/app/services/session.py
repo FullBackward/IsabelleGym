@@ -80,7 +80,12 @@ class _Isabelle_Session(BigStepMixin):
 
     def _call_backend(self, fn, timeout: Optional[float] = None):
         fut: concurrent.futures.Future = self.backend.submit(fn)
-        return fut.result(timeout=timeout)
+        try:
+            return fut.result(timeout=timeout)
+        except TimeoutError:
+            raise TimeoutError(
+                f"Backend call timed out after {timeout:.1f}s"
+            ) from None
 
     def update_activity(self):
         self.last_activity = time.time()
@@ -263,8 +268,11 @@ class _Isabelle_Session(BigStepMixin):
                     execution_time = time.time() - start_time
                 except Exception as e:
                     execution_time = time.time() - start_time
-                    logger.exception("small-step backend call failed")
-                    raise SessionError(error=str(e), execution_time=execution_time)
+                    msg = f"{type(e).__name__}"
+                    if str(e):
+                        msg += f": {str(e)}"
+                    logger.exception("small-step backend call failed: %s", msg)
+                    raise SessionError(error=msg, execution_time=execution_time) from None
 
                 try:
                     success = is_syntax_successful(result)
@@ -341,13 +349,16 @@ class _Isabelle_Session(BigStepMixin):
                 )
                 try:
                     result = self._call_backend(
-                        lambda: self.backend.raw.run_diagnostic(command), timeout=timeout
+                        lambda: self.backend.raw.probe_transient(command), timeout=timeout
                     )
                     execution_time = time.time() - start_time
                 except Exception as e:
                     execution_time = time.time() - start_time
-                    logger.exception("diagnostic backend call failed")
-                    raise SessionError(error=str(e), execution_time=execution_time)
+                    msg = f"{type(e).__name__}"
+                    if str(e):
+                        msg += f": {str(e)}"
+                    logger.exception("diagnostic backend call failed: %s", msg)
+                    raise SessionError(error=msg, execution_time=execution_time) from None
 
                 output = get_output_message(result)
                 error_message = get_error_message(result)
@@ -399,8 +410,11 @@ class _Isabelle_Session(BigStepMixin):
                     execution_time = time.time() - start_time
                 except Exception as e:
                     execution_time = time.time() - start_time
-                    logger.exception("verify_chunk backend call failed")
-                    raise SessionError(error=str(e), execution_time=execution_time)
+                    msg = f"{type(e).__name__}"
+                    if str(e):
+                        msg += f": {str(e)}"
+                    logger.exception("verify_chunk backend call failed: %s", msg)
+                    raise SessionError(error=msg, execution_time=execution_time) from None
 
                 try:
                     report = json.loads(report_json) if report_json else {}
@@ -433,8 +447,11 @@ class _Isabelle_Session(BigStepMixin):
                         current_theory=current_thy,
                     )
                 except Exception as e:
-                    logger.exception("failed to fetch proof state")
-                    return SessionExecutionError(error=str(e), execution_time=time.time() - start_time)
+                    msg = f"{type(e).__name__}"
+                    if str(e):
+                        msg += f": {str(e)}"
+                    logger.exception("failed to fetch proof state: %s", msg)
+                    return SessionExecutionError(error=msg, execution_time=time.time() - start_time)
         finally:
             self._release_request()
 
