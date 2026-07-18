@@ -14,7 +14,7 @@ from server.app.api.v1.router import router as api_router
 from server.app.core import metrics
 from server.app.core.config import API, Logging, Server
 from server.app.core.logging import get_logger, reset_logging_context, set_logging_context, setup_logging
-from server.app.errors import GatewayUnavailable, PoolExhausted, SessionBusyError, SessionLeaseError, SessionNotFound, SessionStartError
+from server.app.errors import GatewayUnavailable, PoolExhausted, SessionBusyError, SessionError, SessionLeaseError, SessionNotFound, SessionStartError
 from server.app.services.session_manager import SessionManager
 
 setup_logging()
@@ -130,6 +130,19 @@ async def handle_pool_exhausted(request: Request, exc: PoolExhausted):
         content={"detail": str(exc) or "Session pool exhausted"},
         headers={"Retry-After": "5"},
     )
+
+
+@app.exception_handler(SessionError)
+async def handle_session_error(request: Request, exc: SessionError):
+    """Base handler for session-layer failures (backend errors/timeouts).
+
+    Subclasses keep their specific handlers above (FastAPI resolves by MRO);
+    this catches plain SessionError so the constructed message (e.g.
+    'TimeoutError: Backend call timed out after 30.0s') reaches the client
+    instead of collapsing into a generic 'Internal server error'.
+    """
+    logger.error("session error on %s: %s", request.url.path, exc)
+    return JSONResponse(status_code=500, content={"detail": str(exc) or "Session error"})
 
 
 @app.exception_handler(Exception)

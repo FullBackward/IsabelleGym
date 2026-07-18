@@ -35,6 +35,8 @@ def _render_chunk(report: Dict[str, Any], detail: bool) -> str:
     )
     bad = [c for c in cmds if c.get("status") in ("failed", "running")]
     lines = [head]
+    if report.get("error"):
+        lines.append(f"  ERROR: {report['error']}")
     for c in bad:
         msgs = "; ".join((m.get("text", "") or "")[:200] for m in (c.get("messages") or []))
         lines.append(f"  line {c.get('line')} {c.get('kind')} {c.get('status')} {msgs}".rstrip())
@@ -169,7 +171,8 @@ async def rollback(ctx: Context) -> str:
 
 @mcp.tool()
 async def close_theory(ctx: Context) -> str:
-    """Release this connection's current session back to the pool."""
+    """Close this connection's current session (the server-side backend is
+    destroyed, not pooled for reuse). Call when done with a theorem."""
     closed = await pool.close_for(ctx)
     return "closed" if closed else "no active session"
 

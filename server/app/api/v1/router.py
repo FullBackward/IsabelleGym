@@ -285,6 +285,7 @@ async def verify_chunk(session_id: str, request: ChunkVerifyRequest, x_lease_id:
             stuck_line=stuck_line,
             commands=commands,
             execution_time=float(result.get("execution_time", 0.0) or 0.0),
+            error=report.get("error"),
         )
 
 

@@ -54,6 +54,12 @@ class Memory:
     MIN_AVAILABLE_MB: Final     = int(os.getenv("ISABELLE_MEMORY_MIN_AVAILABLE_MB", "256"))
     FALLBACK_SYSTEM_MB: Final   = int(os.getenv("ISABELLE_MEMORY_FALLBACK_SYSTEM_MB", "4096"))
     SERVER_START_RETRIES: Final = int(os.getenv("ISABELLE_SERVER_START_RETRIES", "5"))
+    # Session teardown -> cgroup accounting is not instantaneous (poly exit +
+    # kernel reclaim lag). Pause after an eviction before re-reading the
+    # snapshot, and retry admission briefly before 503ing a create.
+    EVICTION_SETTLE_S: Final    = float(os.getenv("ISABELLE_MEMORY_EVICTION_SETTLE_S", "2.0"))
+    ADMISSION_RETRIES: Final    = int(os.getenv("ISABELLE_MEMORY_ADMISSION_RETRIES", "3"))
+    ADMISSION_RETRY_DELAY_S: Final = float(os.getenv("ISABELLE_MEMORY_ADMISSION_RETRY_DELAY_S", "2.0"))
 
 
 class Timeouts:

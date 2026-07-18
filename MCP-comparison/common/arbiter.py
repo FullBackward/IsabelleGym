@@ -2,16 +2,20 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import sys
 from pathlib import Path
 
+# Repo root must be importable BEFORE the client import (this previously sat
+# below it, so `python -m common.arbiter` always died with ModuleNotFoundError).
+_REPO_ROOT = str(Path(__file__).resolve().parents[2])
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
 from client.async_client import IsabelleGymAsyncClient
 
 from .problems import Problem
-
-if "." not in sys.path:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 _SORRY_RE = re.compile(r"\b(sorry|oops)\b")
 
@@ -65,14 +69,21 @@ async def check(
     if deps:
         effective_field = deps[0]
 
-    # 4. Send to the IsabelleGym server via async client
+    # 4. Send to the IsabelleGym server via async client.
+    # Budget note: the FIRST arbiter call for a problem importing a heavy session
+    # (e.g. HOL-Computational_Algebra) also builds that parent session; 300 s was
+    # not enough and produced false "unsolved" verdicts with an empty ReadTimeout.
+    # Later calls reuse the cached heap and are fast. Pre-building once
+    # (`isabelle build -b HOL-Computational_Algebra` in the container) avoids
+    # paying this during scoring at all.
+    build_budget = float(os.environ.get("ARBITER_BUILD_TIMEOUT_S", "900"))
     try:
-        async with IsabelleGymAsyncClient(base_url=gym_url, timeout=420.0) as client:
+        async with IsabelleGymAsyncClient(base_url=gym_url, timeout=build_budget + 60.0) as client:
             resp = await client.verify_bigstep_text(
                 theory_name=problem.name,
                 theory_text=final_text,
                 field=effective_field,
-                timeout=300.0,
+                timeout=build_budget,
             )
             resp.raise_for_status()
             data = resp.json()
@@ -83,7 +94,9 @@ async def check(
                 "build_log": str(data),
             }
     except Exception as e:
-        return {"solved": False, "error": f"gym arbiter: {e}", "build_log": ""}
+        # Include the exception TYPE: httpx.ReadTimeout etc. often have an empty
+        # str(), which used to yield an undiagnosable "gym arbiter: " error.
+        return {"solved": False, "error": f"gym arbiter: {type(e).__name__}: {e}", "build_log": ""}
 
 
 if __name__ == "__main__":

@@ -44,6 +44,11 @@ class ThreadedBackend:
             fut: concurrent.futures.Future = concurrent.futures.Future()
             fut.set_exception(RuntimeError(f"Backend {self._name} is shutting down"))
             return fut
+        return self._submit_unchecked(fn)
+
+    def _submit_unchecked(self, fn: Callable[[], Any]) -> concurrent.futures.Future:
+        """Enqueue without the shutdown guard. Only close() may use this, to
+        deliver the final exit() job after external submissions are rejected."""
         fut: concurrent.futures.Future = concurrent.futures.Future()
         self._q.put(_Job(fn=fn, fut=fut, ctx=contextvars.copy_context()))
         logger.debug("job submitted to threaded backend worker=%s queue_size=%s", self._name, self._q.qsize())
@@ -83,8 +88,10 @@ class ThreadedBackend:
         if cancelled:
             logger.info("cancelled %s pending jobs during shutdown worker=%s", cancelled, self._name)
 
-        # 2. Ask the JVM to exit gracefully.
-        exit_fut = self.submit(self._backend.exit)
+        # 2. Ask the JVM to exit gracefully. Must bypass the shutdown guard set
+        #    above — submit() would reject this job and the Scala session
+        #    (poly process + in-JVM Isabelle server) would never be torn down.
+        exit_fut = self._submit_unchecked(self._backend.exit)
         try:
             exit_fut.result(timeout=self.EXIT_TIMEOUT)
         except Exception:

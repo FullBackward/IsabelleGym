@@ -7,11 +7,13 @@ model:
   api_key_env: DEEPSEEK_API_KEY
   model_id: deepseek-v4-pro
   temperature: 0.3
-  max_tokens: 4096
+  # 4096 caused the empty-response runs: DeepSeek's hidden reasoning consumed the
+  # whole budget (finish_reason=length) before any visible output/tool call.
+  max_tokens: 32768
 
 budgets:
   max_rounds: 50
-  problem_wall_cap_seconds: 1200     # 15 min per problem
+  problem_wall_cap_seconds: 1200     # 20 min per problem
   tool_timeout_seconds: 300         # 5 min per MCP tool call
   repeats: 2
 
@@ -29,7 +31,7 @@ mcp_servers:
   isabellegym:
     command: [python, -m, mcp_server.app]
     env:
-      PYTHONPATH: C:/Users/winst/GitHub/IsabelleGym
+      PYTHONPATH: /Users/winstonren/GitHub/IsabelleGym
       ISABELLE_MCP_GYM_URL: http://localhost:8000
 
   isabelle_mcp:
@@ -39,7 +41,7 @@ mcp_servers:
 
   autocorrode_iq:
     # Stdio bridge to the I/Q TCP server inside jEdit.
-    command: [python, C:/Users/winst/GitHub/AutoCorrode/iq/iq_bridge.py]
+    command: [python, /Users/winstonren/GitHub/AutoCorrode/iq/iq_bridge.py]
     env:
       IQ_MCP_BRIDGE_PORT: "8765"
 
@@ -48,7 +50,7 @@ mcp_servers:
 # paths to container_work_dir before calling MCP tools.
 isabelle_mcp_container:
   container_name: isabelle-eval
-  host_work_dir: C:/Users/winst/GitHub/Isabelle-MCP/container/work
+  host_work_dir: /Users/winstonren/GitHub/Isabelle-MCP/container/work
   container_work_dir: /work
 
 arbiter:

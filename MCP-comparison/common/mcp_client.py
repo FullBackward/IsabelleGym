@@ -27,12 +27,21 @@ async def call_tool(session: ClientSession, name: str, arguments: dict[str, Any]
     try:
         result = await session.call_tool(name, arguments)
         parts = [c.text for c in result.content if getattr(c, "type", "") == "text"]
-        return "\n".join(parts) or "(no output)"
-    except BaseException as e:
+        text = "\n".join(parts) or "(no output)"
+        # Surface the MCP-level error flag: servers like I/Q return failures as
+        # isError=true with a JSON payload (e.g. {"text":"command write not
+        # implemented"}); flattening that away made errors look like success.
+        if getattr(result, "isError", False):
+            return f"MCP tool error ({name}): {text}"
+        return text
+    except Exception as e:
         # The MCP library occasionally raises TypeError("catching classes
         # that do not inherit from BaseException") when the stdio transport
         # encounters a malformed or dropped message.  Return a structured
         # error string instead of letting the exception propagate.
+        # NOTE: Exception, not BaseException — swallowing CancelledError here
+        # broke asyncio.wait_for tool timeouts (the cancel never landed, and
+        # the MCP session was left desynchronized).
         return f"MCP tool error ({name}): {type(e).__name__}: {str(e)}"
 
 

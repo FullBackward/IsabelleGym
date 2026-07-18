@@ -139,15 +139,18 @@ class IsabelleGymAsyncClient:
         *,
         lease_id: str | None = None,
     ) -> dict[str, Any]:
+        budget = timeout if timeout is not None else self.timeout
         response = await self._request(
             "POST",
             f"{BASE_URL}/{session_id}/commands",
             json_body={
                 "command": command,
-                "timeout": timeout if timeout is not None else self.timeout,
+                "timeout": budget,
             },
             headers=self._lease_headers(lease_id),
-            timeout=timeout,
+            # HTTP timeout must exceed the server-side command budget, else the
+            # client aborts exactly when the server would report the timeout.
+            timeout=budget + 30.0,
         )
         response.raise_for_status()
         return response.json()
@@ -171,15 +174,17 @@ class IsabelleGymAsyncClient:
         Code-executing / IO commands (``ML``, ``setup``, ``*_file``, ...) are rejected by the
         server with HTTP 422. Returns ``{success, output, error, execution_time}``.
         """
+        budget = timeout if timeout is not None else self.timeout
         response = await self._request(
             "POST",
             f"{BASE_URL}/{session_id}/diagnostic",
             json_body={
                 "command": command,
-                "timeout": timeout if timeout is not None else self.timeout,
+                "timeout": budget,
             },
             headers=self._lease_headers(lease_id),
-            timeout=timeout,
+            # grace beyond the server-side budget (same rationale as verify_chunk)
+            timeout=budget + 30.0,
         )
         response.raise_for_status()
         return response.json()
@@ -267,7 +272,9 @@ class IsabelleGymAsyncClient:
 
         The session must already be in an active proof state.
         """
-        http_timeout = timeout_s + 30.0
+        # Grace covers both the prover run AND time queued on the server-wide
+        # sledgehammer semaphore (requests wait there before the ML call starts).
+        http_timeout = timeout_s + 120.0
         response = await self._request(
             "POST",
             f"{BASE_URL}/{session_id}/sledgehammer",

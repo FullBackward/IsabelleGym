@@ -12,7 +12,7 @@ import py4j
 
 from server.app.core.config import Logging, Timeouts, RegularExp
 from server.app.core.logging import get_logger, logging_context
-from server.app.errors import SessionError, SessionLeaseError
+from server.app.errors import SessionError, SessionLeaseError, SessionNotFound
 from server.app.services.threaded_backend import ThreadedBackend
 from server_gym.success_checker import (
     get_error_message,
@@ -86,6 +86,15 @@ class _Isabelle_Session(BigStepMixin):
             raise TimeoutError(
                 f"Backend call timed out after {timeout:.1f}s"
             ) from None
+        except RuntimeError as e:
+            # A session looked up via get_session can be closed/evicted before
+            # the operation reaches the worker; report that truthfully as a
+            # retryable 404 rather than an opaque 500.
+            if "shutting down" in str(e) or "shut down before job executed" in str(e):
+                raise SessionNotFound(
+                    f"Session {self.session_id} was closed while the request was in flight"
+                ) from None
+            raise
 
     def update_activity(self):
         self.last_activity = time.time()
@@ -198,13 +207,22 @@ class _Isabelle_Session(BigStepMixin):
         'by (simp add: bar)']).  Returns an empty list if no proof is found
         within timeout_s or if the session is not in a proof state.
         """
-        logger.info("running sledgehammer timeout_s=%s", timeout_s)
-        effective_http_timeout = http_timeout or (timeout_s + 30.0)
-        raw: "py4j.java_collections.JavaList[str]" = self._call_backend(
-            lambda: self.backend.raw.sledgehammer(timeout_s),
-            timeout=effective_http_timeout,
-        )
-        return list(raw) if raw is not None else []
+        # Busy/activity accounting: without this, in_use stays False during a
+        # long sledgehammer, so release_session succeeds mid-run and the
+        # session becomes eligible for idle/memory eviction with a job in
+        # flight (audit finding A4).
+        self.update_activity()
+        self._acquire_request()
+        try:
+            logger.info("running sledgehammer timeout_s=%s", timeout_s)
+            effective_http_timeout = http_timeout or (timeout_s + 30.0)
+            raw: "py4j.java_collections.JavaList[str]" = self._call_backend(
+                lambda: self.backend.raw.sledgehammer(timeout_s),
+                timeout=effective_http_timeout,
+            )
+            return list(raw) if raw is not None else []
+        finally:
+            self._release_request()
 
     @staticmethod
     def _build_theory_header(name: str, imports: List[str]) -> str:
@@ -266,6 +284,8 @@ class _Isabelle_Session(BigStepMixin):
                 try:
                     result = self.step(command, timeout=timeout)
                     execution_time = time.time() - start_time
+                except SessionError:
+                    raise  # already typed (e.g. SessionNotFound) — keep its HTTP mapping
                 except Exception as e:
                     execution_time = time.time() - start_time
                     msg = f"{type(e).__name__}"
@@ -352,6 +372,8 @@ class _Isabelle_Session(BigStepMixin):
                         lambda: self.backend.raw.probe_transient(command), timeout=timeout
                     )
                     execution_time = time.time() - start_time
+                except SessionError:
+                    raise  # already typed (e.g. SessionNotFound) — keep its HTTP mapping
                 except Exception as e:
                     execution_time = time.time() - start_time
                     msg = f"{type(e).__name__}"
@@ -408,6 +430,8 @@ class _Isabelle_Session(BigStepMixin):
                         timeout=timeout + Timeouts.COMMAND_DEFAULT,
                     )
                     execution_time = time.time() - start_time
+                except SessionError:
+                    raise  # already typed (e.g. SessionNotFound) — keep its HTTP mapping
                 except Exception as e:
                     execution_time = time.time() - start_time
                     msg = f"{type(e).__name__}"

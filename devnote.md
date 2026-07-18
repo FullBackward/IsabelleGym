@@ -255,59 +255,66 @@ Reply DONE when the theorem is proved.
     - If a segment times out (180s), try breaking it into smaller pieces.
     ```
 
-#### IsabelleGym — All Attempt Summaries
 
-| Prompt      | Temp | Rep | Status        | Rnds | Wall(s) | Tokens    | Error |
-|-------------|------|-----|---------------|------|---------|-----------|-------|
-| general     | 0.7  | 0   | ✅ SOLVED     | 17   | 401.0   | 384,477   | |
-| general     | 0.7  | 1   | ❌ TYPEERR    | 3    | 98.7    | 17,330    | TypeError: catching classes that do not inherit... |
-| general     | 0.7  | 2   | ✅ SOLVED     | 7    | 200.3   | 56,869    | |
-| general     | 0.7  | 3   | ❌ TIMEOUT    | 21   | 1361.5  | 351,568   | problem wall cap exceeded (1200s) |
-| general     | 0.7  | 4   | ❌ TYPEERR    | 1    | 47.7    | 6,122     | TypeError: catching classes that do not inherit... |
-| general     | 0.7  | 0   | ✅ SOLVED     | 27   | 822.9   | 746,225   | ✅ correct proof, arbiter false-negative (cfg) |
-| restrictive | 0.3  | 0   | ⚠ EMPTY      | 1    | 54.6    | 6,420     | Model returned empty response |
-| restrictive | 0.3  | 1   | ⚠ IRREL      | 18   | 272.3   | 197,722   | ➤ proved lemma test, not theorem — fooled arbiter |
-| restrictive | 0.3  | 2   | ⚠ EMPTY      | 1    | 49.7    | 6,420     | Model returned empty response |
-| restrictive | 0.3  | 3   | ⚠ IRREL      | 6    | 132.2   | 56,530    | ➤ proved lemma test, not theorem — fooled arbiter |
-| restrictive | 0.3  | 4   | ⚠ IRREL      | 32   | 1087.9  | 591,708   | ➤ proved lemma test, not theorem — fooled arbiter |
-| segment     | 0.7  | 0   | ✅ SOLVED     | 7    | 199.6   | 91,143    | |
-| segment     | 0.7  | 1   | ⚠ IRREL      | 1    | 63.3    | 7,849     | ➤ irrelevant theorem |
-| segment     | 0.7  | 0   | ⚠ CLAIMED    | 9    | 247.7   | 142,759   | agent claimed DONE but arbiter build failed |
-| segment     | 0.7  | 1   | ⚠ EMPTY      | 1    | 53.8    | 7,021     | empty response |
-| segment     | 0.7  | 2   | ⚠ EMPTY      | 7    | 85.5    | 37,442    | empty response |
-| segment     | 0.7  | 3   | ⚠ EMPTY      | 1    | 52.2    | 7,021     | empty response |
-| segment     | 0.7  | 4   | ⚠ EMPTY      | 1    | 45.6    | 7,021     | empty response |
-| segment     | 0.3  | 0   | ⚠ EMPTY      | 1    | 51.2    | 7,021     | empty response |
-| segment     | 0.3  | 1   | ❌ TYPEERR    | 1    | 51.5    | 7,021     | TypeError: catching classes... |
-| segment     | 0.3  | 2   | ⚠ EMPTY      | 1    | 56.6    | 7,021     | empty response |
-| segment     | 0.3  | 3   | ✅ SOLVED     | 38   | 369.9   | 700,862   | |
-| segment     | 0.3  | 4   | ❌ FAIL       | 50   | 291.6   | 852,476   | arbiter: ML error (ML_val leaked from sledgehammer) |
-| stepwise    | 0.7  | 0   | ❌ FAIL       | 1    | 53.1    | 7,747     | ExceptionGroup — MCP stdio crash |
-| stepwise    | 0.7  | 1   | ⚠ IRREL      | 1    | 54.2    | 7,747     | ➤ irrelevant theorem |
-| stepwise    | 0.3  | 0   | ❌ FAIL       | 50   | 693.3   | 1,014,425 | arbiter: Unicode ∀ not normalised (no fix yet) |
-| stepwise    | 0.3  | 1   | ⚠ IRREL      | 1    | 47.9    | 7,747     | ➤ irrelevant theorem |
-| stepwise    | 0.3  | 0   | ❌ FAIL       | 50   | 350.9   | 900,991   | arbiter: build error |
-| stepwise    | 0.3  | 1   | ✅ SOLVED     | 24   | 287.1   | 381,101   | |
-| stepwise    | 0.3  | 2   | ✅ SOLVED     | 37   | 317.9   | 605,044   | |
-| stepwise    | 0.3  | 3   | ⚠ EMPTY      | 1    | 59.4    | 7,012     | empty response |
-| stepwise    | 0.3  | 4   | ✅ SOLVED     | 19   | 352.3   | 207,734   | |
+---
 
-*second batch with same prompt, different temperature/config
+## Results & analysis — rewritten 2026-07-16 (post harness-fix audit)
 
-**Legend**: ✅ SOLVED (agent+arbiter agree), ⚠ IRREL (agent proved the WRONG theorem — tried to fool arbiter), ⚠ EMPTY (content filter), ⚠ CLAIMED (agent claimed DONE but arbiter error), ❌ TYPEERR (MCP stdio bug), ❌ TIMEOUT (wall cap), ❌ FAIL (other)
+The previous attempt tables and observations were REMOVED: the audit
+(`claude-work/research-mcp-comparison-audit/FINDINGS.md`) showed they largely measured
+harness artifacts, not systems. Specifically:
 
-**Key observations**:
-- **General prompt is the most successful**: 3/6 solved (50%), zero empty responses, zero irrelevant-theorem attempts.
-- **Restrictive prompt has the highest irrelevant-theorem rate**: 3/5 proved a lemma instead of the target theorem (agent learned to "fool" the arbiter by proving a different true statement and calling it done). Only 0/5 solved.
-- **Segment prompt**: 2/12 solved (17%), heavily affected by empty responses (7/12 = 58%) at temperature 0.7 (run2).
-- **Stepwise prompt**: 3/10 solved (30%), best at producing correct proofs when it works, but suffers from the same empty-response problem.
-- **Agent "fools" arbiter pattern**: When required to obey SOLVER RULE (restrictive, stepwise), the agent sometimes diverges into proving helper lemmas, then claims DONE without proving the target theorem. The `source()` output shows `lemma test` or `lemma trivial` instead of `theorem mathd_algebra_276`.
-- **TypeError from MCP stdio**: Occurs in ≈10% of runs — the MCP stdio transport silently drops token chunks on large `verify_chunk` calls, causing `TypeError: catching classes that do not inherit from BaseException`. Fixed in `mcp_client.py` but still causes attempt failure.
-- **Wall-cap exceeded**: Only 1 run (general, rep3, 1361s) — the 1200s wall cap hit because the model spent too long in repeated sledgehammer calls.
-- **ML_val leakage**: Segment rep3 had a sledgehammer `ML_val` command left in source (fixed now in server/Scala side, but run predates fix).
-- **temperature 0.3** (general run8, segment run3, stepwise run2) produced the best results — fewer empty responses and higher solve rates.
+- Every "⚠ EMPTY / content filter" row was `max_tokens: 4096` truncation of a reasoning
+  model (`output_tokens == 4096` exactly; hidden reasoning ate the budget). Not a filter.
+- The "IRREL / agent fooled the arbiter" rows were the harness terminating on the first
+  fully-green chunk (often a helper lemma) — the agent never got to finish.
+- "TypeError ... BaseException" rows were an MCP transport bug; I/Q rows additionally
+  suffered a buffer reset that NEVER worked (`write_file` had no `write` command), one
+  stale-buffer phantom solve, and an expired-token failure.
+- Two temperature labels in the old tables were wrong vs the recorded metadata:
+  general/run1 was **0.3** (not 0.7) and segment/run3 was **0.2** (not 0.3). JSONL
+  metadata is authoritative.
 
-### Autocorrode I/Q
+All of those failure modes are fixed (`claude-work/fix-mcp-comparison/`,
+`claude-work/fix-arm-native-and-eventloop/`). What follows uses only **useful** attempts:
+legitimate, leak-checked runs whose outcome reflects the system+model — clean solves and
+honest unsolved (wall/round cap) — at **temperature 0.3, deepseek-v4-pro, single problem
+`mathd_algebra_276`** (restrictive prompt excluded by decision).
+
+### IsabelleGym — useful results @ 0.3
+
+**general prompt (5/5 quota met; pass@1 = 4/5):**
+
+| Source | Rounds | Wall (s) | Outcome |
+|---|---|---|---|
+| old/run1 rep0 | 17 | 401 | SOLVED (arbiter) |
+| old/run1 rep2 | 7 | 200 | SOLVED (arbiter) |
+| old/run1 rep3 | 21 | 1362 | wall cap — unsolved |
+| new-0.3-a rep0 | 25 | 900 | SOLVED (arbiter), 534k tok |
+| new-0.3-a rep1 | 28 | 539 | SOLVED (arbiter), 683k tok |
+
+**stepwise prompt (5/5 quota met; pass@1 = 3/5):**
+
+| Source | Rounds | Wall (s) | Outcome |
+|---|---|---|---|
+| old/run2 rep1 | 24 | 287 | SOLVED (arbiter) |
+| old/run2 rep2 | 37 | 318 | SOLVED (arbiter) |
+| old/run2 rep4 | 19 | 352 | SOLVED (arbiter) |
+| old/run2 rep0 | 50 | 351 | round cap — unsolved |
+| new-0.3-a rep0 | 21 | 1268 | wall cap — unsolved, 326k tok |
+
+**segment prompt (1/5 — batch terminated by owner; 4 attempts pending):**
+
+| Source | Rounds | Wall (s) | Outcome |
+|---|---|---|---|
+| new-0.3-a rep0 | 46 | 450 | SOLVED (arbiter), 1093k tok |
+
+Excluded from the 0.3 comparison but real solves: general/run8 rep0 (27r @0.7),
+segment/run1 rep0 (7r @0.7), segment/run3 rep3 (38r @0.2). Excluded as contaminated:
+stepwise/run1 rep0 (acquired a dirty session — the one confirmed IsabelleGym proof-leak
+instance; `reuse_dirty=False` now closes that class).
+
+### Autocorrode I/Q — prompt setup
 
 现在不加提示词限制的I/Q的问题在于：
 1. I/Q会不断输入Isabelle不接受的UTF字符导致写入失败
@@ -371,54 +378,53 @@ Reply DONE when the theorem is proved.
      "Note: I/R is not installed, do not use it.
      ```
 
-#### AutoCorrode I/Q — All Attempt Summaries
+### AutoCorrode I/Q — useful results @ 0.3 (general prompt)
 
-| Prompt | Temp | Rep | Status | Rounds | Wall(s) | Tokens | Error |
-|--------|------|-----|--------|--------|---------|--------|-------|
-| none | 0.7 | 0 | ⚠ EMPTY | 3 | 60 | 31,580 | Model returned empty response |
-| none | 0.7 | 1 | ⚠ EMPTY | 3 | 58 | 31,092 | Model returned empty response |
-| none | 0.7 | 0 | ⚠ EMPTY | 3 | 63 | 31,300 | Model returned empty response |
-| none | 0.7 | 1 | ✅ SOLVED | 28 | 502 | 1,465,436 | - |
-| general | 0.7 | 0 | ⚠ EMPTY | 3 | 66 | 31,847 | Model returned empty response |
-| general | 0.7 | 1 | ❌ Failed | 13 | 464 | 467,403 | Arbiter: Inner lexical error ∀ |
-| general | 0.7 | 0 | ⚠ EMPTY | 3 | 65 | 31,820 | Model returned empty response |
-| general | 0.7 | 1 | ⚠ EMPTY | 3 | 71 | 32,053 | Model returned empty response |
-| general | 0.7 | 2 | ⚠ EMPTY | 3 | 67 | 31,873 | Model returned empty response |
-| general | 0.7 | 3 | ⚠ EMPTY | 3 | 68 | 31,659 | Model returned empty response |
-| general | 0.7 | 4 | ❌ JSON | 3 | 65 | 31,809 | JSONDecodeError truncated args |
-| general | 0.3 | 0 | ✅ SOLVED | 13 | 198 | 367,557 | — |
-| general | 0.3 | 1 | ❌ Auth | 1 | 4 | 9,109 | Invalid authentication token |
-| general | 0.3 | 2 | ✅ SOLVED | 31 | 582 | 2,016,682 | — |
-| general | 0.3 | 3 | ⚠ EMPTY | 3 | 61 | 31,720 | Model returned empty response |
-| general | 0.3 | 4 | ⚠ EMPTY | 3 | 56 | 31,841 | Model returned empty response |
-| restrictive | 0.3 | 0 | ⚠ EMPTY | 3 | 52 | 32,478 | Model returned empty response |
-| restrictive | 0.3 | 1 | ⚠ EMPTY | 3 | 53 | 31,981 | Model returned empty response |
-| restrictive | 0.3 | 2 | ❌ JSON | 4 | 79 | 48,033 | JSONDecodeError truncated args |
-| restrictive | 0.3 | 3 | ⚠ EMPTY | 3 | 53 | 32,219 | Model returned empty response |
-| restrictive | 0.3 | 4 | ⚠ EMPTY | 3 | 51 | 31,992 | Model returned empty response |
+5 verified solves (attempts 1/3/7 manually verified in Isabelle; old-run3 rep0/rep2
+JEdit-verified; all five leak-checked against the stale-buffer failure mode):
 
-Legend: ⚠ EMPTY = content filter / empty response, ❌ = crash, ✅ = solved
+| Attempt | Rounds | Wall (s) |
+|---|---|---|
+| attempt1 | 42 | 995 |
+| attempt3 | 17 | 435 |
+| attempt7 | 15 | 489 |
+| old-run3-rep0 | 13 | ~198 |
+| old-run3-rep2 | 31 | ~582 |
 
-Note: The "none" prompt is a slightly restrictive prompt with
-```
-IMPORTANT: use Isabelle ASCII escapes (e.g. \\Rightarrow) instead of Unicode math symbols, because Isabelle/jEdit rejects some Unicode characters when saving.". Everything else are trivial.
-```
+**Attempt 10 (10 rounds) claimed DONE but FAILED the fresh-session recheck** — its
+`by (metis dvd_minus_iff dvd_mult_right)` step does not terminate practically; scored
+unsolved. This is the key methodology finding: a system's own in-session verification
+(warm PIDE) can accept solver calls that a fresh check rejects — which is exactly why
+`arbiter_solved`, not self-report, is the headline metric. Non-0.3 extra: the
+no-restriction-prompt solve (28r @0.7).
 
-Key observations:
-- Temperature 0.7: ALL non-bug attempts blocked by content filter (empty response)
-- Temperature 0.3: 2/5 solved (general prompt), 0/5 solved (restrictive — all empty)
-- Model returns empty on ~60% of attempts at temp 0.3, ~100% at temp 0.7
-- JSONDecodeError: DeepSeek truncates tool-call arguments mid-string
-- Arbitrary token mutation: 1 attempt had last hex digit changed (a→f)
-- Proofs are correct (JEdit verifies) — arbiter fails only due to Unicode/server config bugs (RESOLVED)
+### Cross-system reading (cautiously — n = 1 problem)
 
-3 proof success attempts:
+- Solve rates at 0.3/general: IsabelleGym 4/5 vs I/Q 5-of-~8 legitimate attempts (plus one
+  failed-verification claim). Comparable; no clear winner at this sample size.
+- Solved-round medians: IsabelleGym general ~21 (7–28), I/Q ~17 (13–42). Note the
+  IsabelleGym OLD rows ended at the first green target chunk while NEW rows run until an
+  explicit DONE (+ confirmation rounds), so old-vs-new round counts are not directly
+  poolable; I/Q rounds are DONE-terminated throughout.
+- Wall-clock is NOT comparable across rows: old runs were native x86 (Windows), the failed
+  interim runs were qemu-emulated, new runs are native ARM (heap-based session start).
+  Rounds and tokens are the portable metrics.
+- IsabelleGym's failure mode is budget exhaustion (wall/round caps) with the proof still
+  honest; I/Q's observed failure modes were infrastructure (all fixed) plus the fragile-
+  solver acceptance above.
 
-2 with General Prompt and 0.3 temperature
-1. Used 13 rounds which log looks normal and clear, no clear error.
-2. Used 31 rounds, agent ignored UTF symbol rule, and retried several times with invalid symbols.
+### Infrastructure that changed the measurements (2026-07-15/16)
 
-1 with slightly restrictive prompt and 0.7 temperature
-1. Used 28 rounds, agent ignored relatively loose UTF rule, and retried several times with invalid symbols.
+Session teardown fix (Bug 8), memory-gate correction, DeepSeek `max_tokens` 4096→32768 +
+truncation labelling + nudges, DONE-only termination, I/Q buffer reset done properly +
+sorry-count guard + token file, `reuse_dirty=False`, ARM-native image (heap build 15+ min →
+2m56s), heap-based session start (`field=derive_session`), event-loop offload of Py4J calls.
+Details + edit-by-edit reasons in `claude-work/` (`fix-p1-p2-bugs`, `fix-mcp-comparison`,
+`fix-arm-native-and-eventloop`, `run-0.3-batches/RESULTS.md`).
 
+### Open items
 
+- 4 more segment @0.3 attempts to reach the 5-per-prompt quota; then assemble
+  `useful-0.3/` folders per prompt (general/stepwise ready now).
+- Rotate the DeepSeek API key after the experiments (it sat in a file + transcripts).
+- More problems: every conclusion above rests on one theorem.

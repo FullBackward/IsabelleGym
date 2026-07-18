@@ -9,8 +9,9 @@ concurrent requests on distinct sessions/leases).
 from __future__ import annotations
 
 import asyncio
+import weakref
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, List, MutableMapping, Optional
 
 from client.async_client import IsabelleGymAsyncClient
 
@@ -24,11 +25,23 @@ class Current:
     theory: str
 
 
+class _StdioKey:
+    """Weak-referenceable sentinel key for transports without a per-connection
+    session object (e.g. stdio). Held strongly by the pool, so its entry lives
+    for the pool's lifetime."""
+
+
 class SessionPool:
     def __init__(self) -> None:
         self._client: Optional[IsabelleGymAsyncClient] = None
         self._client_lock = asyncio.Lock()
-        self._current: Dict[str, Current] = {}
+        # Keyed by the MCP session OBJECT (weakly): a dropped connection's
+        # entry vanishes with its session, and a recycled id() can never bind
+        # a new connection to a stale Current (the old id-string keys leaked
+        # and were recyclable). The orphaned gym session behind a vanished
+        # entry is reclaimed by the server's abandoned-lease force-close.
+        self._current: "MutableMapping[Any, Current]" = weakref.WeakKeyDictionary()
+        self._default_key = _StdioKey()  # stable sentinel for keyless transports
         self._lock = asyncio.Lock()
 
     async def client(self) -> IsabelleGymAsyncClient:
@@ -38,22 +51,42 @@ class SessionPool:
                     self._client = IsabelleGymAsyncClient(Config.GYM_URL, timeout=Config.HTTP_TIMEOUT)
         return self._client
 
-    @staticmethod
-    def conn_key(ctx: Any) -> str:
-        """Stable key per MCP connection; falls back to a single key (e.g. stdio)."""
+    def conn_key(self, ctx: Any) -> Any:
+        """Per-connection key: the MCP session object itself (weak-keyed);
+        falls back to a pool-owned sentinel (e.g. stdio)."""
         try:
-            return f"conn-{id(ctx.session)}"
+            sess = ctx.session
+            if sess is not None:
+                weakref.ref(sess)  # verify weak-referenceable
+                return sess
         except Exception:
-            return "default"
+            pass
+        return self._default_key
 
     async def _begin_theory(self, name: str, imports: List[str], field: str):
         """Acquire a leased session and enter+begin the theory. The SERVER builds the
         correctly-quoted `theory ... begin` header from `imports` (see session.enter_thy),
-        so the MCP layer never constructs Isar header text or worries about quoting."""
+        so the MCP layer never constructs Isar header text or worries about quoting.
+
+        If enter_theory fails, the just-acquired session is closed before re-raising —
+        otherwise it would stay exclusively leased (invisible to acquire_session) until
+        the server's abandoned-lease reaper fires (MAX_LEASE_AGE, 2h)."""
         c = await self.client()
-        sp = await c.acquire_session(list(imports), field)
+        # reuse_dirty=False: never accept a pooled session that has ANY command
+        # history. A leaked dirty session once let an agent see a PREVIOUS
+        # attempt's in-progress proof via source() (stepwise/run1 rep0,
+        # 2026-07-10) — clean-only reuse closes that class regardless of how
+        # the dirty session escaped its lease.
+        sp = await c.acquire_session(list(imports), field, reuse_dirty=False)
         sid, lease = sp["session_id"], sp.get("lease_id")
-        await c.enter_theory(sid, name, imports=list(imports), lease_id=lease)
+        try:
+            await c.enter_theory(sid, name, imports=list(imports), lease_id=lease)
+        except BaseException:
+            try:
+                await c.close_session(sid, lease_id=lease)
+            except Exception:
+                pass
+            raise
         return sid, lease
 
     async def open_theory(self, ctx: Any, name: str, imports: List[str], field: str) -> Current:
@@ -75,6 +108,7 @@ class SessionPool:
         return cur
 
     async def _safe_close(self, cur: Current) -> None:
+        """Best-effort DELETE of the gym session (destroys the backend)."""
         try:
             c = await self.client()
             await c.close_session(cur.session_id, lease_id=cur.lease_id)

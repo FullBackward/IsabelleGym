@@ -25,8 +25,10 @@ logger = get_logger(__name__)
 # cgroup v2 (preferred) and v1 file locations.
 _CG_V2_CURRENT = "/sys/fs/cgroup/memory.current"
 _CG_V2_MAX = "/sys/fs/cgroup/memory.max"
+_CG_V2_STAT = "/sys/fs/cgroup/memory.stat"
 _CG_V1_USAGE = "/sys/fs/cgroup/memory/memory.usage_in_bytes"
 _CG_V1_LIMIT = "/sys/fs/cgroup/memory/memory.limit_in_bytes"
+_CG_V1_STAT = "/sys/fs/cgroup/memory/memory.stat"
 _PROC_MEMINFO = "/proc/meminfo"
 
 # cgroup v1 reports "unlimited" as a near-int64 sentinel; anything this large
@@ -107,11 +109,33 @@ class MemoryMonitor:
         self.min_available_bytes = Memory.MIN_AVAILABLE_MB * 1024 * 1024
         self.fallback_limit_bytes = Memory.FALLBACK_SYSTEM_MB * 1024 * 1024
 
+    @staticmethod
+    def _read_inactive_file() -> int:
+        """Reclaimable page cache (inactive_file) from memory.stat, 0 on failure.
+
+        memory.current/usage_in_bytes INCLUDE page cache — Isabelle heap images
+        read at session start stay cached and would otherwise count as 'used'
+        forever, tripping the admission gate even when the kernel could reclaim
+        them. Subtracting inactive_file is the same correction `docker stats`
+        applies (v2 key: inactive_file; v1 hierarchical key: total_inactive_file).
+        """
+        for path, key in ((_CG_V2_STAT, "inactive_file"), (_CG_V1_STAT, "total_inactive_file")):
+            try:
+                with open(path, "r", encoding="utf-8") as fh:
+                    for line in fh:
+                        if line.startswith(key + " "):
+                            return int(line.split()[1])
+            except (OSError, ValueError, IndexError):
+                continue
+        return 0
+
     def _read_used(self) -> int:
         used = _read_int_file(_CG_V2_CURRENT)
         if used is None:
             used = _read_int_file(_CG_V1_USAGE)
-        return used if used is not None else 0
+        if used is None:
+            return 0
+        return max(0, used - self._read_inactive_file())
 
     def _read_limit(self) -> int:
         # cgroup v2 numeric limit, else v1 limit (unless sentinel "unlimited"),

@@ -291,3 +291,6 @@ AGENTS.md
 .clinerules/**
 
 MCP-comparison/runs/**
+MCP-comparison/iq_token.txt
+
+MCP-comparison/deepseek_api.txt

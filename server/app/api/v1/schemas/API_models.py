@@ -169,6 +169,15 @@ class ChunkVerifyRequest(BaseModel):
                     "On expiry the report is partial; no per-command timeouts are raised.",
     )
 
+    @field_validator("chunk")
+    @classmethod
+    def _non_empty_chunk(cls, v: str) -> str:
+        # An empty/whitespace chunk would otherwise return success=False with
+        # zero commands and no error — indistinguishable from a real failure.
+        if not v or not v.strip():
+            raise ValueError("chunk must contain at least one Isar command")
+        return v
+
 
 class ChunkVerifyResponse(BaseModel):
     success: bool = Field(description="True iff every command is 'ok' and not timed out. "
@@ -196,3 +205,8 @@ class ChunkVerifyResponse(BaseModel):
     )
     commands: List[CommandStatus]
     execution_time: float
+    error: str | None = Field(
+        default=None,
+        description="Backend-level error when nothing could be checked (e.g. "
+                    "'theory not begun'). None when commands were processed.",
+    )

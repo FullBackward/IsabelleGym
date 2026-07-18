@@ -8,7 +8,7 @@ from typing import List, Optional, Tuple, Union
 
 from repl.src.python.repl_backend_gateway import ReplBackendGatewayProcess
 from repl.src.python.thy_init import ThyInit
-from server.app.core.config import Server, Timeouts
+from server.app.core.config import Memory, Server, Timeouts
 from server.app.core.logging import get_logger, logging_context
 from server.app.core import metrics
 from server.app.errors import GatewayUnavailable, PoolExhausted, SessionBusyError, SessionNotFound, SessionStartError
@@ -156,7 +156,9 @@ class SessionManager(SessionManagerHelpersMixin):
         lease_id: Optional[str] = None,
     ) -> _Isabelle_Session:
         where = self._where("_create_session")
-        self._ensure_gateway()
+        # Off the event loop: may spawn the gateway JVM (~40s) and holds a
+        # threading lock — inline it and every other request stalls.
+        await asyncio.to_thread(self._ensure_gateway)
         if self.thy_init is None:
             self.thy_init = ThyInit()
 
@@ -183,10 +185,6 @@ class SessionManager(SessionManagerHelpersMixin):
                         raise RuntimeError(getattr(gen_result, "err", "unknown ThyInit error"))
                     wrapper_theory = f"$ISABELLE_REPL_HOME/thys/{gen_result.data}"
                     loaded_theories = [wrapper_theory]
-
-                java_list = self.gateway.gateway.jvm.java.util.ArrayList()
-                for thy in loaded_theories:
-                    java_list.add(thy)
             except Exception as e:
                 logger.exception("failed to prepare initial theory file")
                 raise RuntimeError(f"{where}: failed to generate initial theory file: {e}") from e
@@ -197,6 +195,14 @@ class SessionManager(SessionManagerHelpersMixin):
             # left to evict. Busy/leased sessions are never touched.
             if self.memory_management_enabled:
                 snap = await asyncio.to_thread(self._relieve_memory_pressure, where)
+                # Teardown -> cgroup accounting lags (poly exit, kernel reclaim):
+                # retry briefly before refusing, so a close immediately followed
+                # by a create does not 503 on a stale snapshot.
+                retries = Memory.ADMISSION_RETRIES
+                while not self.memory.can_admit(snap) and retries > 0:
+                    retries -= 1
+                    await asyncio.sleep(Memory.ADMISSION_RETRY_DELAY_S)
+                    snap = await asyncio.to_thread(self._relieve_memory_pressure, where)
                 if not self.memory.can_admit(snap):
                     metrics.pool_exhausted.labels("memory").inc()
                     raise PoolExhausted(
@@ -212,7 +218,13 @@ class SessionManager(SessionManagerHelpersMixin):
                 logger.info("creating raw backend for session_id=%s", session_id)
 
                 def _create_backend():
+                    # ALL Py4J traffic (including building the ArrayList) stays
+                    # in this worker thread: a synchronous gateway call on the
+                    # event loop froze the whole server when the JVM was busy.
                     with _gateway_lock:
+                        java_list = self.gateway.gateway.jvm.java.util.ArrayList()
+                        for thy in loaded_theories:
+                            java_list.add(thy)
                         return self.gateway.get_repl_backend_with_initial_theories(
                             show_states=Server.SHOW_STATES,
                             enable_cache=Server.ENABLE_CACHE,
@@ -249,6 +261,7 @@ class SessionManager(SessionManagerHelpersMixin):
 
             try:
                 evict_targets: List[Tuple[uuid.UUID, _Isabelle_Session]] = []
+                pool_full = False
                 with self._lock:
                     self._lru[session_id] = session
                     if lease_id is not None:
@@ -268,19 +281,22 @@ class SessionManager(SessionManagerHelpersMixin):
                                 break
                         if candidate_id is None:
                             # Every session is in-use or leased — undo our
-                            # insertion and let the caller know the pool is
-                            # exhausted.
+                            # insertion; the (blocking) close happens OUTSIDE
+                            # the lock so other requests are not stalled.
                             self._lru.pop(session_id, None)
-                            session.close()
-                            metrics.pool_exhausted.labels("all_busy").inc()
-                            raise PoolExhausted(
-                                f"Session pool is full ({self.pool_size} sessions) "
-                                f"and all sessions are actively processing requests or leased. "
-                                f"Try again later or increase ISABELLE_POOL_SIZE."
-                            )
+                            pool_full = True
+                            break
                         evict_targets.append(
                             (candidate_id, self._lru.pop(candidate_id))
                         )
+                if pool_full:
+                    metrics.pool_exhausted.labels("all_busy").inc()
+                    session.close()
+                    raise PoolExhausted(
+                        f"Session pool is full ({self.pool_size} sessions) "
+                        f"and all sessions are actively processing requests or leased. "
+                        f"Try again later or increase ISABELLE_POOL_SIZE."
+                    )
                 # Close evicted sessions OUTSIDE the lock.
                 for oldest_id, oldest in evict_targets:
                     try:

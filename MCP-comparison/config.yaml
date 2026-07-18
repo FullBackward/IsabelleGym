@@ -7,11 +7,16 @@ model:
   api_key_env: DEEPSEEK_API_KEY
   model_id: deepseek-v4-pro
   temperature: 0.3
-  max_tokens: 4096
+  # Reasoning models spend max_tokens on HIDDEN reasoning first. 4096 caused the
+  # "empty response" runs: the model burned exactly 4096 tokens thinking and was
+  # cut off (finish_reason=length) before emitting any content/tool call, and the
+  # "JSONDecodeError: Unterminated string" runs (cut mid tool-arguments). Keep
+  # this high; lower it only if the provider rejects the value.
+  max_tokens: 32768
 
 budgets:
   max_rounds: 50
-  problem_wall_cap_seconds: 1200     # 15 min per problem
+  problem_wall_cap_seconds: 1200     # 20 min per problem
   tool_timeout_seconds: 300         # 5 min per MCP tool call
   repeats: 2
 

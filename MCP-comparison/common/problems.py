@@ -63,6 +63,22 @@ def sanitize_for_isabelle(text: str) -> str:
     return _SURROGATE_RE.sub("", text)
 
 
+def derive_session(imports: list[str], default: str = "HOL") -> str:
+    """Derive the Isabelle SESSION that provides the given theory imports.
+
+    Session-qualified imports like 'HOL-Computational_Algebra.Computational_Algebra'
+    name their session before the dot; plain theories (Main, Complex_Main) live in
+    the default session. Mirrors the arbiter's parent-session logic — a theory
+    name is NOT a session name (launching session 'Complex_Main' fails).
+    """
+    for imp in imports:
+        if "." in imp:
+            parent = imp.split(".")[0]
+            if parent and parent != "Main":
+                return parent
+    return default
+
+
 def load_problems(directory: Path) -> list[Problem]:
     files = sorted(directory.glob("*.thy"))
     if not files:

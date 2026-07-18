@@ -22,8 +22,8 @@ from common.arbiter import check
 from common.config import Config, load
 from common.mcp_client import call_tool, list_tools, mcp_session
 from common.metrics import AttemptResult, Timer, TokenAggregator, append_result
-from common.model import ModelClient
-from common.problems import Problem, load_problems, sanitize_for_isabelle
+from common.model import ModelClient, no_tool_call_action
+from common.problems import Problem, derive_session, load_problems, sanitize_for_isabelle
 from common.session_logger import SessionLogger
 
 
@@ -99,6 +99,8 @@ async def run_attempt(problem: Problem, repeat: int, results_path: Path) -> None
     ]
 
     logger = SessionLogger("isabelle_mcp", problem.name, repeat, cfg.paths.runs_dir)
+    if system_prompt:
+        logger.log_text("SYSTEM_PROMPT", system_prompt)
     logger.log_message(messages[0])
 
     result = AttemptResult(
@@ -118,10 +120,13 @@ async def run_attempt(problem: Problem, repeat: int, results_path: Path) -> None
     try:
         async with mcp_session(cfg.mcp_servers["isabelle_mcp"]) as session:
             mcp_tools = await list_tools(session)
-            await call_tool(session, "isabelle_launch", {"session": problem.imports[0]})
+            # imports[0] is a THEORY (e.g. Complex_Main), not a session name —
+            # derive the owning session as the arbiter does (audit H6).
+            await call_tool(session, "isabelle_launch", {"session": derive_session(problem.imports)})
 
             timer.start()
             round_start: float = 0.0
+            nudges_used = 0
             for _round in range(cfg.budgets.max_rounds):
                 # Enforce per-problem wall cap
                 elapsed = timer.elapsed()
@@ -132,6 +137,8 @@ async def run_attempt(problem: Problem, repeat: int, results_path: Path) -> None
                 round_result = await client.chat(messages, tools=mcp_tools, system_prompt=system_prompt)
                 tokens.add(round_result.usage)
                 result.rounds += 1
+                if round_result.finish_reason == "length":
+                    result.n_truncated_rounds += 1
                 now = timer.elapsed()
                 round_latencies.append(round(now - round_start, 2))
                 round_start = now
@@ -148,13 +155,24 @@ async def run_attempt(problem: Problem, repeat: int, results_path: Path) -> None
                         for tc in (round_result.tool_calls or [])
                     ],
                 })
+                if round_result.reasoning_text:
+                    logger.log_text("REASONING", round_result.reasoning_text[:2000])
 
                 if not round_result.tool_calls:
-                    if not (round_result.assistant_text or "").strip():
-                        result.error = "Model returned empty response (likely content filter)"
-                    if "DONE" in (round_result.assistant_text or ""):
+                    action, payload = no_tool_call_action(round_result, nudges_used)
+                    if action == "done":
                         result.agent_claimed_solved = True
-                    break
+                        break
+                    if action == "stop":
+                        result.error = payload
+                        break
+                    nudges_used += 1
+                    text = (round_result.assistant_text or "").strip()
+                    if text:
+                        messages.append({"role": "assistant", "content": text})
+                    messages.append({"role": "user", "content": payload})
+                    logger.log_message({"role": "user", "content": payload})
+                    continue
 
                 tool_outputs = []
                 for tc in round_result.tool_calls:
@@ -163,8 +181,12 @@ async def run_attempt(problem: Problem, repeat: int, results_path: Path) -> None
                     try:
                         args = json.loads(tc.function.arguments)
                     except json.JSONDecodeError as e:
-                        result.error = f"JSONDecodeError: {e}"
-                        break
+                        # Keep history consistent: every tool_call needs a tool reply (H3).
+                        err = (f"ERROR: tool arguments were not valid JSON ({e}). "
+                               f"Re-issue the call with complete, valid JSON.")
+                        tool_outputs.append({"tool_call_id": tc.id, "role": "tool", "name": name, "content": err})
+                        logger.log_tool_result(tc.id, name, err)
+                        continue
                     # Sanitize string args — DeepSeek may emit lone surrogates
                     for k, v in list(args.items()):
                         if isinstance(v, str):

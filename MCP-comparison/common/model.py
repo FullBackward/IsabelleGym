@@ -35,6 +35,48 @@ class RoundResult:
     tool_calls: list[ChatCompletionMessageToolCall]
     usage: dict[str, int]
     latency_s: float
+    # "stop" | "tool_calls" | "length" (truncated at max_tokens) | ...
+    finish_reason: str | None = None
+    # Hidden chain-of-thought from reasoning models (e.g. DeepSeek's
+    # reasoning_content). Counts against max_tokens: an "empty" reply with
+    # finish_reason=length means the budget was spent HERE, not filtered.
+    reasoning_text: str | None = None
+
+
+# Max user nudges per attempt when the model produces a round with no tool
+# calls (text-only musing, empty output, or a max_tokens truncation) before
+# the attempt is abandoned. Previously ANY such round silently ended the
+# attempt — one truncated round killed the whole run.
+NUDGE_LIMIT = 2
+
+
+def no_tool_call_action(round_result: "RoundResult", nudges_used: int) -> tuple[str, str | None]:
+    """Uniform policy for a round with no tool calls, shared by all runners.
+
+    Returns (action, payload):
+      ("done", None)            — the model replied DONE; the attempt is finished.
+      ("nudge", user_message)   — append payload as a user message and continue.
+      ("stop", error_string)    — record payload as the attempt error and stop.
+    """
+    text = (round_result.assistant_text or "").strip()
+    if "DONE" in text:
+        return "done", None
+    truncated = round_result.finish_reason == "length"
+    if nudges_used >= NUDGE_LIMIT:
+        if truncated:
+            return "stop", ("model output truncated at max_tokens (finish_reason=length) "
+                            "repeatedly — raise model.max_tokens in config")
+        if not text:
+            return "stop", "model returned empty responses after nudges"
+        return "stop", "model stopped calling tools without replying DONE"
+    if truncated:
+        return "nudge", ("[Your previous response was cut off at the token limit before any "
+                         "tool call was emitted. Think more briefly, then act: call a tool "
+                         "now, or reply DONE if the proof is complete.]")
+    if not text:
+        return "nudge", "[Your previous response was empty. Call a tool now, or reply DONE if finished.]"
+    return "nudge", ("[Reminder: you must CALL A TOOL to make progress, or reply DONE "
+                     "if the proof is complete.]")
 
 
 class ModelClient:
@@ -130,6 +172,8 @@ class ModelClient:
             tool_calls=list(message.tool_calls or []),
             usage=usage,
             latency_s=latency_s,
+            finish_reason=getattr(choice, "finish_reason", None),
+            reasoning_text=getattr(message, "reasoning_content", None),
         )
 
     async def stream_text(

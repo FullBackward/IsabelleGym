@@ -16,7 +16,8 @@
    - [Bug 5: Isabelle Processes Persist After Close — RESOLVED](#bug-5-isabelle-processes-persist-after-close--open)
 2. [Bug 6: Gateway OOM Under Concurrent Sledgehammer — RESOLVED](#bug-6-gateway-oom-under-concurrent-sledgehammer--resolved)
 3. [Bug 7: Stale `isabelle_user_data` Volume Shadows Component Registration — RESOLVED (workaround)](#bug-7-stale-isabelle_user_data-volume-shadows-component-registration-after-image-rebuild--resolved-workaround)
-4. [Claude Work Log (dated)](#claude-work-log-dated)
+4. [Bug 8: `close()` Rejects Its Own `exit` Job — Sessions Never Torn Down — RESOLVED](#bug-8-close-rejects-its-own-exit-job--sessions-never-torn-down--resolved)
+5. [Claude Work Log (dated)](#claude-work-log-dated)
 
 ---
 
@@ -323,6 +324,54 @@ docker compose exec isabelle-gym ./repl/Admin/init   # re-registers into the liv
 
 Run a cheap idempotent check at container start (entrypoint or server startup): if `$ISABELLE_HOME_USER/etc/components` does not list `/app/repl`, run `repl/Admin/init` before launching the gateway. Alternatively, drop the named volume from compose (heaps would rebuild per fresh container) or version the volume name with the image.
 
+Related hardening (2026-07-15): `repl/Admin/init` downloads the `py4j`/`spliff` component
+tarballs from the Isabelle component servers, and the official site is sometimes unstable —
+a rebuild on a fresh volume can fail transiently. Consider vendoring the two tarballs into the
+image (or a local component repository) so builds never depend on the network; until then, the
+recovery is simply re-running `docker compose exec isabelle-gym ./repl/Admin/init` once the
+site is reachable (the volume caches the download afterward).
+
+---
+
+### Bug 8: `close()` Rejects Its Own `exit` Job — Sessions Never Torn Down — RESOLVED
+
+**File:** `server/app/services/threaded_backend.py`
+**Severity:** Critical (P0 — every session close leaked a `poly` process + in-JVM Isabelle server)
+**Introduced:** commit `e6c3869` (2026-07-13, "reject new job and emit running job for ThreadedBackend")
+**Status:** ✅ Resolved 2026-07-15 (`_submit_unchecked` bypass + regression tests)
+
+#### Root cause
+
+`e6c3869` added a `_shutting_down` guard to `submit()` so no stale jobs reach a disconnecting
+Py4J gateway. But `close()` sets the flag **first** and then calls
+`self.submit(self._backend.exit)` — the guard rejected the backend's own exit job (the returned
+future was pre-failed with `RuntimeError("Backend … is shutting down")`, caught and only
+logged). `ReplBackend.exit()` therefore never reached the JVM: no `Session_Stop`, no
+`stop_server` — the session's `poly` ML process and its per-backend in-JVM Isabelle server
+leaked on **every** close. Under the MCP-comparison per-problem create/close cycling, container
+memory climbed monotonically until the admission gate refused new sessions (503
+`PoolExhausted: memory pressure too high`). Full analysis:
+`claude-work/research-session-memory-release/FINDINGS.md`.
+
+#### Fix
+
+`close()` now delivers the exit job through a private `_submit_unchecked()` that bypasses the
+shutdown guard (external `submit()` calls are still rejected, and the queue is still drained
+first). Regression tests in `tests/test_threaded_backend.py` — verified to FAIL on the pre-fix
+code (2 of 4 tests) and pass on the fixed code:
+
+- `test_close_delivers_exit_to_backend` — the e6c3869 regression guard
+- `test_submit_rejected_after_close`
+- `test_pending_jobs_cancelled_but_exit_still_runs`
+- `test_worker_thread_stops_after_close`
+
+#### Residual (pre-existing, separate)
+
+Even when delivered, `exit()` has historically blocked >60 s (`TimeoutError` at
+`EXIT_TIMEOUT` in `logs/server.log`, 2026-06-10) — the Bug 5 "wedged ML process / no OS-level
+force-kill fallback" hardening item still applies and is tracked in the Phase-3 plan
+(`claude-work/research-server-code-audit/FINDINGS.md`).
+
 ### [To-do]Issue 1: How Isabelle do parallel
 When have parallel "have x" statements, can we do this in step. And how do we retrive information when one line is stucked in loop. That is, we need error retrieval for a proof chunk, the server should not just return a timeout error, it should tell, when we build the MCP server, the agent what part of that proof chunk just went wrong.
 
@@ -355,6 +404,9 @@ Test/demonstration artifacts live under `claude-work/<task>/` (each with a `NOTE
 | 2026-06-04 | **Bug 5 re-check** | Measured poly/prover process counts across create→close and close-during-sledgehammer. Both reap cleanly (≤2 s), so Bug 5 is not reproducible; marked resolved. Optional force-kill fallback for wedged ML processes noted. | `claude-work/bug5-session-close-leak/` |
 | 2026-06-04 | **Phase 0 monitoring** | Added a Prometheus `/metrics` endpoint (HTTP histograms via instrumentator + `isabellegym_*` counters/gauges/histogram in `server/app/core/metrics.py`, fed by `get_lru_info()`/`MemoryMonitor`/gateway-recovery), `/healthz`+`/readyz` probes, and a Prometheus+Grafana+cAdvisor stack in `docker-compose.yml` with `mem_limit: 12g` and a starter dashboard. Verified end-to-end: all 3 Prometheus targets UP, Grafana dashboard provisioned, domain counters move, `memory_limit_mb` reflects the 12g cgroup. NB: image must be rebuilt (`docker compose build isabelle-gym`) to bake in the two new pip deps. | `claude-work/impl-monitoring/`, `monitoring/` |
 
+| 2026-07-15 | **MCP-comparison harness fixes** | Fixed the harness bugs from `claude-work/research-mcp-comparison-audit/`. Headline: the DeepSeek "empty response" runs were `max_tokens: 4096` truncation of a reasoning model (output_tokens == 4096 exactly; hidden `reasoning_content` ate the budget), NOT a content filter — raised to 32768, `RoundResult` now carries `finish_reason`/`reasoning_text`, truncated rounds are counted and honestly labelled, and a no-tool-call round gets up to 2 nudges instead of silently ending the attempt. Also: removed the first-green-chunk early termination in the IsabelleGym runner (it cut attempts at the first proved *helper* lemma — the devnote "fooled arbiter" rows); unparsable tool JSON no longer poisons the message history; `call_tool` stops swallowing `BaseException`; `isabelle_launch` gets a derived session name instead of a theory; I/Q auth token no longer routed through the model; `analyze.py` fixed (crash on zero-solved, wrong default dir, per-experiment subfolders) + error-class table. Tests: `tests/test_mcp_comparison_fixes.py`; full suite 20 passed. Verified offline only (no live model runs, per request). | `claude-work/fix-mcp-comparison/`, `claude-work/research-mcp-comparison-audit/` |
+| 2026-07-15 | **P1/P2 audit fixes (Phases 2–3)** | Fixed the P1/P2 findings from `claude-work/research-server-code-audit/`: A2 `_create_session` no longer closes a session while holding the manager lock; A3 base `SessionError` handler (500s now carry the real message, e.g. backend timeouts); A4 sledgehammer marks the session busy + refreshes activity; A5 client HTTP timeouts get grace beyond the server budget (`execute_command`/`diagnostic` +30 s, sledgehammer +120 s for semaphore queueing); B1 MCP `_begin_theory` closes the leased session on `enter_theory` failure; A6 memory gate subtracts `inactive_file` page cache, settles 2 s between evictions, and retries admission 3×2 s before 503; A7 a concurrently-closed session surfaces as 404 not 500; A8 empty `verify_chunk` chunks are 422 and the backend `error` (e.g. "theory not begun") is passed through; B2 MCP connection state keyed weakly by the session object (no id-recycling, auto-cleanup); B3 `close_theory` docstring says destroy, not release. Tests: `tests/test_phase2_phase3_fixes.py` (8) + existing (4), all green; in-container probes in `claude-work/fix-p1-p2-bugs/probe_fixes.py`. Also hardened the Dockerfile (Isabelle download layer before COPY, wget retries + Clarkson mirror fallback) after two silently-failed image builds traced to the unstable TUM dist server. | `claude-work/fix-p1-p2-bugs/`, `claude-work/research-server-code-audit/` |
+| 2026-07-15 | **Bug 8 fix (session teardown regression)** | Research into "deleted session doesn't release memory" (MCP-comparison failures) found `ThreadedBackend.close()` rejecting its own `exit` job since `e6c3869` — no session was ever torn down on the JVM side. Fixed via `_submit_unchecked()` bypass; added `tests/test_threaded_backend.py` (verified red on pre-fix code). Also produced full audits of the server/MCP layers and the comparison harness (incl. the DeepSeek "empty response" root cause: `max_tokens=4096` reasoning-truncation, not a content filter). | `claude-work/research-session-memory-release/`, `claude-work/research-server-code-audit/`, `claude-work/research-mcp-comparison-audit/` |
 | 2026-06-10 | **Image rebuild + Bug 7** | Rebuilt the image with trimmed deps (removed `torch` — sole source of the multi-GB `nvidia-*-cu12` CUDA wheels, only imported by archival `previous works/` code — and unused `expecttest`, from `requirement.txt` + `pyproject.toml`; image 24.9 GB → ~2 GB). First server start after the rebuild failed with `Not found: py4j` in the gateway — surfaced **Bug 7** (pre-existing `isabelle_user_data` volume shadows the build-time `repl/Admin/init` registration). Worked around by re-running `./repl/Admin/init` in the container. | — |
 
 *Last updated: 2026-06-10.*

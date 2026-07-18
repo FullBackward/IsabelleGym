@@ -16,8 +16,8 @@ from common.arbiter import check
 from common.config import load
 from common.mcp_client import call_tool, list_tools, mcp_session
 from common.metrics import AttemptResult, Timer, TokenAggregator, append_result
-from common.model import ModelClient
-from common.problems import load_problems, sanitize_for_isabelle
+from common.model import ModelClient, no_tool_call_action
+from common.problems import derive_session, load_problems, sanitize_for_isabelle
 from common.session_logger import SessionLogger
 
 # ── Four prompt variants (as 1st user-message bodies) ──────────────────
@@ -302,13 +302,32 @@ async def run_attempt(
     try:
         async with mcp_session(cfg.mcp_servers["isabellegym"]) as session:
             mcp_tools = await list_tools(session)
-            await call_tool(session, "enter_theory", {
-                "name": problem.name,
-                "imports": problem.imports,
-            })
+            # Setup is bounded and fail-fast (mirrors the I/Q runner): an
+            # unresponsive server used to hang this call for the full HTTP
+            # timeout with nothing recorded. `field` names the prebuilt parent
+            # session (e.g. HOL-Computational_Algebra) so the gym session
+            # starts from its heap instead of re-processing the imports from
+            # source on every attempt.
+            try:
+                out = await asyncio.wait_for(
+                    call_tool(session, "enter_theory", {
+                        "name": problem.name,
+                        "imports": problem.imports,
+                        "field": derive_session(problem.imports),
+                    }),
+                    timeout=cfg.budgets.tool_timeout_seconds,
+                )
+            except asyncio.TimeoutError:
+                raise RuntimeError(
+                    f"enter_theory setup timed out after {cfg.budgets.tool_timeout_seconds}s "
+                    f"(server unresponsive or session creation overloaded)")
+            logger.log_text("SETUP enter_theory", out[:300])
+            if out.startswith("MCP tool error") or "McpError" in out:
+                raise RuntimeError(f"enter_theory failed at setup: {out[:300]}")
 
             timer.start()
             round_start: float = 0.0
+            nudges_used = 0
             for _round in range(cfg.budgets.max_rounds):
                 elapsed = timer.elapsed()
                 if elapsed >= cfg.budgets.problem_wall_cap_seconds:
@@ -318,6 +337,8 @@ async def run_attempt(
                 round_result = await client.chat(messages, tools=mcp_tools, system_prompt=system_prompt)
                 tokens.add(round_result.usage)
                 result.rounds += 1
+                if round_result.finish_reason == "length":
+                    result.n_truncated_rounds += 1
                 now = timer.elapsed()
                 round_latencies.append(round(now - round_start, 2))
                 round_start = now
@@ -332,13 +353,26 @@ async def run_attempt(
                     ],
                 }
                 logger.log_message(assistant_message)
+                if round_result.reasoning_text:
+                    logger.log_text("REASONING", round_result.reasoning_text[:2000])
 
                 if not round_result.tool_calls:
-                    if not (round_result.assistant_text or "").strip():
-                        result.error = "Model returned empty response (likely content filter)"
-                    if "DONE" in (round_result.assistant_text or ""):
+                    # DONE / nudge / stop — shared policy, no more silent deaths on
+                    # a truncated or text-only round (audit §2, H2).
+                    action, payload = no_tool_call_action(round_result, nudges_used)
+                    if action == "done":
                         result.agent_claimed_solved = True
-                    break
+                        break
+                    if action == "stop":
+                        result.error = payload
+                        break
+                    nudges_used += 1
+                    text = (round_result.assistant_text or "").strip()
+                    if text:
+                        messages.append({"role": "assistant", "content": text})
+                    messages.append({"role": "user", "content": payload})
+                    logger.log_message({"role": "user", "content": payload})
+                    continue
 
                 tool_outputs = []
                 for tc in round_result.tool_calls:
@@ -347,8 +381,13 @@ async def run_attempt(
                     try:
                         args = json.loads(tc.function.arguments)
                     except json.JSONDecodeError as e:
-                        result.error = f"JSONDecodeError: {e}"
-                        break
+                        # Keep the history consistent: every tool_call gets a tool
+                        # reply, else the next chat() is rejected by the API (H3).
+                        err = (f"ERROR: tool arguments were not valid JSON ({e}). "
+                               f"Re-issue the call with complete, valid JSON.")
+                        tool_outputs.append({"tool_call_id": tc.id, "role": "tool", "name": name, "content": err})
+                        logger.log_tool_result(tc.id, name, err)
+                        continue
                     for k, v in list(args.items()):
                         if isinstance(v, str):
                             args[k] = sanitize_for_isabelle(v)
@@ -363,15 +402,13 @@ async def run_attempt(
                     tool_times.append(time_mod.time() - t0)
                     tool_outputs.append({"tool_call_id": tc.id, "role": "tool", "name": name, "content": output})
                     logger.log_tool_result(tc.id, name, output)
-                    if name == "verify_chunk":
-                        result.agent_claimed_solved = (
-                            "success=True" in output and "proof_open=False" in output and "used_sorry=False" in output
-                        )
+                    # NOTE: the harness no longer terminates on a fully-green
+                    # verify_chunk — that cut attempts off at the first proved
+                    # HELPER lemma (audit H1). Only an explicit DONE ends the
+                    # attempt; the arbiter remains the sole success judge.
 
                 messages.append(assistant_message)
                 messages.extend(tool_outputs)
-                if result.agent_claimed_solved:
-                    break
 
             result.wall_s = round(timer.stop(), 2)
             result.input_tokens = tokens.input_tokens

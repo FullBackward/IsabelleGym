@@ -16,7 +16,7 @@ import uuid
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from repl.src.python.repl_backend_gateway import ReplBackendGatewayProcess
-from server.app.core.config import Server
+from server.app.core.config import Memory, Server
 from server.app.core.logging import get_logger, logging_context
 from server.app.core import metrics
 from server.app.errors import GatewayUnavailable, SessionError
@@ -162,6 +162,9 @@ class SessionManagerHelpersMixin:
                     metrics.sessions_evicted.labels("memory").inc()
             except Exception:
                 logger.exception("failed to close session during memory eviction sid=%s", sid)
+            # cgroup accounting lags the close (poly exit + kernel reclaim);
+            # settle briefly so we don't over-evict on a stale snapshot.
+            time.sleep(Memory.EVICTION_SETTLE_S)
             snap = self.memory.read()
         return snap
 
