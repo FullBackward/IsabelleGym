@@ -1,593 +1,333 @@
-# Isabelle Server System
-This is the implementation to the server-side IsabelleGym based small-step and big-step verifier.
-The work is based on IsabelleGym 1.0 by Tom Milan (University of Cambridge) and IsabelleGym 2.0 by Zijing Li (University of Edinburgh).
-This iteration focus on serverise the IsabelleGym REPL environment and provide a Isabelle/Scala based stepwise proof verification and whole theory file verification system
-for training and evaluating LLM based prover, implemented by Xuanwei Ren (University of Edinburgh).
+# IsabelleGym Server
 
-The system contains:
-- a Scala / ML Isabelle REPL backend under `repl/`
-- a FastAPI server under `server/`
-- an async Python client under `client/`
-- evaluation and benchmarking scripts under `evaluation/`
+A server-side Isabelle proof verification system for training and evaluating LLM-based
+provers. It wraps the Isabelle theorem prover behind a FastAPI HTTP server supporting
+**small-step** (stepwise REPL execution with checkpoints/rollback), **chunk**
+(`verify_chunk`: a whole proof chunk in one PIDE edit with per-command status), and
+**big-step** (whole `.thy` file verification via `isabelle build`) workflows, plus an
+**MCP server** that exposes it all to LLM agents.
 
-## Requirements
+Based on IsabelleGym 1.0 by Tom Milan (University of Cambridge) and IsabelleGym 2.0 by
+Zijing Li (University of Edinburgh); this server iteration is implemented by Xuanwei Ren
+(University of Edinburgh).
 
-### Containerized stack used by the Dockerfile
+Components:
 
-- Python 3.12
-- OpenJDK 21
-- Isabelle 2025-2
-- Gradle wrapper build under `repl/`
+| Path | What it is |
+|---|---|
+| `repl/` | Scala/ML Isabelle REPL backend (PIDE sessions, one shared gateway JVM) |
+| `server/` | FastAPI service: session pool, leases, memory admission, metrics |
+| `client/` | Async Python HTTP client (`IsabelleGymAsyncClient`) |
+| `mcp_server/` | MCP server for LLM agents (stdio / streamable-HTTP) |
+| `MCP-comparison/` | Harness comparing this MCP against other Isabelle MCP servers |
+| `evaluation/` | Benchmark CLIs and corpora |
 
-### Local setup expectations
+Design rationale for the architecture lives in [DESIGN_CHOICES.md](DESIGN_CHOICES.md);
+the living bug log is [ISSUES.md](ISSUES.md).
 
-If you are not using Docker, you will need at least:
+---
 
-- a recent Python 3 version
-- JDK 17+
-- Isabelle installed and available on `PATH`
-- enough memory for multiple live Isabelle processes if you enable pooling
+## Installing the server on an Ubuntu server (command line)
 
-## Quick start with Docker
+Works on x86-64 and ARM64 Ubuntu (20.04+). The Docker build auto-selects the matching
+Isabelle distribution for your CPU architecture. Budget ~30 GB disk for the image + heaps
+and ideally 16 GB+ RAM (the compose file caps the container at 24 GB; adjust for smaller
+machines — see step 5).
 
-It is recommanded to run the server with Docker.
+### 1. Prerequisites
 
-### 1. Build and start the container
+The server itself runs entirely inside Docker — nothing else (no Python, no JDK, no
+Isabelle) needs to be installed on the host. The host needs only the components below.
+**Check each one first and skip it if it is already installed on your server.**
 
-```bash
-docker compose up -d --build
-```
+| Component | Check with | Needed for |
+|---|---|---|
+| `git` | `git --version` | cloning the repository |
+| `curl`, `ca-certificates` | `curl --version` | fetching the Docker apt key; health checks |
+| Docker Engine (20.10+) | `docker --version` | running the container |
+| Docker Compose plugin (v2) | `docker compose version` | building/starting the stack |
 
-or, on older setups:
-
-```bash
-docker-compose up -d --build
-```
-
-### 2. Open a shell inside the container
-
-```bash
-docker compose exec isabelle-gym bash
-```
-
-### 3. Confirm Python dependencies are installed
-
-The Dockerfile already installs dependencies from `requirement.txt`.
-That filename is **singular** in this repository.
-
-If you need to reinstall them manually:
+**a. git + curl** (skip if present):
 
 ```bash
-pip install -r requirement.txt
+sudo apt-get update
+sudo apt-get install -y git curl ca-certificates
 ```
 
-### 4. Start the server
-
-From /app in docker container:
+**b. Docker Engine + Compose plugin** (skip if both checks above pass; note that the
+legacy `docker-compose` v1 binary also works — substitute `docker-compose` for
+`docker compose` in every command below):
 
 ```bash
-python -m server.app.main
+sudo install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+  | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
+  https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" \
+  | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
 ```
 
-You can also run it explicitly with Uvicorn:
+If Docker Engine is already installed but `docker compose version` fails, you only need
+the plugin: `sudo apt-get install -y docker-compose-plugin`.
+
+**c. Run docker without sudo** (skip if `docker ps` already works for your user;
+re-login after this for the group change to take effect):
 
 ```bash
-uvicorn server.app.main:app --host 0.0.0.0 --port 8000
+sudo usermod -aG docker "$USER"
 ```
 
-Or from outside the container, in repo_root on host:
-```bash
-docker compose exec isabelle-gym python -m server.app.main
-```
-
-### 5. Check that the server is healthy
-
-From the host:
+### 2. Clone and configure
 
 ```bash
-curl http://localhost:8000/
+git clone https://github.com/FullBackward/IsabelleGym.git
+cd IsabelleGym
 ```
 
-Expected response shape:
+Runtime configuration lives in `.env` at the repo root (loaded into the container via
+`env_file`). The defaults are sensible; the knobs you most likely want to review:
+
+```bash
+ISABELLE_POOL_SIZE=4              # max concurrent Isabelle sessions (each ~1.5-2.5 GB)
+ISABELLE_INITIAL_SESSIONS=0       # sessions pre-warmed at startup (0 = fast startup)
+ISABELLE_SESSION_THREADS=8        # ML threads per session (lower if many concurrent sessions)
+ISABELLE_MEMORY_PRESSURE_THRESHOLD=85.0
+```
+
+### 3. Build the image
+
+```bash
+docker compose build isabelle-gym
+```
+
+This downloads the Isabelle 2025-2 distribution (~1.2 GB). The official server
+(`isabelle.in.tum.de`) is sometimes down; the build automatically falls back through
+mirrors (Clarkson → Cambridge → Proofcraft). The build takes 10–30 minutes (Isabelle
+download + Scala backend build).
+
+### 4. Start the container and the API
+
+The compose setup does **not** auto-start the API — start it explicitly:
+
+```bash
+docker compose up -d isabelle-gym
+docker compose exec -d isabelle-gym python -m server.app.main
+
+# wait for it, then check:
+curl http://localhost:8000/healthz     # {"status":"alive"}
+curl http://localhost:8000/            # full health: gateway_alive, pool, memory
+```
+
+First startup takes a minute or two (gateway JVM spawn). With
+`ISABELLE_INITIAL_SESSIONS=0`, the first session request pays the session-creation cost
+(~1 min) instead.
+
+Optional but recommended if your workload imports heavy sessions (e.g.
+`HOL-Computational_Algebra`): prebuild their heaps once so session creation and big-step
+verification start from a cached image:
+
+```bash
+docker compose exec isabelle-gym isabelle build -b HOL-Computational_Algebra
+```
+
+### 5. Operating notes
+
+- **Logs:** `logs/server.log` in the repo (the repo is volume-mounted at `/app`).
+- **Metrics:** Prometheus metrics at `/metrics`; a full Prometheus+Grafana+cAdvisor stack
+  is included — `docker compose up -d` starts everything, Grafana on `:3000`.
+- **Memory limit:** `mem_limit: 24g` in `docker-compose.yml`. On smaller machines lower it
+  AND lower `ISABELLE_POOL_SIZE`; the admission gate refuses new sessions near the limit
+  instead of letting the OOM killer take the JVM.
+- **Changing `.env`:** requires recreating the container, not just restarting it:
+  `docker compose up -d --force-recreate isabelle-gym`.
+- **After an image rebuild**, if the server fails with `Not found: py4j`: a pre-existing
+  named volume shadows the component registration. Fix:
+  `docker compose exec isabelle-gym ./repl/Admin/init` and start the server again
+  (ISSUES.md Bug 7).
+- **Remote access:** the API listens on `0.0.0.0:8000` with no authentication — keep it
+  firewalled (`sudo ufw allow from <your-ip> to any port 8000`) or tunnel over SSH.
+
+---
+
+## Connecting the MCP server to an agent
+
+The MCP server is a thin agent-facing layer over the HTTP API:
+
+```
+LLM agent  ⇄  MCP server (stdio or streamable-HTTP)  ⇄  IsabelleGym HTTP server  ⇄  Isabelle
+```
+
+Sessions and leases are managed automatically per MCP connection — the agent never sees a
+`session_id`. Each connection gets an isolated Isabelle session; a fresh `enter_theory`
+always starts from a clean document.
+
+### Prerequisites (on the machine that runs the agent/MCP client)
+
+```bash
+cd IsabelleGym
+pip install -r mcp_server/requirements.txt httpx
+```
+
+The MCP server needs two things at runtime: `PYTHONPATH` pointing at the repo root (so
+`client` and `mcp_server` import), and the gym server URL (default
+`http://localhost:8000`). The gym server must be running (previous section).
+
+### Option A — stdio (local agents: Claude Code, Claude Desktop, Cursor)
+
+The client spawns the MCP server as a subprocess; one process per connection.
+
+**Claude Code** (either command works):
+
+```bash
+claude mcp add isabellegym \
+  --env PYTHONPATH=/absolute/path/to/IsabelleGym \
+  --env ISABELLE_MCP_GYM_URL=http://localhost:8000 \
+  -- python -m mcp_server.app
+```
+
+or drop a `.mcp.json` in your project:
 
 ```json
 {
-  "service": "IsabelleGym Server",
-  "version": "0.0.1",
-  "status": "healthy",
-  "active_sessions": 0,
-  "busy_sessions": 0,
-  "max_pool_size": 24,
-  "timestamp": "..."
+  "mcpServers": {
+    "isabellegym": {
+      "command": "python",
+      "args": ["-m", "mcp_server.app"],
+      "env": {
+        "PYTHONPATH": "/absolute/path/to/IsabelleGym",
+        "ISABELLE_MCP_GYM_URL": "http://localhost:8000"
+      }
+    }
+  }
 }
 ```
 
-## Local installation
+**Claude Desktop:** add the same JSON block under `mcpServers` in
+`~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or
+`%APPDATA%\Claude\claude_desktop_config.json` (Windows).
 
-There is an `install.sh` script, but it is **not fully maintained for this server iteration**. If you still want to try a local setup, manual adjustment to the script is mandatory.
+**Cursor:** same block in `.cursor/mcp.json` (project) or `~/.cursor/mcp.json` (global).
 
-## Running the server
+**Any other MCP client / your own agent loop:** spawn
+`python -m mcp_server.app` over stdio with those two env vars. If your agent framework
+uses the `mcp` Python SDK, `MCP-comparison/common/mcp_client.py` is a minimal working
+example (spawn → `initialize` → `tools/list` → `tools/call`).
 
-The FastAPI application lives in `server/app/main.py`.
+### Option B — streamable-HTTP (remote server, multiple agents)
 
-Default runtime configuration comes from environment variables in `server/app/core/config.py`.
-
-### Useful environment variables
-
-```bash
-ISABELLE_SERVER_HOST=0.0.0.0
-ISABELLE_SERVER_PORT=8000
-ISABELLE_POOL_SIZE=24
-ISABELLE_INITIAL_SESSIONS=8
-ISABELLE_IDLE_TIMEOUT=1800
-ISABELLE_DEFAULT_FIELD=HOL
-ISABELLE_ENABLE_CACHE=false
-ISABELLE_MAX_CACHE_SIZE=1
-ISABELLE_ENABLE_MEMORY_MANAGEMENT=true
-ISABELLE_SHOW_STATES=false
-ISABELLE_SERVER_LOG_LEVEL=INFO
-```
-
-### Example: start with a smaller pool
+Run the MCP server as a standalone service next to the gym server:
 
 ```bash
-export ISABELLE_POOL_SIZE=4
-export ISABELLE_INITIAL_SESSIONS=2
-python -m server.app.main
+cd IsabelleGym
+PYTHONPATH=. ISABELLE_MCP_TRANSPORT=streamable-http \
+  ISABELLE_MCP_HOST=0.0.0.0 ISABELLE_MCP_PORT=8848 \
+  python -m mcp_server.app
 ```
 
-## Client setup and import path
-
-From the repo_root:
+Point HTTP-capable MCP clients at `http://<server>:8848/mcp`. Concurrent connections are
+isolated from each other (per-connection sessions). Like the gym API, there is no built-in
+auth — firewall the port or tunnel:
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -r requirement.txt
-python -m pip install -e .
-export PYTHONPATH="$PWD:${PYTHONPATH:-}"
+# from the agent machine:
+ssh -N -L 8848:localhost:8848 user@your-server
 ```
 
-## Server API Documentation
-see `repo_root/Isabelle Server API Documentation.pdf`
+### What the agent gets
 
-## Python client usage
+| Tool | Purpose |
+|---|---|
+| `enter_theory(name, imports, field)` | Start (or restart) a proof session; begins the theory header for you |
+| `verify_chunk(text, timeout, detail)` | **The one execution tool.** Submit one command or a whole proof; returns per-command status (`ok/failed/running/unprocessed`), names the stuck line on timeout, auto-rolls-back failures |
+| `proof_state()` | Current open subgoals |
+| `source()` | The theory source as the prover sees it |
+| `diagnostic(command)` | Read-only queries (`thm`, `term`, `find_theorems`, `print_*`) — transient, never touches the proof |
+| `sledgehammer(timeout_s)` | Automated proof search on the open goal; returns ready-to-paste methods |
+| `checkpoint()` / `restore(id)` / `rollback()` | State management |
+| `verify_batch(items, max_parallel)` | Check many independent chunks concurrently across the session pool |
+| `close_theory()` | Dispose this connection's session |
 
-In `repo_root/client/async_client.py`
+The one rule agents must respect (it is spelled out in the tool outputs too):
+**a theorem is proved only when `verify_chunk` reports `success=True` AND
+`proof_open=False` AND `used_sorry=False`.** `success=True` alone means "no command
+errored" — an open or `sorry`-closed proof is NOT a result.
 
-### Example: small-step session
+A typical agent flow:
 
-```python
+```
+enter_theory(name="Scratch", imports=["Main"])
+verify_chunk("theorem foo: \"rev (rev xs) = xs\"\n  by (induct xs) auto")
+  → success=True proof_open=False used_sorry=False   ✓ proved
+# or, when stuck:
+verify_chunk("theorem bar: ...\nproof -\n  have step1: ... by simp")
+  → success=True proof_open=True                     (open goal kept)
+sledgehammer()                                        → "by (metis ...)"
+verify_chunk("  show ?thesis by (metis ...)\nqed")
+```
+
+### MCP configuration reference (env vars)
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `ISABELLE_MCP_GYM_URL` | `http://localhost:8000` | The gym HTTP server |
+| `ISABELLE_MCP_FIELD` | `HOL` | Default Isabelle session for new theories |
+| `ISABELLE_MCP_CHUNK_TIMEOUT` | `180` | Default wall budget (s) per `verify_chunk` |
+| `ISABELLE_MCP_HTTP_TIMEOUT` | `600` | httpx timeout (must exceed chunk timeout) |
+| `ISABELLE_MCP_MAX_PARALLEL` | `4` | Cap for `verify_batch` fan-out |
+| `ISABELLE_MCP_TRANSPORT` | `stdio` | `stdio` or `streamable-http` |
+| `ISABELLE_MCP_HOST` / `ISABELLE_MCP_PORT` | `127.0.0.1` / `8848` | HTTP transport bind |
+
+### Smoke test
+
+With the gym server running, verify the MCP layer end-to-end without any agent:
+
+```bash
+cd IsabelleGym
+PYTHONPATH=. python - <<'EOF'
 import asyncio
-from client.async_client import IsabelleGymAsyncClient
+from mcp import ClientSession
+from mcp.client.stdio import StdioServerParameters, stdio_client
 
-
-async def main() -> None:
-    async with IsabelleGymAsyncClient("http://localhost:8000") as client:
-        created = await client.create_session(theories=["Main"], field="HOL")
-        session_id = created["session_id"]
-        lease_id = created["lease_id"]
-
-        await client.enter_theory(session_id, "Scratch", lease_id=lease_id)
-
-        result = await client.execute_command(
-            session_id,
-            'lemma "A ⟹ A" by simp',
-            timeout=30.0,
-            lease_id=lease_id,
-        )
-        print(result)
-
-        await client.close_session(session_id, lease_id=lease_id)
-
+async def main():
+    params = StdioServerParameters(command="python", args=["-m", "mcp_server.app"],
+                                   env={"PYTHONPATH": ".", "ISABELLE_MCP_GYM_URL": "http://localhost:8000"})
+    async with stdio_client(params) as (r, w):
+        async with ClientSession(r, w) as s:
+            await s.initialize()
+            print("tools:", [t.name for t in (await s.list_tools()).tools])
+            await s.call_tool("enter_theory", {"name": "Smoke", "imports": ["Main"]})
+            out = await s.call_tool("verify_chunk",
+                {"text": 'theorem t: "rev (rev xs) = xs" by (induct xs) auto'})
+            print(out.content[0].text)
+            await s.call_tool("close_theory", {})
 
 asyncio.run(main())
+EOF
 ```
 
-### Example: big-step verification
-
-```python
-import asyncio
-from client.async_client import IsabelleGymAsyncClient
-
-
-THEORY = """
-theory Scratch
-  imports Main
-begin
-
-lemma "A ⟹ A"
-  by simp
-
-end
-"""
-
-
-async def main() -> None:
-    async with IsabelleGymAsyncClient("http://localhost:8000") as client:
-        response = await client.verify_bigstep_text(
-            theory_name="Scratch",
-            theory_text=THEORY,
-            field="HOL",
-            timeout=300.0,
-        )
-        print(response.json())
-
-
-asyncio.run(main())
-```
-
-## Main components
-
-### `repl/`
-The Isabelle / Scala / ML backend and Python bridge.
-
-Important pieces:
-
-- `repl/Admin/init`: initializes the Isabelle component
-- `repl/gradlew build`: builds the Scala side
-- `repl/src/python/`: Python wrapper code around the REPL backend
-- `repl/thys/IsabelleREPL.thy`: base theory used by server sessions
-
-### `server/`
-The HTTP service.
-
-Important pieces:
-
-- `server/app/main.py`: FastAPI application entrypoint
-- `server/app/api/v1/router.py`: REST endpoints
-- `server/app/services/session_manager.py`: pooled session lifecycle and lease management
-- `server/app/services/session.py`: session-level small-step execution, checkpoints, rollback, proof state access
-- `server/app/services/build_verify.py`: big-step verification via `isabelle build`
-
-### `client/`
-The async Python client.
-
-- `client/async_client.py` provides an importable `IsabelleGymAsyncClient` for session creation, command execution, and big-step verification.
-
-### `server_gym/`
-A copy of old `isabelle_gym.py` and `success_checker.py` but modified as helper scipts for server implementation.
-
-### `evaluation/`
-Benchmark and analysis scripts.
-
-This includes:
-
-- local IsabelleGym evaluation
-- server-client evaluation
-- qIsabelle comparison scripts
-- preprocessing helpers for theory corpora
-- CSV / JSON exports for later analysis
-
-## Evaluation scripts
-
-### One-time setup for evaluation commands
-
-```bash
-cd /path/to/IsabelleGym
-source .venv/bin/activate
-export PYTHONPATH="$PWD:${PYTHONPATH:-}"
-mkdir -p evaluation/results
-CORPUS="evaluation/HOL_corpus/Examples/processed"
-OUT="evaluation/results"
-```
-
-The built-in `evaluation/HOL_corpus/Examples/processed/` directory is the safest small example corpus for smoke tests.
-
-### Preprocessing helpers
-
-#### `evaluation/scripts/process.py`
-Rewrites local `Analysis`-style imports to fully qualified `HOL-Analysis.<Theory>` imports.
-
-Example:
-
-```bash
-python -m evaluation.scripts.process \
-  --analysis-dir /path/to/Isabelle2025-2/src/HOL/Analysis \
-  --target evaluation/HOL_corpus/HOL-Analysis/raw \
-  --output-dir evaluation/HOL_corpus/HOL-Analysis/processed
-```
-
-In-place rewrite example:
-
-```bash
-python -m evaluation.scripts.process \
-  --analysis-dir /path/to/Isabelle2025-2/src/HOL/Analysis \
-  --target evaluation/HOL_corpus/HOL-Analysis/raw \
-  --inplace
-```
-
-#### `evaluation/scripts/clean_example_dir.py`
-Removes document commands such as `text`, `section`, and `subsection` from `.thy` files.
-
-Example:
-
-```bash
-python -m evaluation.scripts.clean_example_dir \
-  --corpus evaluation/HOL_corpus/Examples/raw \
-  --out-corpus evaluation/HOL_corpus/Examples/cleaned \
-  --copy-non-thy
-```
-
-### Small-step evaluation
-
-#### `evaluation/scripts/eval_smallstep_isabellegym.py`
-Runs the local IsabelleGym baseline, aligned with the server small-step workflow.
-
-Example:
-
-```bash
-python -m evaluation.scripts.eval_smallstep_isabellegym \
-  --repo-root . \
-  --corpus "$CORPUS" \
-  --output "$OUT/smallstep_isabellegym_aligned.json"
-```
-
-Verbose step printing:
-
-```bash
-python -m evaluation.scripts.eval_smallstep_isabellegym \
-  --repo-root . \
-  --corpus "$CORPUS" \
-  --print-steps \
-  --output "$OUT/smallstep_isabellegym_aligned_verbose.json"
-```
-
-#### `evaluation/scripts/eval_smallstep_server_client_1_worker_no_reuse.py`
-Runs the server-client small-step benchmark with a fresh session per theory.
-
-Start the server first, then run:
-
-```bash
-python -m evaluation.scripts.eval_smallstep_server_client_1_worker_no_reuse \
-  --corpus "$CORPUS" \
-  --server http://localhost:8000 \
-  --timeout 1200 \
-  --field HOL \
-  --output "$OUT/smallstep_server_no_reuse.json"
-```
-
-Verbose step printing:
-
-```bash
-python -m evaluation.scripts.eval_smallstep_server_client_1_worker_no_reuse \
-  --corpus "$CORPUS" \
-  --server http://localhost:8000 \
-  --print-steps \
-  --output "$OUT/smallstep_server_no_reuse_verbose.json"
-```
-
-#### `evaluation/scripts/eval_smallstep_server_client_with_reuse.py`
-Runs the server-client small-step benchmark with pooled session reuse and parallel workers.
-
-Start the server first, then run:
-
-```bash
-python -m evaluation.scripts.eval_smallstep_server_client_with_reuse \
-  --corpus "$CORPUS" \
-  --server http://localhost:8000 \
-  --field HOL \
-  --num-workers 4 \
-  --output "$OUT/smallstep_server_with_reuse.json"
-```
-
-Verbose step printing:
-
-```bash
-python -m evaluation.scripts.eval_smallstep_server_client_with_reuse \
-  --corpus "$CORPUS" \
-  --server http://localhost:8000 \
-  --num-workers 4 \
-  --print-steps \
-  --output "$OUT/smallstep_server_with_reuse_verbose.json"
-```
-
-#### `evaluation/scripts/eval_smallstep_qisabelle.py`
-Runs the qIsabelle comparison benchmark.
-
-This script assumes a qIsabelle HTTP service is already running on `--port`.
-
-Example:
-
-```bash
-python -m evaluation.scripts.eval_smallstep_qisabelle \
-  --corpus "$CORPUS" \
-  --session-name HOL \
-  --port 17000 \
-  --master-dir /home/isabelle/ \
-  --output "$OUT/smallstep_qisabelle.json"
-```
-
-If your theories depend on additional session roots, repeat `--session-root`:
-
-```bash
-python -m evaluation.scripts.eval_smallstep_qisabelle \
-  --corpus "$CORPUS" \
-  --session-name HOL-Analysis \
-  --session-root /path/to/AFP/thys \
-  --session-root /path/to/other/session/root \
-  --port 17000 \
-  --master-dir /home/isabelle/ \
-  --output "$OUT/smallstep_qisabelle_with_roots.json"
-```
-
-### Big-step evaluation
-
-#### `evaluation/scripts/eval_bigstep_isabelle_build.py`
-Runs whole-theory verification directly through `isabelle build`.
-
-Example:
-
-```bash
-python -m evaluation.scripts.eval_bigstep_isabelle_build \
-  --corpus "$CORPUS" \
-  --isabelle-bin "$(which isabelle)" \
-  --parent-session HOL \
-  --jobs 4 \
-  --output "$OUT/bigstep_isabelle_build.json"
-```
-
-For the processed `HOL-Analysis` corpus, use `--parent-session HOL-Analysis`.
-
-#### `evaluation/scripts/eval_bigstep_server_client_ver.py`
-Runs whole-theory verification through the server big-step endpoint.
-
-Start the server first, then run:
-
-```bash
-python -m evaluation.scripts.eval_bigstep_server_client_ver \
-  --corpus "$CORPUS" \
-  --server http://localhost:8000 \
-  --timeout 1800 \
-  --field HOL \
-  --output "$OUT/bigstep_server_client.json"
-```
-
-For the processed `HOL-Analysis` corpus, use `--field HOL-Analysis`.
-
-### Helper modules used by the evaluators
-
-These files are imported by the other scripts and do not currently expose a standalone CLI entrypoint:
-
-- `evaluation/scripts/eval_stats.py`
-- `evaluation/scripts/theory_splitter.py`
-
-## Troubleshooting
-
-### “Bad component...” during backend setup
-
-A repository note already mentions this failure mode during Scala / Isabelle component compilation. If it happens, one workaround noted in the project is to create an empty main file under Isabelle’s `Admin/components` path before rebuilding.
-
-### Server starts but commands fail immediately
-
-Check the following inside the container:
-
-```bash
-which isabelle
-java -version
-python --version
-./repl/gradlew build
-```
-
-Also make sure the Isabelle component initialization step completed successfully:
-
-```bash
-./repl/Admin/init
-```
-
-### `pip install -r requirements.txt` fails
-
-This repository uses `requirement.txt`, not `requirements.txt`.
-
-### Docker container is up but the API is not responding
-
-The compose setup does not automatically launch Uvicorn. Open a shell in the container and start the server manually.
-
-
-## Comprehensive detailed file Structure
-A comprehensive file structure summary, this is due to the fact that no complete file structure specification was found in the previous iterations. Therefore, I feel it necessary to illustrate the whole picture and highlight key directories and files to increase the readability of this repo.
-
-```
-repo_root/
-├── client/                                                            # Directory for Async Client
-|   ├── __init__.py
-|   └── async_client.py                                                # Async client entrypoint
-├── evaluation/                                                        # Supporting material for evaluation chapter in the report
-|   ├── analysis_exports/                                              # Artifects from run_analysis.ipynb
-|   ├── benchmark/                                                     # Benchmark folder from previous iterations, not maintained
-|   ├── HOL_corpus/                                                    # Where you store the evaluation corpus theory files
-|   |   ├── HOL_Examples/
-|   |   └── HOL_Analysis/
-|   ├── local_gym/                                                     # IsabelleGym 2.0 iteration codes, used for small-step evaluation
-|   ├── runs/                                                          # Evaluation runs results
-|   ├── scripts/                                                       # Scripts for runnning evaluation
-|   |   ├── clean_example_dir.py                                       # Preprocessing: remove documentation keywords chunks
-|   |   ├── eval_bigstep_isabelle_build.py                             # Benchmarking local bigstep isabelle build
-|   |   ├── eval_bigstep_server_client_ver.py                          # Benchmarking server bigstep with async client
-|   |   ├── eval_smallstep_isabellegym.py                              # Benchmarking local smallstep with IsabelleGym 2.0
-|   |   ├── eval_smallstep_qisabelle.py                                # Benchmarking local smallstep with QIsabelle. This file is to be used with QIsabelle repository.
-|   |   ├── eval_smallstep_server_client_1_worker_no_reuse.py          # Benchmarking server smallstep with async client, configurated as 1 worker, no session reuse.
-|   |   ├── eval_smallstep_server_client_with_reuse.py                 # Benchmarking server smallstep with async client, can be configurated as n workers, with session reuse.
-|   |   ├── eval_stats.py                                              # Benchmarking statistics helper script
-|   |   ├── process.py                                                 # Preprocessing: normalise theory imports
-|   |   └── theory_splitter.py                                         # Smallstep theory splitter helper script
-|   ├── runs_analysis.ipynb                                            # IPython notebook for evaluation results analysis
-|   └── Server_Concurrency.thy                                         # Concurrency formal proof for session acquire and release
-├── previous works/                                                    # Collections of previous works that were unpublished
-|   ├── IsabelleGym1.0/                                                
-|   |   ├── IsabelleGym/                                               # IsabelleGym 1.0 source
-|   |   └── IsabelleGym.pdf                                            # IsabelleGym 1.0 report
-|   └── msc_20257720.pdf                                               # IsabelleGym 2.0 report
-├── repl/                                                              # REPL source that connect Python <--> Scala <--> Isabelle/ML
-|   ├── Admin/                                                         # Build properties and Scala components
-|   ├── etc/                                                           # Build misc
-|   ├── gradle/                                                        # Scala compiler
-|   ├── python/                                                        # Archived Python scripts for Isabelle 2.0
-|   ├── src/                                                           # Source code for REPL backend
-|   |   ├── main/                                                      # Scala code
-|   |   |   └── scala/
-|   |   |   |   └── repl/
-|   |   |   |       ├── document_utils.scala                           # Utilities for document checkpoint and facts
-|   |   |   |       ├── edit_utils.scala                               # Utilities for snappits editing
-|   |   |   |       ├── repl_backend_gateway.scala                     # Scala code exposing Isabelle/ML methods
-|   |   |   |       ├── repl_backend.scala                             # REPL backend definition
-|   |   |   |       ├── repl_ml_communication.scala                    # Scala <--> ML interaction code
-|   |   |   |       ├── repl_output.scala                              
-|   |   |   |       ├── repl_session.scala                             # Define Scala session behaviour
-|   |   |   |       ├── server_utils.scala                             # Key script for Isabelle server and session creation
-|   |   |   |       ├── session_manager.scala                          # Scala level session manager, not used
-|   |   |   |       ├── thy_info.scala
-|   |   |   |       ├── thy_parsing.scala
-|   |   |   |       ├── thy_status.scala
-|   |   |   |       └── vector_env.scala
-|   |   ├── ml/
-|   |   |   └── REPL.ML                                                # ML code for extracting facts and subgoals from proofs
-|   |   └── python/
-|   |       ├── isabelle_client.py                                     # Python end wrapper to REPL backend
-|   |       ├── isabelle_repl.py                                       # Local REPL interface from IsabelleGym 1.0
-|   |       ├── operation.py
-|   |       ├── repl_backend_gateway.py                                # Python end wrapper for REPL creation
-|   |       ├── session_manager.py                                     # Unused session manager wrapper
-|   |       └── thy_init.py                                            # Responsible for create managable wrapper .thy file to import dependencies
-|   ├── thys/                                                          # Cache for wrapper .thy files
-|   ├── __init__.py
-|   ├── build.gradle                                                   # Gradle scala compiler properties
-|   ├── demo_repl.py                                                   # A demo REPL interface for local IsabelleGym 1.0
-|   ├── gradlew
-|   ├── gradlew.bat
-|   ├── README.md
-|   ├── settings.gradle
-|   └── temp.txt                                                       # Wrapper .thy file template from IsabelleGym 1.0
-├── server/                                                            # Server implementation
-|   └── app/
-|       ├── api/
-|       |   └── v1/
-|       |   |   ├── schemas/                                           
-|       |   |   |   └── API_models.py                                  # Python models for API requests and responses
-|       |   |   ├── router.py                                          # Main controller
-|       |   |   └── ws.py                                              # Not implemented websocket endpoint
-|       ├── core/
-|       |   ├── config.py                                              # Configuration file
-|       |   └── logging.py                                             # Logger configuration
-|       ├── services/
-|       |   ├── build_verify.py                                        # Bigstep verifier utilising Isabelle build command line
-|       |   ├── internal_models.py                                     # Internal schemas for requests and return types
-|       |   ├── session_manager.py                                     # Session manager implementation
-|       |   ├── session.py                                             # Individual session implementation
-|       |   ├── theory_chunks.py                                       # Helper script for command preview
-|       |   ├── theory_parsing.py                                      # Helper script for theory parsing
-|       |   └── threaded_backend.py                                    # Wrapping each session with concurrent subthreads
-|       ├── dependencies.py                                            # Sharing the same session manager instance accross scripts
-|       ├── errors.py                                                  # Schema for error
-|       └── main.py                                                    # Server entrypoint
-├── server_gym/                                                        # Modified version of some scripts from IsabelleGym 2.0 to use for server
-|   ├── isabelle_gym.py
-|   └── success_checker.py                                             # Modified for use in checking error messages
-├── docker-compose.yml
-├── Dockerfile
-├── install.sh
-├── pyproject.toml
-├── README.md
-└── requirement.txt
-```
+Expected: the tool list, then `success=True proof_open=False used_sorry=False ...`.
+(The first run pays one-time session creation, ~1 minute.)
+
+### Troubleshooting
+
+| Symptom | Cause / fix |
+|---|---|
+| `McpError: Connection closed` immediately | The MCP subprocess died on startup — almost always missing `PYTHONPATH` or missing pip deps. Run `PYTHONPATH=. python -m mcp_server.app` manually to see the traceback. |
+| `enter_theory` hangs then errors | Gym server not running / wrong `ISABELLE_MCP_GYM_URL`; or the first session for a heavy import set is building its heap — prebuild it (install step 4). |
+| HTTP 503 "memory pressure" from tools | The admission gate is protecting the container — lower `ISABELLE_POOL_SIZE`, raise `mem_limit`, or wait for idle sessions to be evicted. |
+| `success=True` but the agent isn't done | Working as intended: check `proof_open` / `used_sorry`. |
+
+---
+
+## Beyond the basics
+
+- **HTTP API directly** (no MCP): see the endpoint list in `server/app/api/v1/router.py`
+  and the client in `client/async_client.py`; API reference PDFs are in the repo root.
+- **MCP comparison harness** (this MCP vs Isabelle-MCP vs AutoCorrode I/Q):
+  [MCP-comparison/README.md](MCP-comparison/README.md).
+- **Evaluation scripts** for small-step/big-step benchmarking: `evaluation/scripts/`
+  (each runs as `python -m evaluation.scripts.<name>`).
+- **Developer docs:** [CLAUDE.md](CLAUDE.md) (architecture + conventions),
+  [DESIGN_CHOICES.md](DESIGN_CHOICES.md) (rationale), [ISSUES.md](ISSUES.md) (bug log).
