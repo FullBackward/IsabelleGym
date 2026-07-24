@@ -116,10 +116,12 @@ def test_load_results_accepts_rows_without_new_fields(tmp_path):
 
     path = tmp_path / "results.jsonl"
     append_result(path, AttemptResult(system="isabellegym", problem="p", repeat=0))
-    # simulate an OLD row (pre-n_truncated_rounds) by dropping the field
+    # simulate an OLD row (pre new fields) by dropping them
     import json
     row = json.loads(path.read_text().splitlines()[0])
     del row["n_truncated_rounds"]
+    del row["n_nudge_rounds"]
     path.write_text(json.dumps(row) + "\n")
     rows = load_results(path)
     assert rows[0].n_truncated_rounds == 0
+    assert rows[0].n_nudge_rounds == 0

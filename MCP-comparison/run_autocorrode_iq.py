@@ -30,11 +30,12 @@ def _general_prompt_body(thy_path: Path) -> str:
         f"Discharge every `sorry` in {thy_path.resolve()} — replace the `sorry` keyword "
         f"with a complete proof block.  Write your proof using write_file. You should complete "
         f"the proof before replying DONE. If you cannot give the reason of why.\n\n"
-        f"After each edit, call get_diagnostics(wait_until_processed=true) to check for "
-        f"errors.  Fix red lines before moving on.  The theorem is proved ONLY when there "
-        f"are zero errors and get_sorry_positions reports count=0.\n\n"
-        f"Before replying DONE, call get_sorry_positions to confirm count=0 and "
-        f"get_diagnostics to confirm zero errors.\n\n"
+        f"After each edit, check the per-command results and file_summary that write_file "
+        f"returns (call get_diagnostics only when you need more detail).  Fix errors before "
+        f"moving on.\n\n"
+        f"The theorem is proved ONLY when there are zero errors and zero sorries.  When your "
+        f"latest edit's returned results already show this, reply DONE immediately — no "
+        f"further confirmation calls are required.\n\n"
         f"IMPORTANT: ALL non-ASCII mathematical symbols MUST be written using Isabelle's\n"
         f"\\<name> escape notation — NEVER use raw Unicode characters.  Common escapes:\n"
         f"  \\<forall> = ∀    \\<exists> = ∃    \\<Rightarrow> = ⇒    \\<and> = ∧\n"
@@ -43,31 +44,6 @@ def _general_prompt_body(thy_path: Path) -> str:
         f"  \\<union> = ∪    \\<inter> = ∩   \\<forall>x. = ∀x.\n"
         f"For any other symbol, use \\<name> where name is its ASCII identifier.\n"
         f"Unicode characters will be REJECTED by Isabelle/save — always use \\<...>.\n"
-        f"WARNING!!!! Everytime you generated a proof, recheck if it contains illegal UTF symbols!!!!\n\n"
-        f"Note: I/R is not installed, do not use it.\n"
-        f"Note: the MCP session is ALREADY authenticated for you — never call authenticate.\n\n"
-    )
-
-
-def _restrictive_prompt_body(thy_path: Path) -> str:
-    return (
-        f"You are an expert interactive theorem prover assistant for Isabelle/HOL. Your job is to construct a complete, correct Isar proof of the target theorem, using the tools provided by the Isabelle MCP server you are connected to."
-        f"Discharge every `sorry` in {thy_path.resolve()} — replace the `sorry` keyword "
-        f"with a complete proof block.  Write your proof using write_file. You should complete "
-        f"the proof before replying DONE. If you cannot give the reason of why.\n\n"
-        f"After each edit, call get_diagnostics(wait_until_processed=true) to check for "
-        f"errors.  Fix red lines before moving on.  The theorem is proved ONLY when there "
-        f"are zero errors and get_sorry_positions reports count=0.\n\n"
-        f"Before replying DONE, call get_sorry_positions to confirm count=0 and "
-        f"get_diagnostics to confirm zero errors.\n\n"
-        f"IMPORTANT: ALL non-ASCII mathematical symbols MUST be written using Isabelle's\n"
-        f"\\<name> escape notation — NEVER use raw Unicode characters.  Common escapes:\n"
-        f"  \\<forall> = ∀    \\<exists> = ∃    \\<Rightarrow> = ⇒    \\<and> = ∧\n"
-        f"  \\<or> = ∨       \\<not> = ¬    \\<equiv> = ≡    \\<noteq> = ≠\n"
-        f"  \\<le> = ≤       \\<ge> = ≥    \\<in> = ∈      \\<subseteq> = ⊆\n"
-        f"  \\<union> = ∪    \\<inter> = ∩   \\<forall>x. = ∀x.\n"
-        f"For any other symbol, use \\<name> where name is its ASCII identifier.\n"
-        f"Unicode characters will be REJECTED by Isabelle/save — always use \\<...>.\n\n"
         f"SOLVER RULE: NEVER use external solvers (smt, metis, cvc5, vampire, eprover, z3, "
         f"spass, verit, zipperposition) directly in your proof text.  You MUST call "
         f"explore(query=\"sledgehammer\") on the current goal first.  If sledgehammer cannot "
@@ -81,7 +57,6 @@ def _restrictive_prompt_body(thy_path: Path) -> str:
 
 _PROMPTS = {
     "general":    _general_prompt_body,
-    "restrictive": _restrictive_prompt_body,
 }
 
 # ── I/Q auth token + setup helpers ──────────────────────────────────────
@@ -323,6 +298,7 @@ async def run_attempt(problem, repeat: int, results_path: Path, prompt_name: str
                         result.error = payload
                         break
                     nudges_used += 1
+                    result.n_nudge_rounds += 1
                     text = (round_result.assistant_text or "").strip()
                     if text:
                         messages.append({"role": "assistant", "content": text})

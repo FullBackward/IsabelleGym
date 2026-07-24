@@ -23,16 +23,22 @@ from common.session_logger import SessionLogger
 # ── Four prompt variants (as 1st user-message bodies) ──────────────────
 
 def _theory_note(problem) -> str:
+    # Starting-state parity with the file-based MCPs (fairness): the harness
+    # pre-submits the target statement, so the agent starts from an OPEN proof
+    # exactly like I/Q / Isabelle-MCP agents start from a sorry-holed file —
+    # no rounds are spent transcribing the theorem.
     return (
         f"You are an expert interactive theorem prover assistant for Isabelle/HOL. Your job is to construct a complete, correct Isar proof of the target theorem, using the tools provided by the Isabelle MCP server you are connected to."
         f"The theory '{problem.name}' is already entered with imports "
-        f"{', '.join(problem.imports)}.  Do NOT call enter_theory again — just "
-        f"start proving.  If you ever need to restart, use the EXACT call:\n"
+        f"{', '.join(problem.imports)}, and the TARGET THEOREM STATEMENT has "
+        f"already been submitted — the proof is OPEN at its goal.  Do NOT "
+        f"re-declare the theorem; continue the proof from the open goal.  If "
+        f"you ever need to restart, use the EXACT call:\n"
         f"enter_theory(name='{problem.name}', "
-        f"imports=[{', '.join(repr(i) for i in problem.imports)}])\n\n"
-        f"!!! The exact theorem "
-        f"'{problem.statement}' "
-        f"must appear in the final source.!!!\n\n"
+        f"imports=[{', '.join(repr(i) for i in problem.imports)}])\n"
+        f"— the statement will be re-submitted for you automatically.\n\n"
+        f"Target theorem (already submitted, do not re-declare):\n"
+        f"{problem.statement}\n\n"
     )
 
 
@@ -47,10 +53,10 @@ CRITICAL RULES:
    the corrected version.
 
 2. DONE CRITERIA — The theorem is proved ONLY when verify_chunk reports ALL
-   of: success=True AND proof_open=False AND used_sorry=False.  Call source()
-   to confirm that the CORRECT target theorem (exactly as given) appears in
-   the final source — auxiliary lemmas do NOT count.  Reply DONE only after
-   verifying the target theorem is present.
+   of: success=True AND proof_open=False AND used_sorry=False for the TARGET
+   theorem (auxiliary lemmas do NOT count).  When your latest verify_chunk
+   already shows this, reply DONE immediately — no further confirmation calls
+   are required.
 
 3. NEVER use `sorry` or `oops` — they invalidate your proof.
 !!! WARNING You have to recheck every rules when you generated a proof !!!
@@ -76,10 +82,10 @@ CRITICAL RULES:
    verify_chunk again.
 
 3. DONE CRITERIA — The theorem is proved ONLY when verify_chunk reports ALL
-   of: success=True AND proof_open=False AND used_sorry=False.  Call source()
-   to confirm that the CORRECT target theorem (exactly as given) appears in
-   the final source — auxiliary lemmas do NOT count.  Reply DONE only after
-   verifying the target theorem is present.
+   of: success=True AND proof_open=False AND used_sorry=False for the TARGET
+   theorem (auxiliary lemmas do NOT count).  When your latest verify_chunk
+   already shows this, reply DONE immediately — no further confirmation calls
+   are required.
 
 4. NEVER use `sorry` or `oops` — they invalidate your proof.
 
@@ -119,10 +125,10 @@ CRITICAL RULES (read carefully — violating any of these will fail the proof)
    proof lines.  Never stack multiple unverified chunks.
 
 5. DONE CRITERIA — The theorem is proved ONLY when verify_chunk reports ALL
-   of: success=True AND proof_open=False AND used_sorry=False.  Call source()
-   to confirm that the CORRECT target theorem (exactly as given) appears in
-   the final source — auxiliary lemmas do NOT count.  Reply DONE only after
-   verifying the target theorem is present.
+   of: success=True AND proof_open=False AND used_sorry=False for the TARGET
+   theorem (auxiliary lemmas do NOT count).  When your latest verify_chunk
+   already shows this, reply DONE immediately — no further confirmation calls
+   are required.
 
 !!! WARNING You have to recheck every rules when you generated a proof !!!   
 
@@ -136,9 +142,9 @@ auto-rollback will leave you with nothing to inspect).
 
 A concrete illustration (using a TRIVIAL theorem — THIS IS NOT YOUR TASK):
 
-  [Layer 1 — structural outline]
+  [Layer 1 — structural outline; the statement is ALREADY submitted, so
+   start with the proof opening]
   verify_chunk("
-    theorem trivial: \\"(1::nat) + 1 = 2\\"
     proof -
       have step1: \\"Suc 0 + 1 = 2\\" by simp
   ")
@@ -158,13 +164,14 @@ A concrete illustration (using a TRIVIAL theorem — THIS IS NOT YOUR TASK):
   → success=True, proof_open=False, used_sorry=False → DONE!
 
 LAYER RULES:
-- Layer 1: theorem statement + proof - + initial reasoning (5-8 lines, no qed)
+- Layer 1: proof - + initial reasoning continuing the ALREADY-SUBMITTED
+  statement (5-8 lines, no qed)
 - Middle layers: derive intermediate facts (5-10 lines each)
 - Last layer: close with qed (2-3 lines)
 - After EVERY successful layer with proof_open=True, inspect subgoals via proof_state()
 - Use simp/linarith/argo/auto/presburger for routine steps
 - Call sledgehammer() ONLY when these methods fail on a subgoal
-- NEVER submit both the theorem declaration AND qed in the SAME verify_chunk
+- NEVER re-declare the already-submitted theorem statement
 - NEVER use `sorry` or `oops` — they invalidate your proof
 """
 
@@ -203,10 +210,10 @@ CRITICAL RULES:
    and decide how to close it (sledgehammer first, then manual reasoning).
 
 5. DONE CRITERIA — The theorem is proved ONLY when verify_chunk reports ALL
-   of: success=True AND proof_open=False AND used_sorry=False.  Call source()
-   to confirm that the CORRECT target theorem (exactly as given) appears in
-   the final source — auxiliary lemmas do NOT count.  Reply DONE only after
-   verifying the target theorem is present.
+   of: success=True AND proof_open=False AND used_sorry=False for the TARGET
+   theorem (auxiliary lemmas do NOT count).  When your latest verify_chunk
+   already shows this, reply DONE immediately — no further confirmation calls
+   are required.
 
 !!! WARNING You have to recheck every rules when you generated a proof !!!   
 
@@ -215,9 +222,9 @@ SEGMENTED PROOF WORKFLOW — HOW TO SUBMIT A PROOF
 
 Plan your proof in advance, then submit it in CLEAN SEGMENTS:
 
-  [Segment 1 — theorem header + reasoning up to the FIRST open subgoal]
+  [Segment 1 — proof opening + reasoning up to the FIRST open subgoal;
+   the statement is ALREADY submitted, so start with proof -]
   verify_chunk("
-    theorem foo: ...
     proof -
       have lemma1: ... by (simp add: algebra_simps)
       have lemma2: ... by linarith
@@ -259,6 +266,19 @@ _PROMPTS = {
 }
 
 # ═════════════════════════════════════════════════════════════════════════
+
+async def seed_statement(session, problem, cfg, logger) -> None:
+    """Pre-submit the target theorem statement so the agent starts from an
+    OPEN proof (fairness: file-based MCPs start with the statement in the
+    file). Harness work — not counted as a round or an agent tool call."""
+    out = await asyncio.wait_for(
+        call_tool(session, "verify_chunk", {"text": problem.statement}),
+        timeout=cfg.budgets.tool_timeout_seconds,
+    )
+    logger.log_text("SETUP seed_statement", out[:300])
+    if out.startswith("MCP tool error") or "success=False" in out:
+        raise RuntimeError(f"statement seeding failed: {out[:300]}")
+
 
 async def run_attempt(
     problem,
@@ -324,6 +344,7 @@ async def run_attempt(
             logger.log_text("SETUP enter_theory", out[:300])
             if out.startswith("MCP tool error") or "McpError" in out:
                 raise RuntimeError(f"enter_theory failed at setup: {out[:300]}")
+            await seed_statement(session, problem, cfg, logger)
 
             timer.start()
             round_start: float = 0.0
@@ -367,6 +388,7 @@ async def run_attempt(
                         result.error = payload
                         break
                     nudges_used += 1
+                    result.n_nudge_rounds += 1
                     text = (round_result.assistant_text or "").strip()
                     if text:
                         messages.append({"role": "assistant", "content": text})
@@ -399,6 +421,15 @@ async def run_attempt(
                         )
                     except asyncio.TimeoutError:
                         output = f"Tool call timed out after {cfg.budgets.tool_timeout_seconds}s"
+                    if name == "enter_theory" and not output.startswith("MCP tool error"):
+                        # Agent restart: re-seed the statement so the restarted
+                        # session keeps starting-state parity (see seed_statement).
+                        try:
+                            await seed_statement(session, problem, cfg, logger)
+                            output += ("\n[harness] target theorem statement re-submitted — "
+                                       "the proof is OPEN; continue from the goal, do not re-declare it.")
+                        except Exception as seed_err:  # noqa: BLE001
+                            output += f"\n[harness] statement re-seeding FAILED: {seed_err}"
                     tool_times.append(time_mod.time() - t0)
                     tool_outputs.append({"tool_call_id": tc.id, "role": "tool", "name": name, "content": output})
                     logger.log_tool_result(tc.id, name, output)

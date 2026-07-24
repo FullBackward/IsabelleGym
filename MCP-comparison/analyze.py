@@ -39,20 +39,25 @@ def summarize(runs_dir: Path) -> None:
     for r in rows:
         by_system[r.system].append(r)
 
-    print("| System | attempts | pass@1 | solved | mean rounds (solved) | mean wall_s (solved) | mean total tok (solved) | truncated rounds |")
-    print("|---|---|---|---|---|---|---|---|")
+    print("| System | attempts | pass@1 | solved | mean rounds (solved) | mean productive rounds (solved) | mean wall_s (solved) | mean total tok (solved) | truncated rounds | nudge rounds |")
+    print("|---|---|---|---|---|---|---|---|---|---|")
     for system in SYSTEMS:
         rs = by_system.get(system, [])
         attempts = len(rs)
         solved = [r for r in rs if r.arbiter_solved]
         pass_at_1 = len(solved) / attempts if attempts else 0.0
         mean_rounds = sum(r.rounds for r in solved) / len(solved) if solved else None
+        # productive rounds = rounds minus harness nudges (fairness: nudges
+        # measure model chattiness/infra, not the prover interface)
+        mean_prod = (sum(r.rounds - getattr(r, "n_nudge_rounds", 0) for r in solved) / len(solved)
+                     if solved else None)
         mean_wall = sum(r.wall_s for r in solved) / len(solved) if solved else None
         mean_tok = sum(r.total_tokens for r in solved) / len(solved) if solved else None
         truncated = sum(getattr(r, "n_truncated_rounds", 0) for r in rs)
+        nudges = sum(getattr(r, "n_nudge_rounds", 0) for r in rs)
         print(f"| {system} | {attempts} | {pass_at_1:.2f} | {len(solved)} | "
-              f"{_fmt(mean_rounds, '.1f')} | {_fmt(mean_wall, '.1f')} | "
-              f"{_fmt(mean_tok, '.0f')} | {truncated} |")
+              f"{_fmt(mean_rounds, '.1f')} | {_fmt(mean_prod, '.1f')} | {_fmt(mean_wall, '.1f')} | "
+              f"{_fmt(mean_tok, '.0f')} | {truncated} | {nudges} |")
 
     print("\nPer-problem pass@1:")
     problems = sorted({r.problem for r in rows})

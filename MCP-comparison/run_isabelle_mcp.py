@@ -90,9 +90,9 @@ async def run_attempt(problem: Problem, repeat: int, results_path: Path) -> None
             f"Use the verification tool to check each edit.  If a command fails, read its "
             f"error and fix that line.  If a tactic loops (timeout), replace it.\n\n"
             f"IMPORTANT: the theorem is proved ONLY when the verification tool reports success "
-            f"with zero errors.  Never use sorry/oops — they do not count as proved.  After "
-            f"writing your final proof, call the verification tool to confirm it passes.\n\n"
-            f"Reply DONE only after the verification tool reports success with no errors.\n\n"
+            f"with zero errors.  Never use sorry/oops — they do not count as proved.\n\n"
+            f"When your latest verification already reports success with no errors, reply DONE "
+            f"immediately — no further confirmation calls are required.\n\n"
             f"Theory: {problem.name}\nImports: {problem.imports}\n"
             f"Target theorem:\n{problem.statement}\n"
         )},
@@ -167,6 +167,7 @@ async def run_attempt(problem: Problem, repeat: int, results_path: Path) -> None
                         result.error = payload
                         break
                     nudges_used += 1
+                    result.n_nudge_rounds += 1
                     text = (round_result.assistant_text or "").strip()
                     if text:
                         messages.append({"role": "assistant", "content": text})

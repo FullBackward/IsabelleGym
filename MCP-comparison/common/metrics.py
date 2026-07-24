@@ -29,6 +29,8 @@ class AttemptResult:
     rounds: int = 0
     n_tool_calls: int = 0
     n_truncated_rounds: int = 0          # rounds cut at max_tokens (finish_reason=length)
+    n_nudge_rounds: int = 0              # no-tool-call rounds answered with a harness nudge
+                                         # (productive rounds = rounds - n_nudge_rounds)
 
     # Latency
     wall_s: float = 0.0                  # PRIMARY: full attempt wall-clock
