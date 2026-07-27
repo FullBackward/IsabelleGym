@@ -125,3 +125,111 @@ def test_load_results_accepts_rows_without_new_fields(tmp_path):
     rows = load_results(path)
     assert rows[0].n_truncated_rounds == 0
     assert rows[0].n_nudge_rounds == 0
+    # latency fields added later (setup/warmup asymmetry metrics) default to None
+    assert rows[0].setup_s is None
+    assert rows[0].first_tool_s is None
+
+
+# ------------------------- DONE gate: closing `end` must survive (run1/rep2)
+
+
+def test_theory_ends_with_end_accepts_clean_theory():
+    import run_autocorrode_iq as iq
+
+    assert iq.theory_ends_with_end("theory t\nbegin\n  lemma x by simp\n\nend\n")
+    assert iq.theory_ends_with_end("proof -\n  show True by simp\nqed\nend")
+
+
+def test_theory_ends_with_end_ignores_trailing_blank_lines():
+    import run_autocorrode_iq as iq
+
+    assert iq.theory_ends_with_end("qed\nend\n\n  \n")
+
+
+def test_theory_ends_with_end_rejects_missing_end():
+    import run_autocorrode_iq as iq
+
+    # run1/rep2: agent's line-replace over the buffer tail deleted `end`;
+    # the file ended at `qed` and the arbiter failed with "Malformed theory".
+    assert not iq.theory_ends_with_end("theory t\nbegin\n  lemma x by simp\nqed\n")
+    assert not iq.theory_ends_with_end("")
+    assert not iq.theory_ends_with_end("qed\n\n")
+
+
+# ------------------- sorry-check guard: count parsing + transient 0 (run1/rep0)
+
+
+def test_parse_sorry_count_reads_count():
+    import run_autocorrode_iq as iq
+
+    assert iq.parse_sorry_count('{"count":1,"positions":[{"line":9}]}') == 1
+    assert iq.parse_sorry_count('{"count":0,"positions":[]}') == 0
+
+
+def test_parse_sorry_count_minus_one_on_garbage():
+    import run_autocorrode_iq as iq
+
+    assert iq.parse_sorry_count("MCP tool error (get_sorry_positions): boom") == -1
+    assert iq.parse_sorry_count("[1,2]") == -1  # valid JSON, wrong shape
+    assert iq.parse_sorry_count('{"positions":[]}') == -1  # count absent
+
+
+# ------------------- DONE gate: document status parsing (2026-07-25 run reps)
+
+
+def test_parse_document_status_running_not_settled():
+    import run_autocorrode_iq as iq
+
+    # rep1's actual final get_document_info: 1 running, is_processed false.
+    out = ('{"node_name":"Draft.t","error_count":0,"status":'
+           '{"unprocessed":0,"running":1,"finished":242,"errors":0,"is_processed":false}}')
+    running, unprocessed, is_processed, errors = iq.parse_document_status(out)
+    assert (running, unprocessed, is_processed, errors) == (1, 0, False, 0)
+
+
+def test_parse_document_status_settled_with_errors():
+    import run_autocorrode_iq as iq
+
+    # rep4 pattern: settled but failed commands present.
+    out = ('{"node_name":"Draft.t","error_count":2,"status":'
+           '{"unprocessed":0,"running":0,"finished":89,"errors":2,"is_processed":true}}')
+    assert iq.parse_document_status(out) == (0, 0, True, 2)
+
+
+def test_parse_document_status_clean_and_garbage():
+    import run_autocorrode_iq as iq
+
+    out = ('{"node_name":"Draft.t","error_count":0,"status":'
+           '{"unprocessed":0,"running":0,"finished":50,"errors":0,"is_processed":true}}')
+    assert iq.parse_document_status(out) == (0, 0, True, 0)
+    assert iq.parse_document_status("MCP tool error: boom") is None
+    assert iq.parse_document_status("[1,2]") is None
+
+
+# ------------------- isabelle_mcp DONE gate: evaluation snapshot parsing
+
+
+def test_parse_evaluation_snapshot_clean():
+    import run_isabelle_mcp as im
+
+    settled, errors = im.parse_evaluation_snapshot(
+        "Evaluation finished.\n\nwork/t.thy: clean")
+    assert settled and not errors
+
+
+def test_parse_evaluation_snapshot_in_progress():
+    import run_isabelle_mcp as im
+
+    settled, _ = im.parse_evaluation_snapshot(
+        "work/t.thy: in progress (2 running so far)")
+    assert not settled
+    settled, _ = im.parse_evaluation_snapshot("work/t.thy:\n  running: 9\n  pending: 10")
+    assert not settled
+
+
+def test_parse_evaluation_snapshot_errors():
+    import run_isabelle_mcp as im
+
+    settled, errors = im.parse_evaluation_snapshot(
+        "work/t.thy:\n  errors: 3-5, 7\n  warnings: 1")
+    assert settled and errors

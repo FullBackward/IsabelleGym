@@ -33,9 +33,21 @@ def _general_prompt_body(thy_path: Path) -> str:
         f"After each edit, check the per-command results and file_summary that write_file "
         f"returns (call get_diagnostics only when you need more detail).  Fix errors before "
         f"moving on.\n\n"
+        f"SOLVER RULE (read first, it overrides your habits): NEVER use external solvers "
+        f"(smt, metis, cvc5, vampire, eprover, z3, spass, verit, zipperposition) directly "
+        f"in your proof text.  You MUST call explore(query=\"sledgehammer\") on the current "
+        f"goal first.  If sledgehammer times out, retry once on a smaller sub-goal — do "
+        f"NOT fall back to writing smt/metis calls yourself.  simp, auto, blast, force, "
+        f"linarith and presburger are always allowed; external ATPs are not.  If "
+        f"sledgehammer cannot find a proof, the current approach is probably wrong — "
+        f"change strategy instead of trying more solver calls manually.\n\n"
         f"The theorem is proved ONLY when there are zero errors and zero sorries.  When your "
         f"latest edit's returned results already show this, reply DONE immediately — no "
-        f"further confirmation calls are required.\n\n"
+        f"further confirmation calls are required.  DONE also requires the document to be "
+        f"fully processed: get_document_info must show is_processed: true with 0 running "
+        f"and 0 unprocessed commands.  Running or unprocessed lines are NEVER 'background "
+        f"processing' and errors are NEVER 'PIDE artifacts' — DONE is checked and rejected "
+        f"otherwise.\n\n"
         f"IMPORTANT: ALL non-ASCII mathematical symbols MUST be written using Isabelle's\n"
         f"\\<name> escape notation — NEVER use raw Unicode characters.  Common escapes:\n"
         f"  \\<forall> = ∀    \\<exists> = ∃    \\<Rightarrow> = ⇒    \\<and> = ∧\n"
@@ -44,11 +56,6 @@ def _general_prompt_body(thy_path: Path) -> str:
         f"  \\<union> = ∪    \\<inter> = ∩   \\<forall>x. = ∀x.\n"
         f"For any other symbol, use \\<name> where name is its ASCII identifier.\n"
         f"Unicode characters will be REJECTED by Isabelle/save — always use \\<...>.\n"
-        f"SOLVER RULE: NEVER use external solvers (smt, metis, cvc5, vampire, eprover, z3, "
-        f"spass, verit, zipperposition) directly in your proof text.  You MUST call "
-        f"explore(query=\"sledgehammer\") on the current goal first.  If sledgehammer cannot "
-        f"find a proof, the current approach is probably wrong — change strategy instead of "
-        f"trying more solver calls manually.\n"
         f"WARNING!!!! Everytime you generated a proof, recheck if it contains illegal UTF symbols!!!!\n\n"
         f"Note: I/R is not installed, do not use it.\n"
         f"Note: the MCP session is ALREADY authenticated for you — never call authenticate.\n\n"
@@ -125,6 +132,106 @@ async def read_iq_buffer(session, path: str, timeout: float) -> tuple[str, int]:
     data = json.loads(raw)
     content = data.get("content", "") if isinstance(data, dict) else str(data)
     return _LINE_PREFIX_RE.sub("", content), len(content.splitlines())
+
+
+def theory_ends_with_end(text: str) -> bool:
+    """True if the last non-empty line of the theory is the closing `end` keyword.
+
+    I/Q's file_summary counts only per-command errors, so a buffer missing its
+    trailing `end` still reports 0 errors — run1/rep2: an agent's line-replace
+    spanning the buffer tail deleted `end`, the agent claimed DONE, and the
+    arbiter's isabelle build failed with "Malformed theory" at EOF.
+    """
+    for line in reversed(text.splitlines()):
+        stripped = line.strip()
+        if stripped:
+            return stripped == "end"
+    return False
+
+
+# Max times an attempt is sent back when the DONE gate rejects its claim
+# (missing `end`, commands still running, errors or sorries present). After
+# that the DONE is accepted and the arbiter judges the file as-is.
+DONE_NUDGE_LIMIT = 2
+
+
+def parse_sorry_count(output: str) -> int:
+    """Parse a get_sorry_positions reply; -1 when the count can't be read."""
+    try:
+        return int(json.loads(output).get("count", -1))
+    except (ValueError, TypeError, AttributeError, json.JSONDecodeError):
+        return -1
+
+
+def parse_document_status(output: str) -> tuple[int, int, bool, int] | None:
+    """Parse a get_document_info reply into (running, unprocessed, is_processed,
+    error_count); None when the reply can't be read."""
+    try:
+        info = json.loads(output)
+        status = info.get("status", {})
+        running = int(status.get("running", 0) or 0)
+        unprocessed = int(status.get("unprocessed", 0) or 0)
+        is_processed = bool(status.get("is_processed", True))
+        error_count = int(info.get("error_count", status.get("errors", 0)) or 0)
+        return running, unprocessed, is_processed, error_count
+    except (ValueError, TypeError, AttributeError, json.JSONDecodeError):
+        return None
+
+
+# get_sorry_positions reads the PROCESSED PIDE document, which lags open_file:
+# right after open it legitimately reports 0 sorries even for a fresh template
+# (run1/rep0+rep1 aborted ~20ms after open; the count flipped to 1 within
+# ~450ms once the document was processed). Poll for this long before
+# concluding the buffer really is stale.
+SORRY_CHECK_TIMEOUT_S = 30.0
+SORRY_CHECK_POLL_S = 1.0
+
+# DONE gate: how long to wait for PIDE to finish processing before rejecting
+# DONE over still-running/unprocessed commands (usually transient lag of a
+# few seconds after the last edit).
+DONE_SETTLE_TIMEOUT_S = 60.0
+DONE_SETTLE_POLL_S = 3.0
+
+
+async def check_done_readiness(session, path: str, timeout: float) -> tuple[bool, str]:
+    """Objective completion check before accepting an agent's DONE.
+
+    Agents have claimed DONE with commands still running ("that's just
+    background processing") and even with errors present ("PIDE artifacts") —
+    2026-07-25 run reps 1/2/4. Returns (ready, reason); (True, "") when the
+    document state can't be read, in which case the arbiter judges instead.
+    """
+    deadline = time_mod.monotonic() + DONE_SETTLE_TIMEOUT_S
+    while True:
+        out = await setup_call(session, "get_document_info", {"path": path, "include_errors": True}, timeout)
+        if tool_output_failed(out):
+            return True, ""  # unverifiable — let the arbiter judge
+        parsed = parse_document_status(out)
+        if parsed is None:
+            return True, ""
+        running, unprocessed, is_processed, error_count = parsed
+        if running == 0 and unprocessed == 0 and is_processed:
+            break
+        if time_mod.monotonic() >= deadline:
+            return False, (f"{running} command(s) still running and {unprocessed} "
+                           f"unprocessed after {DONE_SETTLE_TIMEOUT_S:.0f}s — running or "
+                           f"unprocessed lines are NEVER 'background processing'")
+        await asyncio.sleep(DONE_SETTLE_POLL_S)
+    if error_count > 0:
+        return False, (f"{error_count} error(s) in the document — errors are NEVER "
+                       f"'PIDE artifacts'; fix them")
+    sorries = parse_sorry_count(
+        await setup_call(session, "get_sorry_positions", {"path": path}, timeout))
+    if sorries > 0:
+        return False, f"{sorries} sorry/sorries remaining"
+    try:
+        buffer_text, _ = await read_iq_buffer(session, path, timeout)
+    except RuntimeError:
+        buffer_text = ""
+    if buffer_text and not theory_ends_with_end(buffer_text):
+        return False, ("the file does not end with the closing `end` keyword — one of "
+                       "your edits deleted it; append `end` after the final `qed`")
+    return True, ""
 
 
 async def reset_iq_buffer(session, path: str, fresh_text: str, logger, timeout: float) -> None:
@@ -207,6 +314,7 @@ async def run_attempt(problem, repeat: int, results_path: Path, prompt_name: str
         model_temperature=cfg.model.temperature,
     )
     timer = Timer()
+    attempt_t0 = time_mod.time()  # setup_s reference: attempt start → timer start
     tokens = TokenAggregator()
     tool_times: list[float] = []
     round_latencies: list[float] = []
@@ -241,23 +349,36 @@ async def run_attempt(problem, repeat: int, results_path: Path, prompt_name: str
             # previous attempt's finished proof). See reset_iq_buffer.
             await reset_iq_buffer(session, str(thy_path.resolve()), problem.full_text, logger, setup_timeout)
             # Verify the buffer REALLY holds the fresh problem: it must contain
-            # the original `sorry`. count=0 before the agent has done anything
-            # means the reset didn't take (stale buffer from a previous attempt).
-            out = await setup_call(session, "get_sorry_positions", {"path": str(thy_path.resolve())}, setup_timeout)
-            logger.log_text("SETUP get_sorry_positions", out)
-            try:
-                sorry_count = int(json.loads(out).get("count", -1))
-            except (ValueError, TypeError, json.JSONDecodeError):
-                sorry_count = -1
+            # the original `sorry`. count=0 immediately after open_file is
+            # usually just the document not being processed yet (see
+            # SORRY_CHECK_TIMEOUT_S) — poll until the sorry appears; only a
+            # PERSISTENT 0 means the reset didn't take (stale buffer from a
+            # previous attempt). Each call's timeout is capped by the remaining
+            # budget, so the whole check is bounded by SORRY_CHECK_TIMEOUT_S
+            # even when a call hangs (setup_timeout is 300s by default).
+            sorry_count = -1
+            sorry_deadline = time_mod.monotonic() + SORRY_CHECK_TIMEOUT_S
+            while True:
+                remaining = sorry_deadline - time_mod.monotonic()
+                if remaining <= 0:
+                    break
+                out = await setup_call(session, "get_sorry_positions", {"path": str(thy_path.resolve())}, min(setup_timeout, remaining))
+                logger.log_text("SETUP get_sorry_positions", out)
+                sorry_count = parse_sorry_count(out)
+                if sorry_count != 0:
+                    break
+                await asyncio.sleep(SORRY_CHECK_POLL_S)
             if sorry_count == 0:
                 raise RuntimeError(
-                    "I/Q buffer reset verification failed: work file reports 0 sorries "
-                    "BEFORE the attempt started — IQ's buffer still holds a previous "
-                    "attempt's proof. Aborting to avoid a phantom solve.")
+                    f"I/Q buffer reset verification failed: work file still reports 0 "
+                    f"sorries {SORRY_CHECK_TIMEOUT_S:.0f}s after open — IQ's buffer holds "
+                    f"a previous attempt's proof. Aborting to avoid a phantom solve.")
 
+            result.setup_s = round(time_mod.time() - attempt_t0, 2)
             timer.start()
             round_start: float = 0.0
             nudges_used = 0
+            done_nudges_used = 0
             for _round in range(cfg.budgets.max_rounds):
                 # Enforce per-problem wall cap
                 elapsed = timer.elapsed()
@@ -292,6 +413,27 @@ async def run_attempt(problem, repeat: int, results_path: Path, prompt_name: str
                 if not round_result.tool_calls:
                     action, payload = no_tool_call_action(round_result, nudges_used)
                     if action == "done":
+                        # Objective completion check before accepting DONE —
+                        # agents have claimed DONE with commands still running
+                        # ("just background processing") and with errors present
+                        # ("PIDE artifacts"). See check_done_readiness.
+                        if done_nudges_used < DONE_NUDGE_LIMIT:
+                            ready, reason = await check_done_readiness(
+                                session, str(thy_path.resolve()), setup_timeout)
+                            if not ready:
+                                done_nudges_used += 1
+                                result.n_nudge_rounds += 1
+                                payload = (f"[DONE not accepted: {reason}. Fix this and "
+                                           f"re-check with get_document_info (it must show "
+                                           f"is_processed: true, 0 running, 0 unprocessed, "
+                                           f"0 errors) and get_sorry_positions (count 0), "
+                                           f"then reply DONE.]")
+                                text = (round_result.assistant_text or "").strip()
+                                if text:
+                                    messages.append({"role": "assistant", "content": text})
+                                messages.append({"role": "user", "content": payload})
+                                logger.log_message({"role": "user", "content": payload})
+                                continue
                         result.agent_claimed_solved = True
                         break
                     if action == "stop":
@@ -378,6 +520,7 @@ async def run_attempt(problem, repeat: int, results_path: Path, prompt_name: str
             result.output_tokens = tokens.output_tokens
             result.cached_tokens = tokens.cached_tokens
             result.prover_s = round(sum(tool_times), 2) if tool_times else None
+            result.first_tool_s = round(tool_times[0], 2) if tool_times else None
             result.model_s = round(result.wall_s - (result.prover_s or 0), 2) if result.prover_s else None
             result.round_latencies = round_latencies
 
@@ -417,6 +560,7 @@ async def run_attempt(problem, repeat: int, results_path: Path, prompt_name: str
         result.output_tokens = tokens.output_tokens
         result.cached_tokens = tokens.cached_tokens
         result.prover_s = round(sum(tool_times), 2) if tool_times else None
+        result.first_tool_s = round(tool_times[0], 2) if tool_times else None
         result.round_latencies = round_latencies
         # Try to preserve the final theory file
         try:

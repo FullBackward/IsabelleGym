@@ -98,7 +98,9 @@ async def verify_chunk(text: str, ctx: Context, timeout: float = Config.CHUNK_TI
 
 @mcp.tool()
 async def proof_state(ctx: Context) -> str:
-    """Current goal / open subgoals."""
+    """Current goal / open subgoals. The right call after verify_chunk reports
+    proof_open=True — inspect the remaining goal before deciding how to close it
+    (or before sledgehammer)."""
     c = await pool.client()
     cur = pool.require_current(ctx)
     return json.dumps(await c.get_proof_state(cur.session_id, lease_id=cur.lease_id), default=str)
@@ -136,7 +138,13 @@ async def diagnostic(command: str, ctx: Context) -> str:
 
 @mcp.tool()
 async def sledgehammer(ctx: Context, timeout_s: int = 30) -> str:
-    """Run Isabelle's sledgehammer on the current goal; returns proof-method suggestions."""
+    """Run Isabelle's sledgehammer on the current open goal; returns proof-method
+    suggestions.
+
+    Requires an OPEN goal (call after verify_chunk reports proof_open=True).
+    Paste the returned suggestion verbatim into your next verify_chunk — do not
+    paraphrase it. timeout_s (default 30) bounds the search; on timeout retry
+    once on a smaller sub-goal rather than inventing your own solver call."""
     c = await pool.client()
     cur = pool.require_current(ctx)
     return json.dumps(await c.sledgehammer(cur.session_id, timeout_s=timeout_s, lease_id=cur.lease_id), default=str)
@@ -160,7 +168,12 @@ async def restore(checkpoint_id: int, ctx: Context) -> str:
 
 @mcp.tool()
 async def rollback(ctx: Context) -> str:
-    """Roll back the most recent command/edit in the current theory."""
+    """Roll back the most recent command/edit in the current theory.
+
+    NOTE: a FAILED verify_chunk already rolls its failed commands back
+    automatically — do NOT call rollback after a failure (you would undo a
+    good command). rollback is only for retracting a SUCCESSFUL chunk you no
+    longer want."""
     c = await pool.client()
     cur = pool.require_current(ctx)
     try:

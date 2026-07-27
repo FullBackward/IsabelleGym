@@ -22,6 +22,10 @@ def _fmt(value: float | None, spec: str) -> str:
     return format(value, spec) if value is not None else "-"
 
 
+def _mean(values: list[float]) -> float | None:
+    return sum(values) / len(values) if values else None
+
+
 def summarize(runs_dir: Path) -> None:
     rows = []
     for system in SYSTEMS:
@@ -39,8 +43,8 @@ def summarize(runs_dir: Path) -> None:
     for r in rows:
         by_system[r.system].append(r)
 
-    print("| System | attempts | pass@1 | solved | mean rounds (solved) | mean productive rounds (solved) | mean wall_s (solved) | mean total tok (solved) | truncated rounds | nudge rounds |")
-    print("|---|---|---|---|---|---|---|---|---|---|")
+    print("| System | attempts | pass@1 | solved | mean rounds (solved) | mean productive rounds (solved) | mean wall_s (solved) | mean setup_s | mean first_tool_s | mean total tok (solved) | truncated rounds | nudge rounds |")
+    print("|---|---|---|---|---|---|---|---|---|---|---|---|")
     for system in SYSTEMS:
         rs = by_system.get(system, [])
         attempts = len(rs)
@@ -52,12 +56,32 @@ def summarize(runs_dir: Path) -> None:
         mean_prod = (sum(r.rounds - getattr(r, "n_nudge_rounds", 0) for r in solved) / len(solved)
                      if solved else None)
         mean_wall = sum(r.wall_s for r in solved) / len(solved) if solved else None
+        # setup_s / first_tool_s expose the warm-vs-cold protocol asymmetry:
+        # I/Q's persistent jEdit amortises warmth across attempts while
+        # IsabelleGym starts a fresh session per attempt.
+        mean_setup = _mean([r.setup_s for r in rs if getattr(r, "setup_s", None) is not None])
+        mean_first = _mean([r.first_tool_s for r in rs if getattr(r, "first_tool_s", None) is not None])
         mean_tok = sum(r.total_tokens for r in solved) / len(solved) if solved else None
         truncated = sum(getattr(r, "n_truncated_rounds", 0) for r in rs)
         nudges = sum(getattr(r, "n_nudge_rounds", 0) for r in rs)
         print(f"| {system} | {attempts} | {pass_at_1:.2f} | {len(solved)} | "
               f"{_fmt(mean_rounds, '.1f')} | {_fmt(mean_prod, '.1f')} | {_fmt(mean_wall, '.1f')} | "
+              f"{_fmt(mean_setup, '.1f')} | {_fmt(mean_first, '.1f')} | "
               f"{_fmt(mean_tok, '.0f')} | {truncated} | {nudges} |")
+
+    # Repeat-index control: warmth drift (e.g. I/Q's persistent jEdit getting
+    # faster across repeats) shows up here as a rep-index trend.
+    repeats = sorted({r.repeat for r in rows})
+    print("\nMean wall_s (solved) by repeat index:")
+    print("| System | " + " | ".join(f"rep{i}" for i in repeats) + " |")
+    print("|---|" + "---|" * len(repeats))
+    for system in SYSTEMS:
+        rs = by_system.get(system, [])
+        cells = []
+        for i in repeats:
+            walls = [r.wall_s for r in rs if r.repeat == i and r.arbiter_solved]
+            cells.append(_fmt(_mean(walls), ".1f"))
+        print(f"| {system} | " + " | ".join(cells) + " |")
 
     print("\nPer-problem pass@1:")
     problems = sorted({r.problem for r in rows})

@@ -12,10 +12,10 @@ model:
   max_tokens: 32768
 
 budgets:
-  max_rounds: 50
-  problem_wall_cap_seconds: 1200     # 20 min per problem
+  max_rounds: 100
+  problem_wall_cap_seconds: 2400     # 20 min per problem
   tool_timeout_seconds: 300         # 5 min per MCP tool call
-  repeats: 2
+  repeats: 5
 
 # --- Universal system prompt ---
 # Override this to change the system prompt, or set to "" to disable.
@@ -31,7 +31,7 @@ mcp_servers:
   isabellegym:
     command: [python, -m, mcp_server.app]
     env:
-      PYTHONPATH: /Users/winstonren/GitHub/IsabelleGym
+      PYTHONPATH: C:/Users/winst/GitHub/IsabelleGym
       ISABELLE_MCP_GYM_URL: http://localhost:8000
 
   isabelle_mcp:
@@ -41,16 +41,18 @@ mcp_servers:
 
   autocorrode_iq:
     # Stdio bridge to the I/Q TCP server inside jEdit.
-    command: [python, /Users/winstonren/GitHub/AutoCorrode/iq/iq_bridge.py]
+    command: [python, C:/Users/winst/GitHub/AutoCorrode/iq/iq_bridge.py]
     env:
       IQ_MCP_BRIDGE_PORT: "8765"
+      # MCP stdio is UTF-8; stop Python from inheriting the OS locale (GBK).
+      PYTHONUTF8: "1"
 
 # Path translation for Isabelle-MCP container mode.
 # The harness writes .thy files to host_work_dir on the host and translates
 # paths to container_work_dir before calling MCP tools.
 isabelle_mcp_container:
   container_name: isabelle-eval
-  host_work_dir: /Users/winstonren/GitHub/Isabelle-MCP/container/work
+  host_work_dir: C:/Users/winst/GitHub/Isabelle-MCP/container/work
   container_work_dir: /work
 
 arbiter:

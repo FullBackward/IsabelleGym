@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import re
 import sys
 import time as time_mod
 from pathlib import Path
@@ -27,6 +28,7 @@ def _theory_note(problem) -> str:
     # pre-submits the target statement, so the agent starts from an OPEN proof
     # exactly like I/Q / Isabelle-MCP agents start from a sorry-holed file —
     # no rounds are spent transcribing the theorem.
+    field = derive_session(problem.imports)
     return (
         f"You are an expert interactive theorem prover assistant for Isabelle/HOL. Your job is to construct a complete, correct Isar proof of the target theorem, using the tools provided by the Isabelle MCP server you are connected to."
         f"The theory '{problem.name}' is already entered with imports "
@@ -35,7 +37,10 @@ def _theory_note(problem) -> str:
         f"re-declare the theorem; continue the proof from the open goal.  If "
         f"you ever need to restart, use the EXACT call:\n"
         f"enter_theory(name='{problem.name}', "
-        f"imports=[{', '.join(repr(i) for i in problem.imports)}])\n"
+        f"imports=[{', '.join(repr(i) for i in problem.imports)}], "
+        f"field='{field}')\n"
+        f"(field names the prebuilt parent session — omitting it makes the "
+        f"session re-process imports from source or fail to find them.)\n"
         f"— the statement will be re-submitted for you automatically.\n\n"
         f"Target theorem (already submitted, do not re-declare):\n"
         f"{problem.statement}\n\n"
@@ -43,27 +48,6 @@ def _theory_note(problem) -> str:
 
 
 def _general_prompt_body() -> str:
-    return """\
-CRITICAL RULES:
-----------
-1. AUTO-ROLLBACK — When verify_chunk reports success=False (any command
-   failed), those failed commands are AUTOMATICALLY rolled back.  The source
-   stays at the last successful state.  Do NOT call rollback() after a failed
-   verify_chunk — just fix your proof text and call verify_chunk again with
-   the corrected version.
-
-2. DONE CRITERIA — The theorem is proved ONLY when verify_chunk reports ALL
-   of: success=True AND proof_open=False AND used_sorry=False for the TARGET
-   theorem (auxiliary lemmas do NOT count).  When your latest verify_chunk
-   already shows this, reply DONE immediately — no further confirmation calls
-   are required.
-
-3. NEVER use `sorry` or `oops` — they invalidate your proof.
-!!! WARNING You have to recheck every rules when you generated a proof !!!
-"""
-
-
-def _restrictive_prompt_body() -> str:
     return """\
 CRITICAL RULES:
 ----------
@@ -77,9 +61,10 @@ CRITICAL RULES:
         strategy.
 
 2. AUTO-ROLLBACK — When verify_chunk reports success=False (any command
-   failed), those failed commands are AUTOMATICALLY rolled back.  Do NOT call
-   rollback() after a failed verify_chunk — just fix your proof text and call
-   verify_chunk again.
+   failed), those failed commands are AUTOMATICALLY rolled back.  The source
+   stays at the last successful state.  Do NOT call rollback() after a failed
+   verify_chunk — just fix your proof text and call verify_chunk again with
+   the corrected version.
 
 3. DONE CRITERIA — The theorem is proved ONLY when verify_chunk reports ALL
    of: success=True AND proof_open=False AND used_sorry=False for the TARGET
@@ -88,7 +73,6 @@ CRITICAL RULES:
    are required.
 
 4. NEVER use `sorry` or `oops` — they invalidate your proof.
-
 !!! WARNING You have to recheck every rules when you generated a proof !!!
 """
 
@@ -99,10 +83,11 @@ CRITICAL RULES (read carefully — violating any of these will fail the proof)
 ----------
 
 1. INCREMENTAL SUBMISSION — NEVER submit the entire proof at once.  Start by
-   submitting only the structural skeleton up to the first `sorry` or open
-   subgoal.  Inspect the open subgoals (verify_chunk shows them when
-   proof_open=True), understand what needs to be proved, THEN decide how to
-   close each subgoal one at a time.
+   submitting only the structural skeleton up to the first open subgoal — do
+   NOT write `sorry` to get there; simply stop before the closing method and
+   leave the goal open.  Inspect the open subgoals (verify_chunk shows them
+   when proof_open=True), understand what needs to be proved, THEN decide how
+   to close each subgoal one at a time.
 
 2. SOLVER RULE — NEVER call external solvers (smt, metis, cvc5, vampire,
    z3, verit, e, spass, etc.) directly under any circumstances.  Even if you
@@ -260,7 +245,6 @@ SEGMENT RULES:
 
 _PROMPTS = {
     "general":    _general_prompt_body,
-    "restrictive": _restrictive_prompt_body,
     "stepwise":   _stepwise_prompt_body,
     "segment":    _segment_prompt_body,
 }
@@ -278,6 +262,70 @@ async def seed_statement(session, problem, cfg, logger) -> None:
     logger.log_text("SETUP seed_statement", out[:300])
     if out.startswith("MCP tool error") or "success=False" in out:
         raise RuntimeError(f"statement seeding failed: {out[:300]}")
+
+
+async def warmup_session(session, cfg, logger) -> None:
+    """Warm the fresh session's ML/ATP state INSIDE setup, before the timer
+    starts. Fairness: I/Q's persistent jEdit is always warm; without this, the
+    first verify_chunk/sledgehammer of every gym attempt pays cold-start costs
+    inside the timed region (old run1/rep3 had five 180-200s sledgehammer
+    rounds). Best-effort: never counted as a round or tool call, never fatal.
+
+    Step 1 runs before seeding (a top-level lemma is only valid there); step 2
+    must run AFTER seed_statement so sledgehammer has the real open goal."""
+    try:
+        out = await asyncio.wait_for(
+            call_tool(session, "verify_chunk", {"text": "lemma harness_warmup: True by simp"}),
+            timeout=cfg.budgets.tool_timeout_seconds,
+        )
+        logger.log_text("SETUP warmup_chunk", out[:300])
+    except Exception as e:  # warm-up is best-effort
+        logger.log_text("SETUP warmup_chunk", f"warm-up failed (ignored): {e}")
+
+
+async def warmup_sledgehammer(session, cfg, logger) -> None:
+    """Second warm-up step: one short sledgehammer on the seeded goal to spin
+    up ATP processes. Best-effort, result discarded (the agent never sees it)."""
+    try:
+        out = await asyncio.wait_for(
+            call_tool(session, "sledgehammer", {"timeout_s": 15}),
+            timeout=cfg.budgets.tool_timeout_seconds,
+        )
+        logger.log_text("SETUP warmup_sledgehammer", out[:300])
+    except Exception as e:  # warm-up is best-effort
+        logger.log_text("SETUP warmup_sledgehammer", f"warm-up failed (ignored): {e}")
+
+
+_DONE_SORRY_RE = re.compile(r"\b(sorry|oops)\b")
+
+# Max times an attempt is sent back when the DONE gate rejects its claim
+# (parity with the I/Q runner). After that the DONE is accepted and the
+# arbiter judges the file as-is.
+DONE_NUDGE_LIMIT = 2
+
+
+async def check_done_readiness(session) -> tuple[bool, str]:
+    """Objective DONE check (parity with the I/Q runner's DONE gate): the proof
+    must actually be finished and the source sorry-free. (True, "") when the
+    state can't be read — the arbiter judges instead."""
+    state_raw = await call_tool(session, "proof_state", {})
+    if state_raw.startswith("MCP tool error"):
+        return True, ""
+    try:
+        state = json.loads(state_raw)
+    except (TypeError, json.JSONDecodeError):
+        return True, ""
+    if isinstance(state, dict) and state.get("proof_finished") is not True:
+        return False, "proof_state reports proof_finished=false — the goal is still open"
+    src_raw = await call_tool(session, "source", {})
+    src = src_raw
+    try:
+        src = json.loads(src_raw).get("source", src_raw)
+    except (TypeError, json.JSONDecodeError, AttributeError):
+        pass
+    if isinstance(src, str) and _DONE_SORRY_RE.search(src):
+        return False, "the source still contains sorry/oops"
+    return True, ""
 
 
 async def run_attempt(
@@ -307,6 +355,7 @@ async def run_attempt(
         model_temperature=cfg.model.temperature,
     )
     timer = Timer()
+    attempt_t0 = time_mod.time()  # setup_s reference: attempt start → timer start
     tokens = TokenAggregator()
     tool_times: list[float] = []
     round_latencies: list[float] = []
@@ -344,11 +393,15 @@ async def run_attempt(
             logger.log_text("SETUP enter_theory", out[:300])
             if out.startswith("MCP tool error") or "McpError" in out:
                 raise RuntimeError(f"enter_theory failed at setup: {out[:300]}")
+            await warmup_session(session, cfg, logger)   # before seed: top-level lemma
             await seed_statement(session, problem, cfg, logger)
+            await warmup_sledgehammer(session, cfg, logger)  # after seed: real goal
 
+            result.setup_s = round(time_mod.time() - attempt_t0, 2)
             timer.start()
             round_start: float = 0.0
             nudges_used = 0
+            done_nudges_used = 0
             for _round in range(cfg.budgets.max_rounds):
                 elapsed = timer.elapsed()
                 if elapsed >= cfg.budgets.problem_wall_cap_seconds:
@@ -382,6 +435,23 @@ async def run_attempt(
                     # a truncated or text-only round (audit §2, H2).
                     action, payload = no_tool_call_action(round_result, nudges_used)
                     if action == "done":
+                        # Objective DONE check (parity with the I/Q runner's DONE
+                        # gate): a false DONE costs a nudge round, not the attempt.
+                        if done_nudges_used < DONE_NUDGE_LIMIT:
+                            ready, reason = await check_done_readiness(session)
+                            if not ready:
+                                done_nudges_used += 1
+                                result.n_nudge_rounds += 1
+                                payload = (f"[DONE not accepted: {reason}. Fix this and "
+                                           f"re-check (proof_state must show "
+                                           f"proof_finished=true and the source must be "
+                                           f"sorry-free), then reply DONE.]")
+                                text = (round_result.assistant_text or "").strip()
+                                if text:
+                                    messages.append({"role": "assistant", "content": text})
+                                messages.append({"role": "user", "content": payload})
+                                logger.log_message({"role": "user", "content": payload})
+                                continue
                         result.agent_claimed_solved = True
                         break
                     if action == "stop":
@@ -446,6 +516,7 @@ async def run_attempt(
             result.output_tokens = tokens.output_tokens
             result.cached_tokens = tokens.cached_tokens
             result.prover_s = round(sum(tool_times), 2) if tool_times else None
+            result.first_tool_s = round(tool_times[0], 2) if tool_times else None
             result.round_latencies = round_latencies
 
             source_json = await call_tool(session, "source", {})
@@ -475,6 +546,7 @@ async def run_attempt(
         result.output_tokens = tokens.output_tokens
         result.cached_tokens = tokens.cached_tokens
         result.prover_s = round(sum(tool_times), 2) if tool_times else None
+        result.first_tool_s = round(tool_times[0], 2) if tool_times else None
         result.round_latencies = round_latencies
         # Ensure the server session is released even on error
         try:

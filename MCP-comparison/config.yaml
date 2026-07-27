@@ -15,10 +15,10 @@ model:
   max_tokens: 32768
 
 budgets:
-  max_rounds: 50
-  problem_wall_cap_seconds: 1200     # 20 min per problem
+  max_rounds: 100
+  problem_wall_cap_seconds: 2400     # 20 min per problem
   tool_timeout_seconds: 300         # 5 min per MCP tool call
-  repeats: 2
+  repeats: 5
 
 paths:
   problems_dir: MCP-comparison/problems
@@ -54,6 +54,8 @@ mcp_servers:
     command: [python, /path/to/AutoCorrode/iq/iq_bridge.py]
     env:
       IQ_MCP_BRIDGE_PORT: "8765"
+      # MCP stdio is UTF-8; stop Python from inheriting the OS locale (GBK).
+      PYTHONUTF8: "1"
 
 # Container-mode path translation for Isabelle-MCP.
 # Set container_name if the MCP server runs inside Docker; leave null for native mode.

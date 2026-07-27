@@ -4,7 +4,7 @@ begin
 
 theorem mathd_algebra_276:
   fixes a b :: int
-  assumes "∀x :: real. 10 * x^2 - x - 24 = (a * x - 8) * (b * x + 3)"
+  assumes "\<forall> x :: real. 10 * x^2 - x - 24 = (a * x - 8) * (b * x + 3)"
   shows "a * b + b = 12"
   sorry
 

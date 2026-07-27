@@ -34,6 +34,9 @@ class AttemptResult:
 
     # Latency
     wall_s: float = 0.0                  # PRIMARY: full attempt wall-clock
+    setup_s: float | None = None         # attempt start → timer start (excluded from wall_s;
+                                         # makes the warm/cold setup asymmetry visible)
+    first_tool_s: float | None = None    # duration of the first MCP tool call (warmup proxy)
     prover_s: float | None = None        # SECONDARY: summed MCP tool/eval time
     round_latencies: list[float] = field(default_factory=list)
     model_s: float | None = None         # DERIVED/optional: ≈ wall_s - prover_s
