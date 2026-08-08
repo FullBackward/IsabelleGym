@@ -156,3 +156,35 @@ def test_mcp_pool_falls_back_to_stable_sentinel():
     k1 = pool.conn_key(NoSessionCtx())
     k2 = pool.conn_key(NoSessionCtx())
     assert k1 is k2 is pool._default_key
+
+
+# ------------------------------------ pending_qed: MCP chunk rendering (rep3 fix)
+
+
+def test_render_chunk_pending_qed_note():
+    from mcp_server.app import _render_chunk
+
+    report = {
+        "success": True, "proof_open": True, "pending_qed": True,
+        "used_sorry": False, "timed_out": False, "stuck_line": None,
+        "execution_time": 0.5,
+        "commands": [{"line": 1, "kind": "show", "status": "ok", "messages": []}],
+    }
+    out = _render_chunk(report, detail=False)
+    assert "pending_qed=True" in out
+    assert "bare `qed`" in out
+    assert "proof is still OPEN" not in out  # pending_qed note takes precedence
+
+
+def test_render_chunk_open_without_pending_qed_keeps_open_note():
+    from mcp_server.app import _render_chunk
+
+    report = {
+        "success": True, "proof_open": True, "pending_qed": False,
+        "used_sorry": False, "timed_out": False, "stuck_line": None,
+        "execution_time": 0.5,
+        "commands": [{"line": 1, "kind": "have", "status": "ok", "messages": []}],
+    }
+    out = _render_chunk(report, detail=False)
+    assert "proof is still OPEN" in out
+    assert "bare `qed`" not in out

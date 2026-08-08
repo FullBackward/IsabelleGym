@@ -1,6 +1,7 @@
 """MCP stdio client helpers used by all three runner scripts."""
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 
@@ -19,8 +20,47 @@ async def mcp_session(cfg: MCPServerConfig) -> AsyncIterator[ClientSession]:
     )
     async with stdio_client(params) as (read, write):
         async with ClientSession(read, write) as session:
-            await session.initialize()
+            init_result = await session.initialize()
+            # Vendor guidance shipped via the MCP initialize handshake (e.g.
+            # Isabelle-MCP's instructions.py): attach it so runners can forward
+            # it to the model as the "guided" prompt variant.
+            session.vendor_instructions = getattr(init_result, "instructions", None)
             yield session
+
+
+@asynccontextmanager
+async def mcp_session_startup_retry(
+    cfg: MCPServerConfig,
+    retries: int = 2,
+    delay_s: float = 3.0,
+    on_retry: Any = None,
+) -> AsyncIterator[ClientSession]:
+    """mcp_session with startup-only retries.
+
+    A fresh stdio MCP server occasionally fails to come up (e.g. right after
+    the previous attempt's teardown); the nested asynccontextmanagers then
+    surface only "generator didn't yield" with no cause and the attempt dies
+    at setup. Retry the STARTUP only — exceptions from the agent-loop body
+    propagate immediately without retrying.
+    """
+    attempt = 0
+    while True:
+        cm = mcp_session(cfg)
+        try:
+            session = await cm.__aenter__()
+        except Exception:
+            if attempt + 1 >= retries:
+                raise
+            attempt += 1
+            if on_retry is not None:
+                on_retry(attempt)
+            await asyncio.sleep(delay_s)
+            continue
+        try:
+            yield session
+        finally:
+            await cm.__aexit__(None, None, None)
+        return
 
 
 async def call_tool(session: ClientSession, name: str, arguments: dict[str, Any]) -> str:

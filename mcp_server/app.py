@@ -27,9 +27,11 @@ def _render_chunk(report: Dict[str, Any], detail: bool) -> str:
         return IsabelleGymAsyncClient.format_chunk_report(report)
     cmds = report.get("commands", []) or []
     proof_open = report.get("proof_open")
+    pending_qed = report.get("pending_qed")
     used_sorry = report.get("used_sorry")
     head = (
-        f"success={report.get('success')} proof_open={proof_open} used_sorry={used_sorry} "
+        f"success={report.get('success')} proof_open={proof_open} pending_qed={pending_qed} "
+        f"used_sorry={used_sorry} "
         f"timed_out={report.get('timed_out')} stuck_line={report.get('stuck_line')} "
         f"time={float(report.get('execution_time', 0) or 0):.2f}s commands={len(cmds)}"
     )
@@ -42,7 +44,12 @@ def _render_chunk(report: Dict[str, Any], detail: bool) -> str:
         lines.append(f"  line {c.get('line')} {c.get('kind')} {c.get('status')} {msgs}".rstrip())
     if cmds and not bad:
         lines.append("  (all commands ok)")
-    if report.get("success") and proof_open:
+    if report.get("success") and pending_qed:
+        # Goal discharged but the proof block still awaits its closing `qed` —
+        # batch builds reject this state with "Goal present in this block".
+        lines.append("  NOTE: goal discharged but the proof block is NOT closed — "
+                     "submit a bare `qed` chunk to finish (do NOT start new proof work).")
+    elif report.get("success") and proof_open:
         # No command errored, but the proof is still OPEN (e.g. `using assms`/trailing `have`
         # with no `qed`): the theorem is NOT proved. Warn so the agent closes/rolls back the
         # goal before declaring a new theorem (else: "Bad context for command ...").
@@ -76,17 +83,23 @@ async def verify_chunk(text: str, ctx: Context, timeout: float = Config.CHUNK_TI
     SINGLE wall budget. This is the only execution tool (it subsumes single-stepping).
 
     Returns per-command status in source order (ok/failed/running/unprocessed). On timeout
-    the report is partial and names the still-`running` line (the likely loop). Terse by
+    the report is partial and names the still-`running` line (the likely loop). A `running`
+    line at timeout means a LOOPING method (e.g. blast/auto spinning on the wrong goal) —
+    replace that method or call sledgehammer on the goal; never resubmit a near-identical
+    command, and pass a smaller `timeout` for exploratory chunks. Terse by
     default; pass detail=True for the full per-command table. (For the resulting goal/
     subgoals, call proof_state.)
 
     success=True means NO command errored — NOT that the theorem is proved. The theorem is
     proved ONLY when success=True AND proof_open=False AND used_sorry=False:
-      - proof_open=True  -> the chunk left an open proof (e.g. `theorem ... using assms`, or a
-        trailing `have ...` with no `qed`). It is kept so you can sledgehammer the open goal,
-        but the theorem is NOT proved. Do NOT declare a new theorem/lemma while proof_open=True
-        (it triggers "Bad context for command ... -- using reset state") — close the goal or
-        rollback first.
+      - proof_open=True  -> the chunk left the proof block unclosed. Two cases:
+          * subgoals remain (pending_qed=False): inspect them with proof_state and keep
+            proving. Do NOT declare a new theorem/lemma while proof_open=True
+            (it triggers "Bad context for command ... -- using reset state") — close the
+            goal or rollback first.
+          * the goal is discharged but `qed` is missing (pending_qed=True): submit a bare
+            `qed` chunk to finish — batch verification rejects this state with
+            "Goal present in this block". Do NOT start new proof work.
       - used_sorry=True  -> the chunk used `sorry`/`oops`; the theorem is NOT proved. Never use
         sorry/oops to "pass".
     """

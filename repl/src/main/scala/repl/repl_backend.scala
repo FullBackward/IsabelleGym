@@ -40,19 +40,38 @@ class ReplBackend(show_states: Boolean, enable_cache: Boolean = false, max_cache
     s"ML_val ${Symbol.open} $ml_text ${Symbol.close}"
   )
 
+  /** Run a transient ML probe TRANSACTIONALLY: wait for the probe's channel
+   *  reply, then for the probe command's evaluation to FINISH before the
+   *  caller discards it — the reply arrives DURING evaluation, so discarding
+   *  immediately can cancel the probe's remainder and race the NEXT probe into
+   *  a stale or canceled document state (empty results / blind channel
+   *  timeout, e.g. sledgehammer calls right after other probes). One retry:
+   *  a canceled probe otherwise surfaces only as a queue timeout. */
+  private def with_probe_settle[T](probe: => T): T = {
+    def attempt(): T = {
+      val r = probe
+      repl_session.await_current_node_settled()
+      r
+    }
+    try attempt()
+    catch { case _: Exception => attempt() }
+  }
+
   def open_subgoals(): java.util.List[String] = {
     val subgoals =
       if (!repl_session.current_thy_begun) List()
       else {
-        val message = Repl_ML_Communication.waiting_for_subgoals_message(
-          {
-            // The ML side prepends "CH:<channel_id>" so the Scala callback
-            // can route the response to the correct per-backend queue.
-            send_ml_command(
-              s"""Repl.send_open_subgoals_tagged "${channel_id}" @{Isar.state}"""
-            )
-          },
-          channel_id
+        val message = with_probe_settle(
+          Repl_ML_Communication.waiting_for_subgoals_message(
+            {
+              // The ML side prepends "CH:<channel_id>" so the Scala callback
+              // can route the response to the correct per-backend queue.
+              send_ml_command(
+                s"""Repl.send_open_subgoals_tagged "${channel_id}" @{Isar.state}"""
+              )
+            },
+            channel_id
+          )
         )
         repl_session.discard_last_edit()  // probe is transient: no doc/rollback pollution
         message
@@ -60,17 +79,39 @@ class ReplBackend(show_states: Boolean, enable_cache: Boolean = false, max_cache
     subgoals.asJava
   }
 
+  def in_proof(): Boolean = {
+    if (!repl_session.current_thy_begun) false
+    else {
+      val message = with_probe_settle(
+        Repl_ML_Communication.waiting_for_in_proof_message(
+          {
+            // The ML side prepends "CH:<channel_id>" so the Scala callback
+            // can route the response to the correct per-backend queue.
+            send_ml_command(
+              s"""Repl.send_in_proof_tagged "${channel_id}" @{Isar.state}"""
+            )
+          },
+          channel_id
+        )
+      )
+      repl_session.discard_last_edit()  // probe is transient: no doc/rollback pollution
+      message == List("1")
+    }
+  }
+
   def local_facts(): java.util.List[String] = {
     val local_facts =
       if (!repl_session.current_thy_begun) List()
       else {
-        val message = Repl_ML_Communication.waiting_for_local_facts_message(
-          {
-            send_ml_command(
-              s"""Repl.send_local_facts_tagged "${channel_id}" @{Isar.state}"""
-            )
-          },
-          channel_id
+        val message = with_probe_settle(
+          Repl_ML_Communication.waiting_for_local_facts_message(
+            {
+              send_ml_command(
+                s"""Repl.send_local_facts_tagged "${channel_id}" @{Isar.state}"""
+              )
+            },
+            channel_id
+          )
         )
         repl_session.discard_last_edit()  // probe is transient
         message
@@ -83,13 +124,15 @@ class ReplBackend(show_states: Boolean, enable_cache: Boolean = false, max_cache
     val global_facts =
       if (!repl_session.current_thy_begun) List()
       else {
-        val message = Repl_ML_Communication.waiting_for_global_facts_message(
-          {
-            send_ml_command(
-              s"""Repl.send_global_facts_tagged "${channel_id}" @{Isar.state} ${limit}"""
-            )
-          },
-          channel_id
+        val message = with_probe_settle(
+          Repl_ML_Communication.waiting_for_global_facts_message(
+            {
+              send_ml_command(
+                s"""Repl.send_global_facts_tagged "${channel_id}" @{Isar.state} ${limit}"""
+              )
+            },
+            channel_id
+          )
         )
         repl_session.discard_last_edit()  // probe is transient
         message
@@ -102,14 +145,16 @@ class ReplBackend(show_states: Boolean, enable_cache: Boolean = false, max_cache
       if (!repl_session.current_thy_begun) List()
       else {
         try {
-          val message = Repl_ML_Communication.waiting_for_sledgehammer_message(
-            {
-              send_ml_command(
-                s"""Repl.send_sledgehammer_tagged "${channel_id}" ${timeout_s} @{Isar.state}"""
-              )
-            },
-            channel_id,
-            timeout_s
+          val message = with_probe_settle(
+            Repl_ML_Communication.waiting_for_sledgehammer_message(
+              {
+                send_ml_command(
+                  s"""Repl.send_sledgehammer_tagged "${channel_id}" ${timeout_s} @{Isar.state}"""
+                )
+              },
+              channel_id,
+              timeout_s
+            )
           )
           message
         } finally {
@@ -184,20 +229,26 @@ class ReplBackend(show_states: Boolean, enable_cache: Boolean = false, max_cache
    * is true so the caller knows the theorem is NOT actually proved and must close it (or
    * rollback) before starting a new `theorem`/`lemma` — declaring one while a proof is open
    * is exactly what triggers "Bad context for command -- using reset state". `proof_open` is
-   * derived from whether any subgoals remain after the chunk; for a rolled-back (failed)
-   * chunk it is false (nothing was kept).
+   * the ML `Toplevel.is_proof` predicate (block lifetime), NOT bare subgoal counting: a
+   * successful terminal `show` leaves zero subgoals but the block still awaits `qed`, and
+   * batch builds reject that with "Goal present in this block". In that situation the report
+   * also carries `pending_qed`=true so the caller knows the only missing step is `qed`
+   * (vs. real remaining goals, which need proof work). For a rolled-back (failed) chunk
+   * both are false (nothing was kept).
    */
   def verify_chunk(isar_string: String, wall_budget_ms: Long): String = {
     Repl_Output.reset()
     if (!repl_session.current_thy_begun)
-      """{"timed_out":false,"success":false,"proof_open":false,"used_sorry":false,"elapsed_ms":0,"commands":[],"error":"theory not begun"}"""
+      """{"timed_out":false,"success":false,"proof_open":false,"pending_qed":false,"used_sorry":false,"elapsed_ms":0,"commands":[],"error":"theory not begun"}"""
     else {
       repl_session.send_edit(isar_string)
       val report = repl_session.chunk_status_report(wall_budget_ms)
       val proof_open =
         if (!report.success) { repl_session.discard_last_edit(); false }
-        else !open_subgoals().isEmpty  // kept chunk: any remaining subgoal => proof not closed
-      JSON.Format(report.fields + ("proof_open" -> proof_open))
+        else in_proof()  // kept chunk: block still open (goals pending OR qed pending)
+      val pending_qed =
+        report.success && proof_open && open_subgoals().isEmpty  // discharged, needs only qed
+      JSON.Format(report.fields + ("proof_open" -> proof_open) + ("pending_qed" -> pending_qed))
     }
   }
 

@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from common.arbiter import check
 from common.config import Config, load
-from common.mcp_client import call_tool, list_tools, mcp_session
+from common.mcp_client import call_tool, list_tools, mcp_session_startup_retry
 from common.metrics import AttemptResult, Timer, TokenAggregator, append_result
 from common.model import ModelClient, no_tool_call_action
 from common.problems import Problem, derive_session, load_problems, sanitize_for_isabelle
@@ -155,7 +155,7 @@ async def check_done_readiness(session, host_file: Path, problem: Problem, timeo
     return True, ""
 
 
-async def run_attempt(problem: Problem, repeat: int, results_path: Path) -> None:
+async def run_attempt(problem: Problem, repeat: int, results_path: Path, prompt_name: str = "general") -> None:
     cfg = load()
     client = ModelClient(cfg)
     system_prompt = cfg.system_prompt
@@ -201,11 +201,17 @@ async def run_attempt(problem: Problem, repeat: int, results_path: Path) -> None
             f"the single command `sledgehammer` at that goal, evaluate the file, "
             f"and read its suggestion via isabelle_command_output at that line.  "
             f"Then REMOVE the `sledgehammer` command and write the suggested proof "
-            f"method instead.  If sledgehammer finds nothing, change strategy.\n\n"
+            f"method instead.  If sledgehammer finds nothing, change strategy.\n"
+            f"ESCALATION — after the SAME goal has failed twice, or an evaluation "
+            f"keeps running on it, you MUST try sledgehammer before another manual "
+            f"method.  If an evaluation gets STUCK (a command keeps running), cancel "
+            f"it promptly with isabelle_cancel_evaluation, fix that command, and "
+            f"re-evaluate — a stuck command burns CPU and blocks everything.\n\n"
             f"The theorem is proved ONLY when a full evaluation of the file reports "
             f"ZERO errors (file clean) and the file contains no sorry/oops.  When "
-            f"your latest evaluation already shows this, reply DONE immediately — "
-            f"no further confirmation calls are required.  Running commands are "
+            f"your latest evaluation already shows this, reply with the single word "
+            f"DONE immediately — no summary, no further confirmation calls are "
+            f"required.  Running commands are "
             f"NEVER 'background processing' and errors are NEVER 'tooling "
             f"artifacts' — DONE is checked and rejected otherwise.\n\n"
             f"IMPORTANT: write ALL non-ASCII mathematical symbols using Isabelle's "
@@ -239,8 +245,32 @@ async def run_attempt(problem: Problem, repeat: int, results_path: Path) -> None
     final_thy_path = cfg.paths.runs_dir / "isabelle_mcp" / f"{problem.name}_rep{repeat}.thy"
 
     try:
-        async with mcp_session(cfg.mcp_servers["isabelle_mcp"]) as session:
+        async with mcp_session_startup_retry(
+            cfg.mcp_servers["isabelle_mcp"],
+            on_retry=lambda n: logger.log_text(
+                "SETUP retry", f"MCP session startup failed (attempt {n}); retrying in 3s"),
+        ) as session:
             mcp_tools = await list_tools(session)
+            # Guided variant: forward the vendor instructions the server shipped
+            # in the MCP initialize handshake (Isabelle-MCP's instructions.py).
+            if prompt_name == "guided":
+                vendor = getattr(session, "vendor_instructions", None)
+                if vendor:
+                    # NOTE: messages[0] was already logged above (before the
+                    # session existed), so the transcript's first message does
+                    # NOT show this text — it IS sent to the model. Re-log the
+                    # final message so the transcript contains the guidance too.
+                    messages[0]["content"] += (
+                        "\n\nADDITIONAL REFERENCE — vendor instructions served by "
+                        "this MCP server:\n\n" + vendor)
+                    logger.log_text(
+                        "GUIDED_PROMPT",
+                        "vendor instructions appended — model-visible first "
+                        "user message re-logged below:")
+                    logger.log_message(messages[0])
+                else:
+                    logger.log_text(
+                        "NOTE", "guided prompt requested but the server served no instructions")
             # imports[0] is a THEORY (e.g. Complex_Main), not a session name —
             # derive the owning session as the arbiter does (audit H6).
             await call_tool(session, "isabelle_launch", {"session": derive_session(problem.imports)})
@@ -468,6 +498,10 @@ async def main() -> None:
     parser.add_argument("--thy-dir", required=True, type=Path)
     parser.add_argument("--repeats", type=int, default=None)
     parser.add_argument("--select")
+    parser.add_argument("--prompt", choices=["general", "guided"], default="general",
+                        help="general = minimal harness prompt; guided = also forward "
+                             "the server's vendor instructions from the MCP initialize "
+                             "handshake")
     args = parser.parse_args()
 
     cfg = load()
@@ -482,7 +516,7 @@ async def main() -> None:
     for problem in problems:
         for repeat in range(repeats):
             try:
-                await run_attempt(problem, repeat, results_path)
+                await run_attempt(problem, repeat, results_path, prompt_name=args.prompt)
             except Exception as e:
                 import traceback
                 traceback.print_exc()

@@ -54,6 +54,7 @@ class CommandResponse(BaseModel):
 class ProofStateResponse(BaseModel):
     subgoals: List[str]
     proof_finished: bool
+    pending_qed: bool = False
     current_theory: str
 
 
@@ -185,11 +186,19 @@ class ChunkVerifyResponse(BaseModel):
                                       "— check `proof_open` for that.")
     proof_open: bool = Field(
         default=False,
-        description="True if the chunk left an UNCLOSED proof (e.g. `theorem ... using assms` "
-                    "or a trailing `have ...` with no `qed`). The chunk is still kept (so you "
+        description="True if the chunk left an UNCLOSED proof block (Isabelle `Toplevel.is_proof`) "
+                    "— either subgoals remain, or the goal is discharged but `qed` is still "
+                    "pending (see `pending_qed`; batch builds reject that state with "
+                    "'Goal present in this block'). The chunk is still kept (so you "
                     "can sledgehammer the open goal), but the theorem is NOT proved; close it "
                     "or rollback before starting a new theorem/lemma. A fully proved chunk has "
                     "success=True and proof_open=False.",
+    )
+    pending_qed: bool = Field(
+        default=False,
+        description="True if the proof block is open but NO subgoals remain — the goal is "
+                    "discharged and only the closing `qed` is missing. Submit a bare `qed` "
+                    "chunk to finish; do NOT start new proof work.",
     )
     used_sorry: bool = Field(
         default=False,

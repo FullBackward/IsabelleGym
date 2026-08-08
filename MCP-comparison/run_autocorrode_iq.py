@@ -40,10 +40,15 @@ def _general_prompt_body(thy_path: Path) -> str:
         f"NOT fall back to writing smt/metis calls yourself.  simp, auto, blast, force, "
         f"linarith and presburger are always allowed; external ATPs are not.  If "
         f"sledgehammer cannot find a proof, the current approach is probably wrong — "
-        f"change strategy instead of trying more solver calls manually.\n\n"
+        f"change strategy instead of trying more solver calls manually.\n"
+        f"ESCALATION — after the SAME goal has failed twice, or any call times out on "
+        f"it, you MUST call explore(query=\"sledgehammer\") before trying another manual "
+        f"method.  A looping attempt is exactly the failure sledgehammer replaces.\n"
+        f"TIMEOUT DISCIPLINE — a timed-out call IS a failure: never resubmit a "
+        f"near-identical edit; change the method or sledgehammer the goal instead.\n\n"
         f"The theorem is proved ONLY when there are zero errors and zero sorries.  When your "
-        f"latest edit's returned results already show this, reply DONE immediately — no "
-        f"further confirmation calls are required.  DONE also requires the document to be "
+        f"latest edit's returned results already show this, reply with the single word "
+        f"DONE immediately — no summary, no further confirmation calls are required.  DONE also requires the document to be "
         f"fully processed: get_document_info must show is_processed: true with 0 running "
         f"and 0 unprocessed commands.  Running or unprocessed lines are NEVER 'background "
         f"processing' and errors are NEVER 'PIDE artifacts' — DONE is checked and rejected "
@@ -62,8 +67,42 @@ def _general_prompt_body(thy_path: Path) -> str:
     )
 
 
+# Vendor guidance shipped with AutoCorrode I/Q (iq/iq_guidance.md) — the
+# "guided" variant appends it verbatim (minus the fs_read/fs_write line, which
+# references tools not present here) so the I/Q agent gets the same class of
+# playbook that IsabelleGym's stepwise/segment prompts provide.
+_IQ_GUIDANCE = """\
+VENDOR GUIDANCE (from the I/Q project):
+You are a formal proof engineer working with Isabelle/jEdit. Your work
+is surgical, clearly structured, and well-documented. You regularly step
+back to reflect on the quality of your work, and ask yourself: Could my
+proofs be cleaned up, accelerated or simplified? Could they be broken
+up into smaller lemmas?
+
+REMEMBER: When you embark on a proof, you ask yourself: Is this proof likely
+short and simple, or not? If it is, try a `by ...` or an apply-style Isar
+proof. If it is not, try a structured Isar proof.
+- When you work on apply-style proofs, proceed incrementally. Try 1-2 tactics
+  at a time, inspect their results, and proceed. DO NOT repeatedly
+  replace entire proof scripts.
+- When you work on an Isar proof, work top-down: First, establish the rough
+  structure, using `sorry` to temporarily axiomatize core steps. Then, fill
+  in those `sorry``s one at a time; if they are complex, hoist them out as
+  separate lemmas or state subproofs via `proof -`.
+
+NOTE on scaffolding: a temporary `sorry` is allowed MID-proof as described
+above, but every scaffold must be discharged before you reply DONE — the
+final file must be completely sorry-free or it does not count as proved.
+"""
+
+
+def _guided_prompt_body(thy_path: Path) -> str:
+    return _general_prompt_body(thy_path) + _IQ_GUIDANCE
+
+
 _PROMPTS = {
     "general":    _general_prompt_body,
+    "guided":     _guided_prompt_body,
 }
 
 # ── I/Q auth token + setup helpers ──────────────────────────────────────

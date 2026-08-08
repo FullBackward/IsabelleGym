@@ -57,20 +57,34 @@ CRITICAL RULES:
      a. Submit your proof UP TO that subgoal.
      b. Verify.  If proof_open=True, call sledgehammer() on the open goal.
      c. Use sledgehammer's EXACT output to close the goal.  Do NOT write your
-        own solver invocation.  If sledgehammer returns nothing, change
-        strategy.
+        own solver invocation.  If sledgehammer answers "No proof found" or
+        "Timed out", that IS the answer — split the goal into smaller have
+        steps and sledgehammer those, or change strategy.
+     d. WHERE to call it: sledgehammer needs a REAL open goal — the seeded
+        statement (before you write `proof -`) or a `have` subgoal.  Do NOT
+        call it right after a bare `proof -` (it fails with a 'state mode'
+        error) and NEVER when pending_qed=True (no goal left — submit `qed`).
+     e. ESCALATION — after the SAME subgoal has failed twice, or any chunk
+        times out on it, you MUST call sledgehammer() before trying another
+        manual method.  A looping blast/auto burning the chunk timeout is
+        exactly the failure sledgehammer replaces.
 
 2. AUTO-ROLLBACK — When verify_chunk reports success=False (any command
    failed), those failed commands are AUTOMATICALLY rolled back.  The source
    stays at the last successful state.  Do NOT call rollback() after a failed
    verify_chunk — just fix your proof text and call verify_chunk again with
-   the corrected version.
+   the corrected version.  TIMEOUT DISCIPLINE — pass a small timeout
+   (timeout=30-60) for exploratory chunks.  A timeout IS a failure: the
+   stuck line names the looping method — replace it or sledgehammer it,
+   NEVER resubmit a near-identical command.
 
 3. DONE CRITERIA — The theorem is proved ONLY when verify_chunk reports ALL
    of: success=True AND proof_open=False AND used_sorry=False for the TARGET
-   theorem (auxiliary lemmas do NOT count).  When your latest verify_chunk
-   already shows this, reply DONE immediately — no further confirmation calls
-   are required.
+   theorem (auxiliary lemmas do NOT count).  If proof_open=True with
+   pending_qed=True, the goal is discharged but the block lacks its `qed` —
+   submit a bare `qed` chunk; do NOT reply DONE yet.  When your latest
+   verify_chunk already shows this, reply with the single word DONE
+   immediately — no summary, no further confirmation calls are required.
 
 4. NEVER use `sorry` or `oops` — they invalidate your proof.
 !!! WARNING You have to recheck every rules when you generated a proof !!!
@@ -96,7 +110,18 @@ CRITICAL RULES (read carefully — violating any of these will fail the proof)
      b. Verify that chunk.  If proof_open=True, call sledgehammer() on the
         open goal.
      c. Use the sledgehammer result to close the goal; do NOT write your own
-        solver invocation.  If sledgehammer returns nothing, change strategy.
+        solver invocation.  If sledgehammer answers "No proof found" or
+        "Timed out", that IS the answer — do NOT write smt/metis yourself;
+        split the goal into smaller have steps and sledgehammer those, or
+        change strategy.
+     d. WHERE to call it: sledgehammer needs a REAL open goal — the seeded
+        statement (before you write `proof -`) or a `have` subgoal.  Do NOT
+        call it right after a bare `proof -` (it fails with a 'state mode'
+        error) and NEVER when pending_qed=True (no goal left — submit `qed`).
+     e. ESCALATION — after the SAME subgoal has failed twice, or any chunk
+        times out on it, you MUST call sledgehammer() before trying another
+        manual method.  A looping blast/auto burning the chunk timeout is
+        exactly the failure sledgehammer replaces.
 
 3. AUTO-ROLLBACK — When verify_chunk reports success=False (any command
    failed), those failed commands are AUTOMATICALLY rolled back.  The source
@@ -107,13 +132,18 @@ CRITICAL RULES (read carefully — violating any of these will fail the proof)
 4. VERIFY EVERY CHUNK — After writing any proof text, immediately call
    verify_chunk(text).  Read the per-command status report.  If any command
    is marked "failed" or proof_open=True, fix the issue before adding more
-   proof lines.  Never stack multiple unverified chunks.
+   proof lines.  Never stack multiple unverified chunks.  TIMEOUT DISCIPLINE —
+   pass a small timeout (timeout=30-60) for exploratory chunks.  A timeout IS
+   a failure: the stuck line names the looping method — replace it or
+   sledgehammer it, NEVER resubmit a near-identical command.
 
 5. DONE CRITERIA — The theorem is proved ONLY when verify_chunk reports ALL
    of: success=True AND proof_open=False AND used_sorry=False for the TARGET
-   theorem (auxiliary lemmas do NOT count).  When your latest verify_chunk
-   already shows this, reply DONE immediately — no further confirmation calls
-   are required.
+   theorem (auxiliary lemmas do NOT count).  If proof_open=True with
+   pending_qed=True, the goal is discharged but the block lacks its `qed` —
+   submit a bare `qed` chunk; do NOT reply DONE yet.  When your latest
+   verify_chunk already shows this, reply with the single word DONE
+   immediately — no summary, no further confirmation calls are required.
 
 !!! WARNING You have to recheck every rules when you generated a proof !!!   
 
@@ -155,7 +185,9 @@ LAYER RULES:
 - Last layer: close with qed (2-3 lines)
 - After EVERY successful layer with proof_open=True, inspect subgoals via proof_state()
 - Use simp/linarith/argo/auto/presburger for routine steps
-- Call sledgehammer() ONLY when these methods fail on a subgoal
+- Call sledgehammer() ONLY when these methods fail on a subgoal — and only on
+  a REAL open goal (a `have` subgoal or the seeded statement, not a bare
+  `proof -` state, never when pending_qed=True)
 - NEVER re-declare the already-submitted theorem statement
 - NEVER use `sorry` or `oops` — they invalidate your proof
 """
@@ -181,6 +213,10 @@ CRITICAL RULES:
         that closes the goal (e.g. `by (metis ...)` if sledgehammer says so).
      d. If sledgehammer returns nothing, change strategy — DO NOT guess a
         solver invocation.
+     e. ESCALATION — After the SAME subgoal has failed twice, or any chunk
+        times out on it, you MUST call sledgehammer() before trying another
+        manual method.  A looping blast/auto burning the whole chunk timeout
+        is exactly the failure sledgehammer replaces.
 
 3. AUTO-ROLLBACK — When verify_chunk reports success=False (any command
    failed), those failed commands are AUTOMATICALLY rolled back.  The source
@@ -193,53 +229,90 @@ CRITICAL RULES:
    is marked "failed", fix the issue before adding more.  If proof_open=True
    after a successful segment, call proof_state() to inspect the open subgoal
    and decide how to close it (sledgehammer first, then manual reasoning).
+   TIMEOUT DISCIPLINE — pass a small timeout (timeout=30-60) for exploratory
+   chunks.  A timeout IS a failure: the stuck line names the looping method —
+   replace it or sledgehammer it, NEVER resubmit a near-identical command.
 
 5. DONE CRITERIA — The theorem is proved ONLY when verify_chunk reports ALL
    of: success=True AND proof_open=False AND used_sorry=False for the TARGET
-   theorem (auxiliary lemmas do NOT count).  When your latest verify_chunk
-   already shows this, reply DONE immediately — no further confirmation calls
-   are required.
+   theorem (auxiliary lemmas do NOT count).  If proof_open=True with
+   pending_qed=True, the goal is discharged but the block lacks its `qed` —
+   submit a bare `qed` chunk; do NOT reply DONE yet.  When your latest
+   verify_chunk already shows this, reply with the single word DONE
+   immediately — no summary, no further confirmation calls are required.
 
 !!! WARNING You have to recheck every rules when you generated a proof !!!   
 
-SEGMENTED PROOF WORKFLOW — HOW TO SUBMIT A PROOF
+SEGMENTED PROOF WORKFLOW — HOW TO SUBMIT A PROOF (INCLUDING RECOVERY)
 ----------
 
-Plan your proof in advance, then submit it in CLEAN SEGMENTS:
+Plan your proof in advance, then submit it in CLEAN SEGMENTS.  This example
+uses a TRIVIAL theorem — it is NOT your task — but note how failures are
+handled, because most of your work is recovery, not first-try success.
 
   [Segment 1 — proof opening + reasoning up to the FIRST open subgoal;
    the statement is ALREADY submitted, so start with proof -]
   verify_chunk("
     proof -
-      have lemma1: ... by (simp add: algebra_simps)
-      have lemma2: ... by linarith
-      (* stop here — the next step would invoke a solver *)
-  ")
+      have step1: \"n + m = m + n\" for n m :: nat
+        by (simp add: add.commute)
+      (* stop here — the next step is uncertain *)
+  ", timeout=30)
   → success=True, proof_open=True → call proof_state(), see the open subgoal
 
-  [Segment 2 — close that subgoal using sledgehammer's result]
-  First call sledgehammer() to get a proof method.
-  Suppose it returns "by (metis add.commute)".
+  [Segment 2 — a FAILED chunk: read the error, change ONE thing, resubmit]
   verify_chunk("
-      also have ... by (metis add.commute)
-      (* continue reasoning until the NEXT open subgoal *)
-  ")
-  → success=True, proof_open=True → ...
+      have step2: \"n * (m + k) = n * m + n * k\" for n m k :: nat
+        using step1 by blast
+  ", timeout=30)
+  → success=False, line 2 by failed "Failed to apply initial proof method"
+  The whole chunk was rolled back automatically — nothing to undo.  This is
+  the SECOND failure on this subgoal → ESCALATE: call sledgehammer() NOW.
+  sledgehammer() returns e.g.:
+    ["metis found a proof...", "Try this: by (metis distrib_left) (12 ms)"]
+  Paste its suggestion VERBATIM:
+  verify_chunk("
+      have step2: \"n * (m + k) = n * m + n * k\" for n m k :: nat
+        using step1 by (metis distrib_left)
+  ", timeout=30)
+  → success=True, proof_open=True
 
-  [Segment N — final segment closes the proof with qed]
+  WHERE to call sledgehammer — it needs a REAL open goal:
+  - GOOD: on the seeded statement (before you write `proof -`), or on a
+    `have` subgoal like above.
+  - BAD: right after a bare `proof -` — it fails with an
+    "Illegal application of proof command in state mode" error.
+  - NEVER when pending_qed=True — there is no goal left; submit `qed`.
+
+  If sledgehammer answers "No proof found" or "Timed out", that IS the
+  answer — do NOT write smt/metis from memory.  Split the goal into smaller
+  have steps and sledgehammer those, or change strategy.
+
+  [A TIMEOUT is a failure, not a retry invitation]
+  If a chunk returns timed_out=True with stuck_line=N: line N names the
+  looping method.  Do NOT resubmit a near-identical command — replace that
+  method (or sledgehammer the goal) and/or shrink the segment.
+
+  [Final segment — watch for pending_qed]
   verify_chunk("
       finally show ?thesis by simp
-    qed
-  ")
-  → success=True, proof_open=False, used_sorry=False → DONE!
+  ", timeout=30)
+  → success=True, proof_open=True, pending_qed=True
+  pending_qed means: goal discharged, only `qed` missing.  Submit a bare qed:
+  verify_chunk("qed", timeout=30)
+  → success=True, proof_open=False, used_sorry=False → reply DONE (one word).
 
 SEGMENT RULES:
-- Each segment can be reasonably large (up to 30-40 lines), but MUST END
-  before a solver invocation (smt, metis, etc.) or before qed.
+- Keep segments short (≈10-15 lines).  A failed chunk is rolled back as a
+  WHOLE — the larger the segment, the more correct work you must resubmit.
+  When a region is uncertain, submit smaller.
+- Each segment MUST END before a solver invocation (smt, metis, etc.) or
+  before qed.
 - NEVER write smt/metis/cvc5/vampire/z3/verit/e/spass in your proof text.
   ALWAYS call sledgehammer() first at each open subgoal and use its output.
 - NEVER include `sorry` or `oops` — they invalidate your proof.
-- If a segment times out (180s), try breaking it into smaller pieces.
+- A timed-out chunk means a looping method (see the stuck line): shrink the
+  segment AND change the method — do not retry the same command.
 """
 
 

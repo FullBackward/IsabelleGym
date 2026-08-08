@@ -11,6 +11,7 @@ sig
   val send_local_facts_tagged: string -> Toplevel.state -> unit
   val send_global_facts_tagged: string -> Toplevel.state -> int -> unit
   val send_sledgehammer_tagged: string -> int -> Toplevel.state -> unit
+  val send_in_proof_tagged: string -> Toplevel.state -> unit
 
 end;
 
@@ -40,6 +41,16 @@ fun send_open_subgoals state =
 fun send_open_subgoals_tagged channel_id state =
   let val goals = open_subgoals state
   in ("CH:" ^ channel_id) :: goals |> \<^scala>\<open>add_open_subgoals\<close> |> ignore end
+
+(* Whether the toplevel is still inside a proof block.  True for the whole
+   block lifetime — INCLUDING after a successful terminal `show`, while `qed`
+   is still pending — and false once `qed` lands (or for theory-level text).
+   This is the "proof not registered yet" signal that bare subgoal counting
+   misses (discharged-but-unclosed blocks fail batch builds with
+   "Goal present in this block"). *)
+fun send_in_proof_tagged channel_id state =
+  ("CH:" ^ channel_id) :: [if Toplevel.is_proof state then "1" else "0"]
+    |> \<^scala>\<open>add_in_proof\<close> |> ignore
 
 fun pretty_local_facts verbose ctxt =
   let
@@ -164,7 +175,18 @@ fun sledgehammer_results timeout_s state =
 fun send_sledgehammer_tagged channel_id timeout_s state =
   let
     fun run () =
-      let val results = sledgehammer_results timeout_s state
+      let
+        (* Failure-safe: ANY exception in the ATP run must still answer the
+           channel — otherwise the Scala side waits out the full timeout and
+           the failure surfaces as an opaque 500 instead of the real cause.
+           Uses Exn.capture: a bare `handle exn =>` is rejected by Isabelle/ML
+           ("Handler catches all exceptions"); interrupts are still re-raised. *)
+        val results =
+          (case Exn.capture (fn () => sledgehammer_results timeout_s state) () of
+            Exn.Res rs => rs
+          | Exn.Exn exn =>
+              if Exn.is_interrupt exn then Exn.reraise exn
+              else ["ERROR sledgehammer: " ^ General.exnMessage exn])
       in ("CH:" ^ channel_id) :: results |> \<^scala>\<open>add_sledgehammer_results\<close> |> ignore end
   in
     ignore (Isabelle_Thread.fork (Isabelle_Thread.params "repl_sledgehammer") run)
@@ -179,3 +201,4 @@ val send_open_subgoals_tagged = Repl.send_open_subgoals_tagged;
 val send_local_facts_tagged = Repl.send_local_facts_tagged;
 val send_global_facts_tagged = Repl.send_global_facts_tagged;
 val send_sledgehammer_tagged = Repl.send_sledgehammer_tagged;
+val send_in_proof_tagged = Repl.send_in_proof_tagged;

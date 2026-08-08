@@ -2,11 +2,20 @@
 """Read MCP-comparison/runs/**/results.jsonl and print summary tables.
 
 Results may live directly under runs/<system>/ or in per-experiment subfolders
-(e.g. runs/isabellegym/restrictive-prompt/results.jsonl) — both are found.
+(e.g. runs/isabellegym/segment_prompt/results.jsonl) — each such folder is
+reported as a separate variant row.
+
+Sledgehammer usage is counted per attempt from the session logs
+(<variant>/logs/<problem>_rep<N>.log):
+  - isabellegym  — `sledgehammer` tool calls
+  - autocorrode  — `explore` calls with "query": "sledgehammer"
+  - isabelle_mcp — standalone `sledgehammer` commands written into the file
+                   (JSON-escaped \nsledgehammer\n in write_thy args)
 """
 from __future__ import annotations
 
 import argparse
+import re
 from collections import defaultdict
 from pathlib import Path
 
@@ -17,6 +26,16 @@ from common.metrics import load_results
 
 SYSTEMS = ["isabellegym", "isabelle_mcp", "autocorrode"]
 
+# How a sledgehammer invocation is detected in each system's session log.
+# NOTE: these count tool-level invocations, not rounds-with-sledgehammer —
+# in this harness one sledgehammer call per round is the norm, so the numbers
+# coincide in practice.
+_SH_PATTERNS = {
+    "isabellegym": re.compile(r"TOOL_CALL \S+: sledgehammer\b"),
+    "autocorrode": re.compile(r'"query": "sledgehammer"'),
+    "isabelle_mcp": re.compile(r"\\n\s*sledgehammer\s*\\n"),
+}
+
 
 def _fmt(value: float | None, spec: str) -> str:
     return format(value, spec) if value is not None else "-"
@@ -26,27 +45,52 @@ def _mean(values: list[float]) -> float | None:
     return sum(values) / len(values) if values else None
 
 
+def _sledgehammer_counts(variant_dir: Path, rows: list) -> dict[int, int]:
+    """rep index -> number of sledgehammer invocations, from session logs.
+
+    Missing logs (overwritten by later runs sharing a logs dir) are skipped.
+    """
+    pattern = None
+    for r in rows:
+        pattern = _SH_PATTERNS.get(r.system)
+        break
+    if pattern is None:
+        return {}
+    logs_dir = variant_dir / "logs"
+    counts: dict[int, int] = {}
+    for r in rows:
+        log = logs_dir / f"{r.problem}_rep{r.repeat}.log"
+        if not log.is_file():
+            continue
+        text = log.read_text(encoding="utf-8", errors="replace")
+        counts[r.repeat] = len(pattern.findall(text))
+    return counts
+
+
 def summarize(runs_dir: Path) -> None:
-    rows = []
+    # (system, variant) -> (results_path, rows)
+    groups: dict[tuple[str, str], tuple[Path, list]] = {}
     for system in SYSTEMS:
         system_dir = runs_dir / system
         if not system_dir.is_dir():
             continue
         for path in sorted(system_dir.rglob("results.jsonl")):
-            rows.extend(load_results(path))
+            variant = str(path.parent.relative_to(system_dir)) or "."
+            groups.setdefault((system, variant), (path, []))[1].extend(
+                load_results(path))
 
-    if not rows:
+    if not groups:
         print(f"No results found under {runs_dir}")
         return
 
-    by_system: dict[str, list] = defaultdict(list)
-    for r in rows:
-        by_system[r.system].append(r)
+    def variant_key(item: tuple[tuple[str, str], tuple[Path, list]]) -> tuple:
+        (system, variant), _ = item
+        return (SYSTEMS.index(system), "old" in variant, variant)
 
-    print("| System | attempts | pass@1 | solved | mean rounds (solved) | mean productive rounds (solved) | mean wall_s (solved) | mean setup_s | mean first_tool_s | mean total tok (solved) | truncated rounds | nudge rounds |")
-    print("|---|---|---|---|---|---|---|---|---|---|---|---|")
-    for system in SYSTEMS:
-        rs = by_system.get(system, [])
+    print("| System | Variant | attempts | pass@1 | solved | mean rounds (solved) | mean productive rounds (solved) | mean wall_s (solved) | mean setup_s | mean first_tool_s | mean total tok (solved) | mean sh calls | attempts w/ sh | trunc | nudges |")
+    print("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+    per_variant_sh: dict[tuple[str, str], dict[int, int]] = {}
+    for (system, variant), (path, rs) in sorted(groups.items(), key=variant_key):
         attempts = len(rs)
         solved = [r for r in rs if r.arbiter_solved]
         pass_at_1 = len(solved) / attempts if attempts else 0.0
@@ -64,38 +108,52 @@ def summarize(runs_dir: Path) -> None:
         mean_tok = sum(r.total_tokens for r in solved) / len(solved) if solved else None
         truncated = sum(getattr(r, "n_truncated_rounds", 0) for r in rs)
         nudges = sum(getattr(r, "n_nudge_rounds", 0) for r in rs)
-        print(f"| {system} | {attempts} | {pass_at_1:.2f} | {len(solved)} | "
+        sh_counts = _sledgehammer_counts(path.parent, rs)
+        per_variant_sh[(system, variant)] = sh_counts
+        mean_sh = _mean([float(c) for c in sh_counts.values()]) if sh_counts else None
+        attempts_sh = sum(1 for c in sh_counts.values() if c > 0)
+        print(f"| {system} | {variant} | {attempts} | {pass_at_1:.2f} | {len(solved)} | "
               f"{_fmt(mean_rounds, '.1f')} | {_fmt(mean_prod, '.1f')} | {_fmt(mean_wall, '.1f')} | "
               f"{_fmt(mean_setup, '.1f')} | {_fmt(mean_first, '.1f')} | "
-              f"{_fmt(mean_tok, '.0f')} | {truncated} | {nudges} |")
+              f"{_fmt(mean_tok, '.0f')} | {_fmt(mean_sh, '.1f')} | {attempts_sh}/{len(sh_counts) or 0} | "
+              f"{truncated} | {nudges} |")
+
+    # Per-attempt sledgehammer detail.
+    print("\nSledgehammer invocations per attempt (rep -> count):")
+    for (system, variant), counts in sorted(per_variant_sh.items(), key=lambda kv: (SYSTEMS.index(kv[0][0]), kv[0][1])):
+        if not counts:
+            print(f"  {system}/{variant}: (no matching logs found)")
+            continue
+        parts = ", ".join(f"rep{k}:{v}" for k, v in sorted(counts.items()))
+        print(f"  {system}/{variant}: {parts}")
 
     # Repeat-index control: warmth drift (e.g. I/Q's persistent jEdit getting
     # faster across repeats) shows up here as a rep-index trend.
-    repeats = sorted({r.repeat for r in rows})
+    all_rows = [r for _, rows in groups.values() for r in rows]
+    repeats = sorted({r.repeat for r in all_rows})
     print("\nMean wall_s (solved) by repeat index:")
-    print("| System | " + " | ".join(f"rep{i}" for i in repeats) + " |")
+    print("| Variant | " + " | ".join(f"rep{i}" for i in repeats) + " |")
     print("|---|" + "---|" * len(repeats))
-    for system in SYSTEMS:
-        rs = by_system.get(system, [])
+    for (system, variant), (_, rs) in sorted(groups.items(), key=variant_key):
         cells = []
         for i in repeats:
             walls = [r.wall_s for r in rs if r.repeat == i and r.arbiter_solved]
             cells.append(_fmt(_mean(walls), ".1f"))
-        print(f"| {system} | " + " | ".join(cells) + " |")
+        print(f"| {system}/{variant} | " + " | ".join(cells) + " |")
 
     print("\nPer-problem pass@1:")
-    problems = sorted({r.problem for r in rows})
+    problems = sorted({r.problem for r in all_rows})
     for problem in problems:
         parts = []
-        for system in SYSTEMS:
-            rs = [r for r in by_system.get(system, []) if r.problem == problem]
-            solved = sum(1 for r in rs if r.arbiter_solved)
-            parts.append(f"{system}={solved}/{len(rs)}")
+        for (system, variant), (_, rs) in sorted(groups.items(), key=variant_key):
+            prs = [r for r in rs if r.problem == problem]
+            solved = sum(1 for r in prs if r.arbiter_solved)
+            parts.append(f"{system}/{variant}={solved}/{len(prs)}")
         print(f"  {problem}: {', '.join(parts)}")
 
     print("\nError classes (unsolved attempts):")
     classes: dict[str, int] = defaultdict(int)
-    for r in rows:
+    for r in all_rows:
         if r.arbiter_solved:
             continue
         err = (r.error or "none recorded").splitlines()[0]

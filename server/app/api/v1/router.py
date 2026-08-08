@@ -270,16 +270,18 @@ async def verify_chunk(session_id: str, request: ChunkVerifyRequest, x_lease_id:
         ]
         timed_out = bool(report.get("timed_out", False))
         proof_open = bool(report.get("proof_open", False))
+        pending_qed = bool(report.get("pending_qed", False))
         used_sorry = bool(report.get("used_sorry", False))
         stuck_line = next((c.line for c in commands if c.status == "running"), None)
         success = (not timed_out) and len(commands) > 0 and all(c.status == "ok" for c in commands)
         logger.info(
-            "verify_chunk done success=%s proof_open=%s used_sorry=%s timed_out=%s commands=%s stuck_line=%s",
-            success, proof_open, used_sorry, timed_out, len(commands), stuck_line,
+            "verify_chunk done success=%s proof_open=%s pending_qed=%s used_sorry=%s timed_out=%s commands=%s stuck_line=%s",
+            success, proof_open, pending_qed, used_sorry, timed_out, len(commands), stuck_line,
         )
         return ChunkVerifyResponse(
             success=success,
             proof_open=proof_open,
+            pending_qed=pending_qed,
             used_sorry=used_sorry,
             timed_out=timed_out,
             stuck_line=stuck_line,
@@ -332,6 +334,7 @@ async def get_proof_state(session_id: str, x_lease_id: str | None = Header(None,
         return ProofStateResponse(
             subgoals=state.subgoals or [],
             proof_finished=state.proof_finished,
+            pending_qed=state.pending_qed,
             current_theory=state.current_theory,
         )
 

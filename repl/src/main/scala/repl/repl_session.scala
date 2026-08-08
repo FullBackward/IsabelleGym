@@ -92,6 +92,15 @@ class Repl_Session(session_manager: Session_Manager, initial_thys: List[String] 
       )
     )
 
+  /** Sequencing barrier for transient ML probes: wait until every command in the
+   *  current node (including the just-evaluated probe) is consolidated. Call
+   *  after a probe's channel reply arrives and BEFORE discard_last_edit, so the
+   *  discard cannot cancel the probe's remaining evaluation and race the next
+   *  probe (see Document_Utils.await_all_processed). */
+  def await_current_node_settled(): Unit =
+    current_thy_info.foreach(_ =>
+      Document_Utils.await_all_processed(session, current_thy_node_name))
+
   /** Wall-bounded per-command status report for the just-inserted chunk: JSON + success. */
   def chunk_status_report(wall_budget_ms: Long): Chunk_Report =
     current_thy_info match {

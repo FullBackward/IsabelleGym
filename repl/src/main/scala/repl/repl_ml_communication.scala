@@ -49,6 +49,8 @@ object Repl_ML_Communication {
     new ConcurrentHashMap[String, LinkedBlockingQueue[List[String]]]()
   private val sledgehammer_channels =
     new ConcurrentHashMap[String, LinkedBlockingQueue[List[String]]]()
+  private val in_proof_channels =
+    new ConcurrentHashMap[String, LinkedBlockingQueue[List[String]]]()
 
   private def get_or_create_queue(
     map: ConcurrentHashMap[String, LinkedBlockingQueue[List[String]]],
@@ -62,6 +64,7 @@ object Repl_ML_Communication {
     local_fact_channels.remove(channel)
     global_fact_channels.remove(channel)
     sledgehammer_channels.remove(channel)
+    in_proof_channels.remove(channel)
   }
 
   // -----------------------------------------------------------------------
@@ -75,14 +78,25 @@ object Repl_ML_Communication {
       case _ => (DEFAULT_CHANNEL, msgs)
     }
 
+  /** Offer a reply to the channel's queue. A full queue means a LATE or DUPLICATE
+   *  reply (e.g. a probe that timed out, was retried, and eventually answered
+   *  anyway) — drop it with a warning instead of raising `error` INSIDE the
+   *  ML→Scala callback, where throwing can poison the document execution. */
+  private def offer_reply(
+    map: ConcurrentHashMap[String, LinkedBlockingQueue[List[String]]],
+    channel: String, reply: List[String], kind: String
+  ): Unit = {
+    val q = get_or_create_queue(map, channel)
+    if (!q.offer(reply))
+      Output.writeln(s"I/Q REPL: dropping late/duplicate $kind reply (channel=$channel)")
+  }
+
   object Open_Subgoals_Function extends Scala.Fun_Strings("add_open_subgoals") {
     val here = Scala_Project.here
 
     def apply(open_subgoals: List[String]): List[String] = {
       val (channel, goals) = extract_channel(open_subgoals)
-      val q = get_or_create_queue(subgoal_channels, channel)
-      if (!q.offer(goals))
-        error(s"more subgoal messages arrived than requested (channel=$channel)")
+      offer_reply(subgoal_channels, channel, goals, "subgoals")
       List()
     }
   }
@@ -92,9 +106,7 @@ object Repl_ML_Communication {
 
     def apply(received_local_facts: List[String]): List[String] = {
       val (channel, facts) = extract_channel(received_local_facts)
-      val q = get_or_create_queue(local_fact_channels, channel)
-      if (!q.offer(facts))
-        error(s"more local facts messages arrived than requested (channel=$channel)")
+      offer_reply(local_fact_channels, channel, facts, "local facts")
       List()
     }
   }
@@ -104,9 +116,7 @@ object Repl_ML_Communication {
 
     def apply(received_global_facts: List[String]): List[String] = {
       val (channel, facts) = extract_channel(received_global_facts)
-      val q = get_or_create_queue(global_fact_channels, channel)
-      if (!q.offer(facts))
-        error(s"more global facts messages arrived than requested (channel=$channel)")
+      offer_reply(global_fact_channels, channel, facts, "global facts")
       List()
     }
   }
@@ -116,9 +126,17 @@ object Repl_ML_Communication {
 
     def apply(received_results: List[String]): List[String] = {
       val (channel, results) = extract_channel(received_results)
-      val q = get_or_create_queue(sledgehammer_channels, channel)
-      if (!q.offer(results))
-        error(s"more sledgehammer messages arrived than requested (channel=$channel)")
+      offer_reply(sledgehammer_channels, channel, results, "sledgehammer")
+      List()
+    }
+  }
+
+  object In_Proof_Function extends Scala.Fun_Strings("add_in_proof") {
+    val here = Scala_Project.here
+
+    def apply(received_in_proof: List[String]): List[String] = {
+      val (channel, in_proof) = extract_channel(received_in_proof)
+      offer_reply(in_proof_channels, channel, in_proof, "in_proof")
       List()
     }
   }
@@ -163,6 +181,14 @@ object Repl_ML_Communication {
     if (result == null) error(s"Timeout waiting for sledgehammer message (channel=$channel)")
     result
   }
+  def waiting_for_in_proof_message[T](block: => T, channel: String = DEFAULT_CHANNEL): List[String] = {
+    val q = get_or_create_queue(in_proof_channels, channel)
+    q.clear()   // discard any stale message
+    block
+    val result = q.poll(SUBGOALS_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+    if (result == null) error(s"Timeout waiting for in_proof message (channel=$channel)")
+    result
+  }
 }
 
 
@@ -171,5 +197,6 @@ class Scala_Functions
       Repl_ML_Communication.Open_Subgoals_Function,
       Repl_ML_Communication.Local_Facts_Function,
       Repl_ML_Communication.Global_Facts_Function,
-      Repl_ML_Communication.Sledgehammer_Results_Function
+      Repl_ML_Communication.Sledgehammer_Results_Function,
+      Repl_ML_Communication.In_Proof_Function
     )

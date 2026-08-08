@@ -54,6 +54,7 @@ class SessionExecutionError(BaseModel):
 class ProofState(BaseModel):
     subgoals: List[str]
     proof_finished: bool
+    pending_qed: bool = False
     current_theory: str
 
 

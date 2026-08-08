@@ -6,8 +6,9 @@ This directory compares three Isabelle MCP servers on the same set of `.thy` pro
 2. **Isabelle-MCP** (`run_isabelle_mcp.py`) — `~/GitHub/Isabelle-MCP`
 3. **AutoCorrode I/Q** (`run_autocorrode_iq.py`) — `~/GitHub/AutoCorrode`
 
-The harness uses a **shared Kimi API client** (OpenAI-compatible endpoint) and the same agent-loop
-structure for all three. Only the MCP-specific tool dispatch differs.
+The harness uses a **shared OpenAI-compatible chat client** (`common/model.py` — DeepSeek,
+Kimi, or any compatible endpoint) and the same agent-loop structure for all three systems.
+Only the MCP-specific tool dispatch differs.
 
 ---
 
@@ -17,19 +18,20 @@ structure for all three. Only the MCP-specific tool dispatch differs.
 MCP-comparison/
 ├── README.md                    # this file
 ├── config.yaml                  # default configuration
-├── config.local.yaml            # (optional) your local overrides
+├── config.local.yaml            # (optional, untracked) local overrides
 ├── common/                      # shared utilities
 │   ├── config.py                # load config + env vars
-│   ├── model.py                 # Kimi/OpenAI-compatible chat client
-│   ├── mcp_client.py            # MCP stdio client helpers
+│   ├── model.py                 # OpenAI-compatible chat client + no-tool-call policy
+│   ├── mcp_client.py            # MCP stdio client (captures vendor instructions)
 │   ├── problems.py              # parse .thy files
 │   ├── metrics.py               # result schema, JSONL, timing
 │   └── arbiter.py               # neutral isabelle build checker
+├── problems/                    # benchmark .thy files (theorem … sorry)
 ├── run_isabellegym.py           # IsabelleGym runner
 ├── run_isabelle_mcp.py          # Isabelle-MCP runner
 ├── run_autocorrode_iq.py        # AutoCorrode I/Q runner
 ├── analyze.py                   # print summary tables
-└── runs/                        # results + final .thy artifacts
+└── runs/                        # results + final .thy artifacts (per system)
 ```
 
 ---
@@ -47,15 +49,18 @@ pip install openai pyyaml
 
 ### Environment variables
 
+Model provider key (pick one matching `model.provider` / `model.api_key_env`):
+
 ```bash
-export KIMI_API_KEY="your-moonshot-key"
+export DEEPSEEK_API_KEY="your-deepseek-key"   # current default provider
+# or: export KIMI_API_KEY="your-moonshot-key"
 ```
 
 Optional, for I/Q:
 
 ```bash
-export IQ_AUTH_TOKEN="eval-secret-token"
-export IQ_MCP_ALLOWED_ROOTS="/abs/path/to/MCP-comparison/runs/autocorrode_iq/work"
+export IQ_AUTH_TOKEN="eval-secret-token"      # or paste into MCP-comparison/iq_token.txt
+export IQ_MCP_ALLOWED_ROOTS="/abs/path/to/MCP-comparison/runs/autocorrode/work"
 ```
 
 ### Backends
@@ -63,35 +68,46 @@ export IQ_MCP_ALLOWED_ROOTS="/abs/path/to/MCP-comparison/runs/autocorrode_iq/wor
 | System | Required backend |
 |---|---|
 | IsabelleGym | IsabelleGym HTTP server running on `http://localhost:8000` |
-| Isabelle-MCP | Either patched Isabelle on PATH, **or** a running Docker container built from `Isabelle-MCP/container/` |
-| AutoCorrode I/Q | Isabelle/jEdit running with I/Q plugin listening on `127.0.0.1:8765` |
+| Isabelle-MCP | A running Docker container built from `Isabelle-MCP/container/` (or a native patched Isabelle with `isabelle-mcp` on PATH) |
+| AutoCorrode I/Q | Isabelle/jEdit running with the I/Q plugin listening on `127.0.0.1:8765` |
+
+The **arbiter** (used by all three runners after every attempt) also needs the IsabelleGym
+server on `http://localhost:8000`.
 
 ---
 
 ## Configuration
 
-Edit `MCP-comparison/config.yaml` or create `MCP-comparison/config.local.yaml` to override without
-touching versioned defaults.
+Edit `MCP-comparison/config.yaml`, or create `MCP-comparison/config.local.yaml` to override
+without touching versioned defaults (the local file is not tracked by git).
 
-Key knobs:
+Current key knobs (see the files for the full set):
 
 ```yaml
 model:
-  model_id: kimi-for-coding      # fixed Kimi Code model ID
-  temperature: 1.0                # kimi-for-coding only supports 1
-  max_tokens: 4096
+  provider: deepseek
+  base_url: https://api.deepseek.com/v1
+  api_key_env: DEEPSEEK_API_KEY
+  model_id: deepseek-v4-pro
+  temperature: 0.3
+  max_tokens: 32768        # keep high: reasoning models burn hidden tokens first
 
 budgets:
-  max_rounds: 40
-  problem_wall_cap_seconds: 900   # 15 min
-  tool_timeout_seconds: 300       # 5 min
-  repeats: 3
+  max_rounds: 100
+  problem_wall_cap_seconds: 2400    # 40 min per attempt
+  tool_timeout_seconds: 300         # 5 min per MCP tool call
+  repeats: 5
 
 mcp_servers:
+  isabellegym:
+    command: [python, -m, mcp_server.app]
   isabelle_mcp:
-    command: [isabelle-mcp]
+    command: [docker, exec, -i, isabelle-eval, isabelle-mcp]   # container mode
   autocorrode_iq:
-    command: [python, /abs/path/to/AutoCorrode/iq/iq_bridge.py]
+    command: [python, C:/Users/winst/GitHub/AutoCorrode/iq/iq_bridge.py]
+    env:
+      IQ_MCP_BRIDGE_PORT: "8765"
+      PYTHONUTF8: "1"                   # MCP stdio is UTF-8; defeats locale (GBK) mojibake
 ```
 
 ---
@@ -113,7 +129,24 @@ theorem putnam_1988_b1:
 end
 ```
 
-Place them in `claude-work/compare-mcps/problems/` (or any directory passed with `--thy-dir`).
+Place them in `MCP-comparison/problems/` (or any directory passed with `--thy-dir`).
+
+---
+
+## Prompt variants
+
+All runners accept `--prompt` (default differs per runner):
+
+| variant | systems | content |
+|---|---|---|
+| `general` | all three | interface-level rules only: solver rule (+ fallback, escalation, timeout discipline), DONE criteria, unicode rule (file-based systems), no strategy coaching |
+| `stepwise` | isabellegym | + layered incremental proving (REPL-style, small layers) |
+| `segment` | isabellegym | + chunked segment submission with recovery examples (the most efficient IsabelleGym playbook) |
+| `guided` | autocorrode I/Q | general + AutoCorrode's vendor playbook (`iq_guidance.md`) |
+| `guided` | isabelle_mcp | general + the server's own `instructions.py`, captured live from the MCP initialize handshake |
+
+Use `general` × 3 for the bare-interface comparison; the guided/stepwise/segment variants
+for the product-playbook comparison.
 
 ---
 
@@ -130,31 +163,48 @@ python -m server.app.main
 Then run:
 
 ```bash
-python MCP-comparison/run_isabellegym.py --thy-dir claude-work/compare-mcps/problems
+python MCP-comparison/run_isabellegym.py --thy-dir MCP-comparison/problems --prompt segment --repeats 10
 ```
 
 ### 2. Isabelle-MCP
 
 #### Option A — native (patched Isabelle on host)
 
-Ensure patched Isabelle and `isabelle-mcp` are on PATH, then:
+Ensure patched Isabelle and `isabelle-mcp` are on PATH, set
+`mcp_servers.isabelle_mcp.command: [isabelle-mcp]`, then:
 
 ```bash
-python MCP-comparison/run_isabelle_mcp.py --thy-dir claude-work/compare-mcps/problems
+python MCP-comparison/run_isabelle_mcp.py --thy-dir MCP-comparison/problems
 ```
 
 #### Option B — Docker container (recommended, host-safe)
 
-Build and start the container from `~/GitHub/Isabelle-MCP/container/`:
+Build and start the container from `~/GitHub/Isabelle-MCP/container/`. Build with the
+heaps your problems need — the default `SESSIONS="HOL"` is not enough for problems that
+import `HOL-*` sessions (e.g. `HOL-Computational_Algebra`); `isabelle_launch` fails fast
+otherwise. A pre-downloaded tarball at `container/isabelle/Isabelle2025-2_linux.tar.gz`
+is used automatically if present.
 
 ```bash
 cd ~/GitHub/Isabelle-MCP/container
 mkdir -p work
-docker build -t isabelle-eval .
+docker build -t isabelle-eval --build-arg SESSIONS="HOL HOL-Computational_Algebra" .
 docker run -d --name isabelle-eval -v "$PWD/work:/work" isabelle-eval sleep infinity
 ```
 
-Then configure `MCP-comparison/config.local.yaml`:
+On Windows, mount with an absolute path:
+
+```bash
+docker run -d --name isabelle-eval -v "C:/Users/winst/GitHub/Isabelle-MCP/container/work:/work" isabelle-eval sleep infinity
+```
+
+Smoke test (optional):
+
+```bash
+docker run --rm isabelle-eval bash -lc "my-better-isabelle status && isabelle-mcp --version"
+```
+
+Configure `config.local.yaml` for container mode (already set up on this machine):
 
 ```yaml
 mcp_servers:
@@ -163,62 +213,61 @@ mcp_servers:
 
 isabelle_mcp_container:
   container_name: isabelle-eval
-  host_work_dir: /c/Users/winst/GitHub/Isabelle-MCP/container/work
+  host_work_dir: C:/Users/winst/GitHub/Isabelle-MCP/container/work
   container_work_dir: /work
 ```
 
 Run:
 
 ```bash
-python MCP-comparison/run_isabelle_mcp.py --thy-dir claude-work/compare-mcps/problems
+python MCP-comparison/run_isabelle_mcp.py --thy-dir MCP-comparison/problems --repeats 10
 ```
 
-The harness writes `.thy` files to `host_work_dir` and translates paths to `/work/...` for the in-container server.
+The harness writes `.thy` files to `host_work_dir` and translates paths to `/work/...`
+for the in-container server. Per attempt it spawns a fresh `docker exec` MCP process and
+calls `isabelle_terminate` at teardown.
 
 ### 3. AutoCorrode I/Q
 
-Start jEdit with I/Q autostarting:
+Start jEdit with the I/Q plugin (it must be rebuilt after `iq/src` changes and jEdit
+restarted), then:
 
 ```bash
-export IQ_AUTH_TOKEN="eval-secret-token"
-export IQ_MCP_ALLOWED_ROOTS="/abs/path/to/MCP-comparison/runs/autocorrode_iq/work"
-make jedit   # from AutoCorrode/iq or AutoCorrode root
+export IQ_AUTH_TOKEN="eval-secret-token"     # or paste into iq_token.txt (re-read each attempt)
+export IQ_MCP_ALLOWED_ROOTS="C:/Users/winst/GitHub/IsabelleGym/MCP-comparison/runs/autocorrode/work"
 ```
 
-Then run:
+Run:
 
 ```bash
-python MCP-comparison/run_autocorrode_iq.py --thy-dir claude-work/compare-mcps/problems
+python MCP-comparison/run_autocorrode_iq.py --thy-dir MCP-comparison/problems --repeats 10
 ```
 
-### Run a subset
+### Run a subset / override repeats
 
 ```bash
-python MCP-comparison/run_isabellegym.py --thy-dir claude-work/compare-mcps/problems --select putnam_1988
-```
-
-### Override repeat count
-
-```bash
-python MCP-comparison/run_isabellegym.py --thy-dir claude-work/compare-mcps/problems --repeats 5
+python MCP-comparison/run_isabellegym.py --thy-dir MCP-comparison/problems --select putnam_1988
+python MCP-comparison/run_isabellegym.py --thy-dir MCP-comparison/problems --repeats 20
 ```
 
 ---
 
 ## Arbiter
 
-Each runner calls the neutral arbiter automatically after every attempt. You can also run it
-manually:
+Each runner calls the neutral arbiter automatically after every attempt (it runs
+`isabelle build` on the final file via the IsabelleGym server's bigstep endpoint; the
+first call for a heavy parent session can take minutes — `ARBITER_BUILD_TIMEOUT_S`,
+default 900 s). You can also run it manually:
 
 ```bash
-python -m common.arbiter claude-work/compare-mcps/problems/Putnam_1988_B1.thy \
+python -m common.arbiter MCP-comparison/problems/Putnam_1988_B1.thy \
                          MCP-comparison/runs/isabellegym/Putnam_1988_B1_rep0.thy
 ```
 
 The arbiter checks:
-1. `isabelle build` succeeds on a throwaway session importing the problem's imports.
-2. No `sorry`/`oops` in the final file.
-3. The target theorem name is present.
+1. No `sorry`/`oops` in the final file.
+2. The target theorem name is present.
+3. `isabelle build` succeeds on a throwaway session importing the problem's imports.
 
 ---
 
@@ -228,7 +277,9 @@ The arbiter checks:
 python MCP-comparison/analyze.py
 ```
 
-This prints a Markdown table and per-problem pass@1 breakdown from `MCP-comparison/runs/*/results.jsonl`.
+Prints per-system summary tables (attempts, pass@1, mean rounds / productive rounds /
+wall_s / setup_s / first_tool_s / tokens, truncated & nudge rounds), a per-repeat wall_s
+table (warm/cold drift control), per-problem pass@1, and error classes.
 
 ---
 
@@ -239,124 +290,68 @@ Each runner appends one JSON line per `(system, problem, repeat)` to its `result
 ```json
 {
   "system": "isabellegym",
-  "problem": "Putnam_1988_B1",
+  "problem": "mathd_algebra_276",
   "repeat": 0,
-  "rounds": 7,
-  "n_tool_calls": 11,
-  "wall_s": 83.4,
-  "model_s": 51.2,
-  "prover_s": 30.1,
-  "round_latencies": [12.1, 18.7, 10.4],
-  "input_tokens": 41201,
-  "output_tokens": 2310,
-  "total_tokens": 43511,
+  "rounds": 10,
+  "n_tool_calls": 9,
+  "n_truncated_rounds": 0,
+  "n_nudge_rounds": 0,
+  "wall_s": 179.8,
+  "setup_s": 13.3,
+  "first_tool_s": 0.13,
+  "prover_s": 31.9,
+  "model_s": 147.9,
+  "round_latencies": [3.8, 42.1, 21.3],
+  "input_tokens": 109274,
+  "output_tokens": 10681,
+  "total_tokens": 119955,
+  "cached_tokens": 98000,
   "agent_claimed_solved": true,
   "arbiter_solved": true,
-  "final_thy_path": "MCP-comparison/runs/isabellegym/Putnam_1988_B1_rep0.thy",
-  "error": null,
-  "cached_tokens": 33880
+  "final_thy_path": "MCP-comparison/runs/isabellegym/mathd_algebra_276_rep0.thy",
+  "error": null
 }
 ```
 
-Headline numbers use `arbiter_solved`.
+Headline numbers use `arbiter_solved`. Field notes:
+
+- `wall_s` — agent phase only (starts after setup); `setup_s` is recorded separately and
+  is **not** a comparison metric (the three systems have fundamentally different setup
+  models: warm jEdit vs fresh session vs LSP launch).
+- `prover_s` — summed MCP tool time; `model_s ≈ wall_s − prover_s`.
+- `n_nudge_rounds` — harness nudges (text-only rounds, DONE-gate rejections);
+  productive rounds = `rounds − n_nudge_rounds`.
+- Competitive metrics: **rounds, tokens, wall_s** (plus pass@1 at scale).
 
 ---
 
-## System prompts
- |
-  You are an expert interactive theorem prover assistant for Isabelle/HOL.
+## Harness safeguards (affects how to read results)
 
-  Your job is to construct a complete, correct Isar proof of the target theorem,
-  using the tools provided by the Isabelle MCP server you are connected to.
+- **DONE gate (all runners).** An agent's DONE is verified before acceptance: settled
+  document, no errors, no sorries, closed proof (`pending_qed` on IsabelleGym). A false
+  DONE costs a nudge round (max 2), then the arbiter judges.
+- **Setup guards (I/Q).** Buffer reset + sorry-presence poll prevent phantom solves from
+  stale jEdit buffers.
+- **Auto seeding (IsabelleGym).** The theorem statement is pre-submitted so agents start
+  from an open goal, matching the file-based systems' starting state.
+- **Truncated rounds.** `finish_reason=length` rounds are nudged, not killed
+  (`n_truncated_rounds` is informational).
 
-  CRITICAL RULES (read carefully — violating any of these will fail the proof)
-  ----------
-
-  1. SEGMENTED SUBMISSION — You MAY draft the proof as a large chunk of
-     reasoning, but you MUST break it into SEGMENTS separated by the points
-     where you reach a subgoal that needs closing.  Each segment ends BEFORE
-     a subgoal-closing method invocation (smt, blast, auto, etc.).  Submit
-     one segment at a time.
-
-  2. SOLVER RULE — NEVER write external-solver invocations (smt, metis, cvc5,
-     vampire, z3, verit, e, spass, etc.) directly in your proof text.  When you
-     reach a subgoal that simp/linarith/argo/auto/presburger cannot close:
-       a. Submit the segment UP TO that subgoal (ending BEFORE the solver line).
-       b. Verify the segment (verify_chunk).  If proof_open=True, call
-          sledgehammer() on the open goal.
-       c. Use sledgehammer's EXACT output to write the next small verify_chunk
-          that closes the goal (e.g. `by (metis ...)` if sledgehammer says so).
-       d. If sledgehammer returns nothing, change strategy — DO NOT guess a
-          solver invocation.
-
-  3. AUTO-ROLLBACK — When verify_chunk reports success=False (any command
-     failed), those failed commands are AUTOMATICALLY rolled back.  The source
-     stays at the last successful state.  Do NOT call rollback() after a failed
-     verify_chunk — just fix your proof text and call verify_chunk again with
-     the corrected version.
-
-  4. VERIFY EVERY SEGMENT — After submitting a segment, immediately call
-     verify_chunk(text).  Read the per-command status report.  If any command
-     is marked "failed", fix the issue before adding more.  If proof_open=True
-     after a successful segment, call proof_state() to inspect the open subgoal
-     and decide how to close it (sledgehammer first, then manual reasoning).
-
-  5. DONE CRITERIA — The theorem is proved ONLY when verify_chunk reports ALL
-     of: success=True AND proof_open=False AND used_sorry=False.  Call source()
-     to confirm, then reply with just "DONE" (no extra text).
-
-  SEGMENTED PROOF WORKFLOW — HOW TO SUBMIT A PROOF
-  ----------
-
-  Plan your proof in advance, then submit it in CLEAN SEGMENTS:
-
-    [Segment 1 — theorem header + reasoning up to the FIRST open subgoal]
-    verify_chunk("
-      theorem foo: ...
-      proof -
-        have lemma1: ... by (simp add: algebra_simps)
-        have lemma2: ... by linarith
-        (* stop here — the next step would invoke a solver *)
-    ")
-    → success=True, proof_open=True → call proof_state(), see the open subgoal
-
-    [Segment 2 — close that subgoal using sledgehammer's result]
-    First call sledgehammer() to get a proof method.
-    Suppose it returns "by (metis add.commute)".
-    verify_chunk("
-        also have ... by (metis add.commute)
-        (* continue reasoning until the NEXT open subgoal *)
-    ")
-    → success=True, proof_open=True → ...
-
-    [Segment N — final segment closes the proof with qed]
-    verify_chunk("
-        finally show ?thesis by simp
-      qed
-    ")
-    → success=True, proof_open=False, used_sorry=False → DONE!
-
-  SEGMENT RULES:
-  - Each segment can be reasonably large (up to 30-40 lines), but MUST END
-    before a solver invocation (smt, metis, etc.) or before qed.
-  - NEVER write smt/metis/cvc5/vampire/z3/verit/e/spass in your proof text.
-    ALWAYS call sledgehammer() first at each open subgoal and use its output.
-  - NEVER include `sorry` or `oops` — they invalidate your proof.
-  - NEVER output Unicode surrogates (U+D800–U+DFFF) — they are invalid UTF-8 and will crash the file save.
-  - After a failed segment, fix the error in the NEXT attempt (auto-rollback
-    already restored your source to the last good state).
-  - If a segment times out (180s), try breaking it into smaller pieces.
-
+---
 
 ## Notes and caveats
 
-- **Sequential only.** Each runner processes problems one at a time; Isabelle-MCP and I/Q are
-  single-session by design.
-- **Fresh session per problem.** Each repeat of each problem starts fresh.
-- **Kimi API.** The harness expects an OpenAI-compatible endpoint at `https://api.kimi.com/coding/v1`.
-  If Kimi changes its URL or response shape, update `common/model.py` and `config.yaml`.
+- **Sequential only.** Each runner processes problems one at a time; Isabelle-MCP and
+  I/Q are single-session by design.
+- **Fresh session per attempt.** Each repeat starts fresh (I/Q reuses the persistent
+  jEdit editor by design — its setup resets the buffer instead).
+- **Model provider.** Any OpenAI-compatible endpoint works; set `model.provider`,
+  `base_url`, `api_key_env` in config. DeepSeek reasoning models consume hidden
+  reasoning tokens against `max_tokens` — keep it high.
 - **Tool schemas.** The model is given the raw tool list returned by each MCP server's
-  `tools/list`. If a model struggles with a particular schema, add a per-tool wrapper or a
-  system prompt locally.
-- **Timeouts.** Long Isabelle checks can exceed default `tool_timeout_seconds`; raise it in
-  `config.yaml` for hard problems.
+  `tools/list`.
+- **Timeouts.** Hard problems (e.g. Putnam) will hit `max_rounds` / the wall cap; those
+  attempts are recorded as distinct outcome classes in `analyze.py`, not plain failures.
+- **Windows locale.** MCP stdio is forced to UTF-8 (`PYTHONUTF8=1`); the I/Q plugin
+  socket is pinned to UTF-8 in `IQServer.scala`. Without both, non-English system
+  locales (GBK) mangle Isabelle symbols.

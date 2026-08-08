@@ -71,6 +71,18 @@ object Document_Utils {
     node_snapshot
   }
 
+  /** Wait until EVERY command in the node is consolidated (maybe_consolidated or
+   *  consolidated). Used as a sequencing barrier after ML probes: the probe's
+   *  channel reply arrives DURING the probe command's evaluation, so discarding
+   *  the probe immediately can cancel its remainder and race the NEXT probe's
+   *  evaluation (stale state -> empty results, or a canceled probe -> blind
+   *  channel timeout). Awaiting consolidation before the discard serialises
+   *  consecutive probes. */
+  def await_all_processed(session: Headless.Session, node_name: Document.Node.Name): Unit = {
+    stable_node_snapshot(session, node_name)
+    ()
+  }
+
   def output_node_results(
       session: Headless.Session,
       node_name: Document.Node.Name,

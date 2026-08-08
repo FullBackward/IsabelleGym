@@ -175,8 +175,16 @@ class _Isabelle_Session(BigStepMixin):
         subgoals = self._call_backend(lambda: list(self.backend.raw.open_subgoals()), timeout=timeout)
         return [s.strip() for s in subgoals]
 
+    def in_proof(self, timeout: Optional[float] = None) -> bool:
+        """True while the toplevel is inside a proof block — including after a
+        successful terminal `show` with `qed` still pending. This is the "proof
+        not registered yet" signal; bare subgoal counting misses the
+        discharged-but-unclosed state (batch builds reject it with
+        "Goal present in this block")."""
+        return bool(self._call_backend(lambda: self.backend.raw.in_proof(), timeout=timeout))
+
     def proof_finished(self, timeout: Optional[float] = None) -> bool:
-        return len(self.open_subgoals(timeout=timeout)) == 0
+        return not self.in_proof(timeout=timeout)
 
     def get_source(self, timeout: Optional[float] = None):
         return self._call_backend(lambda: self.backend.raw.get_source(), timeout=timeout)
@@ -463,11 +471,13 @@ class _Isabelle_Session(BigStepMixin):
             with logging_context(session_id=self.session_id, field=self.field):
                 try:
                     subgoals = self.open_subgoals(timeout=timeout)
+                    block_open = self.in_proof(timeout=timeout)
                     current_thy = self.current_thy
-                    logger.debug("proof state fetched subgoals=%s current_theory=%s", len(subgoals), current_thy)
+                    logger.debug("proof state fetched subgoals=%s block_open=%s current_theory=%s", len(subgoals), block_open, current_thy)
                     return ProofState(
                         subgoals=subgoals,
-                        proof_finished=len(subgoals) == 0,
+                        proof_finished=not block_open,
+                        pending_qed=block_open and not subgoals,
                         current_theory=current_thy,
                     )
                 except Exception as e:
