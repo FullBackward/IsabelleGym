@@ -59,6 +59,12 @@ class _Isabelle_Session(BigStepMixin):
         self.command_history: List[Dict[str, Any]] = []
         self.checkpoints: Dict[int, float] = {}
         self.verified_theories: List[str] = []
+        # Report of the most recent verify_chunk call (None until the first
+        # one). Cleared by load_document; NOT by rollback/restore.
+        self.last_chunk_report: Optional[Dict[str, Any]] = None
+        # Free-form observability label (e.g. the file path a file-synced
+        # client is mirroring). Set at creation; no pooling behavior change.
+        self.label: Optional[str] = None
 
         self._closed = False
         self.entered_thy = ""
@@ -175,6 +181,18 @@ class _Isabelle_Session(BigStepMixin):
         subgoals = self._call_backend(lambda: list(self.backend.raw.open_subgoals()), timeout=timeout)
         return [s.strip() for s in subgoals]
 
+    def local_facts(self, timeout: Optional[float] = None) -> List[str]:
+        """Read-only probe: facts in the current local proof context (transient,
+        leaves the document and rollback chain untouched)."""
+        facts = self._call_backend(lambda: list(self.backend.raw.local_facts()), timeout=timeout)
+        return [str(f) for f in facts]
+
+    def global_facts(self, limit: int = 100, timeout: Optional[float] = None) -> List[str]:
+        """Read-only probe: theory-level facts, sorted by name, capped at ``limit``
+        (transient, leaves the document and rollback chain untouched)."""
+        facts = self._call_backend(lambda: list(self.backend.raw.global_facts(limit)), timeout=timeout)
+        return [str(f) for f in facts]
+
     def in_proof(self, timeout: Optional[float] = None) -> bool:
         """True while the toplevel is inside a proof block — including after a
         successful terminal `show` with `qed` still pending. This is the "proof
@@ -262,6 +280,157 @@ class _Isabelle_Session(BigStepMixin):
                 raise SessionError(
                     error=f"theory header failed: {self._result_error(hdr)}", execution_time=0.0)
         return result
+
+    def _reset_bookkeeping(self) -> None:
+        """Clear all per-session Python-side bookkeeping after a backend reset."""
+        self.command_history.clear()
+        self.checkpoints.clear()
+        self.verified_theories.clear()
+        self.entered_thy = ""
+        self.last_chunk_report = None
+
+    @staticmethod
+    def _ends_with_theory_end(text: str) -> bool:
+        """True when the document's last non-empty line is theory `end` — in which
+        case state probes (in_proof/open_subgoals) must be skipped: a probe
+        appended past `end` never executes and the ML channel would time out."""
+        lines = [ln.strip() for ln in text.strip().splitlines() if ln.strip()]
+        return bool(lines) and lines[-1] == "end"
+
+    def _step_with_report(self, text: str, timeout: float):
+        """Issue ``text`` as one edit and return (success, error, output) together
+        with a per-command status report, WITHOUT rolling back ordinary failures
+        (backend ``step_chunk_report``; the dual of verify_chunk's transactional
+        semantics). The report is stored in ``last_chunk_report``. On budget
+        timeout the backend discards the edit to cancel runaway commands."""
+        budget_ms = int(max(0.0, timeout) * 1000)
+        probe_state = not self._ends_with_theory_end(text)
+        start_time = time.time()
+        # Backend bounds the work at budget_ms; give the Python call extra grace
+        # so the Python side never times out before the backend returns its report.
+        report_json = self._call_backend(
+            lambda: self.backend.raw.step_chunk_report(text, budget_ms, probe_state),
+            timeout=timeout + Timeouts.COMMAND_DEFAULT,
+        )
+        execution_time = time.time() - start_time
+        try:
+            report = json.loads(report_json) if report_json else {}
+        except (ValueError, TypeError):
+            report = {"timed_out": False, "commands": [],
+                      "error": "unparseable backend report"}
+        self.last_chunk_report = {
+            "report": report,
+            "execution_time": execution_time,
+            "timestamp": start_time,
+        }
+        commands = report.get("commands", []) or []
+        success = bool(report.get("success", False))
+        error_message = report.get("error")
+        if not error_message and not success:
+            if report.get("timed_out"):
+                stuck = next((c.get("line") for c in commands if c.get("status") == "running"), None)
+                error_message = f"timed out (still running at line {stuck})" if stuck else "timed out"
+            else:
+                for c in commands:
+                    msg = next(
+                        (m.get("text") for m in (c.get("messages") or []) if m.get("sev") == "error"),
+                        None,
+                    )
+                    if msg:
+                        error_message = f"line {c.get('line')}: {msg}"
+                        break
+        return success, error_message, ""
+
+    def load_document(self, text: str, thy_name: Optional[str] = None,
+                      imports: Optional[List[str]] = None,
+                      timeout: float = Timeouts.COMMAND_DEFAULT,
+                      report: bool = False) -> SmallStepExecuteResult:
+        """Replace the session's whole document with ``text`` (the file-sync primitive).
+
+        Resets the backend (the document model is append-only, so wholesale
+        replacement = fresh Repl_Session), clears all bookkeeping, then re-enters
+        the theory and issues ``text`` as a single edit. Two modes, mirroring
+        ``enter_thy``: if ``imports`` is given the server builds the
+        ``theory ... begin`` header and ``text`` is the body after ``begin``;
+        otherwise ``text`` must be a full .thy source including its own header
+        (the file-sync case), and ``thy_name`` defaults to the header's name.
+
+        With ``report=True`` the text is issued via the backend's
+        ``step_chunk_report``: a per-command status report (same shape as
+        verify_chunk's) is produced and stored in ``last_chunk_report``, WITHOUT
+        rolling back ordinary failures (LSP-style: broken state stays for
+        inspection). On budget timeout the backend still discards the edit to
+        cancel runaway commands.
+        """
+        self.update_activity()
+        self._acquire_request()
+        start_time = time.time()
+        try:
+            with logging_context(session_id=self.session_id, field=self.field):
+                logger.info(
+                    "load_document started thy_name=%s imports=%s report=%s preview=%s",
+                    thy_name, imports, report, preview_text(text, Logging.COMMAND_PREVIEW_CHARS),
+                )
+                try:
+                    self._call_backend(lambda: self.backend.raw.reset(), timeout=timeout)
+                    self._reset_bookkeeping()
+
+                    name = thy_name
+                    if not name and not imports:
+                        m = RegularExp.THEORY_RE.search(text)
+                        if m:
+                            name = m.group(1) or m.group(2)
+                    if not name:
+                        raise SessionError(
+                            error="load_document: could not determine theory name — "
+                                  "pass thy_name, or include a 'theory ... imports ... begin' "
+                                  "header in text",
+                            execution_time=time.time() - start_time,
+                        )
+
+                    self.enter_thy(name, timeout=timeout, imports=imports)
+                    if report:
+                        success, error_message, output = self._step_with_report(text, timeout)
+                    else:
+                        result = self.step(text, timeout=timeout)
+                        success = is_syntax_successful(result)
+                        error_message = self._result_error(result)
+                        output = self._result_output(result)
+                    execution_time = time.time() - start_time
+                except SessionError:
+                    raise  # already typed (e.g. SessionNotFound) — keep its HTTP mapping
+                except Exception as e:
+                    execution_time = time.time() - start_time
+                    msg = f"{type(e).__name__}"
+                    if str(e):
+                        msg += f": {str(e)}"
+                    logger.exception("load_document backend call failed: %s", msg)
+                    raise SessionError(error=msg, execution_time=execution_time) from None
+
+                self.command_history.append(
+                    {
+                        "type": "document_load",
+                        "command": preview_text(text, Logging.COMMAND_PREVIEW_CHARS),
+                        "timestamp": start_time,
+                        "success": success,
+                        "subgoal_error": None,
+                        "subgoals_count": 0,
+                    }
+                )
+                logger.info(
+                    "load_document finished theory=%s success=%s execution_time=%s",
+                    self.entered_thy, success, round(execution_time, 3),
+                )
+                return SmallStepExecuteResult(
+                    success=success,
+                    output=output,
+                    error=error_message if not success else None,
+                    subgoal_error=None,
+                    subgoals=[],
+                    execution_time=execution_time,
+                )
+        finally:
+            self._release_request()
 
     def _result_error(self, result) -> Optional[str]:
         return get_error_message(result)
@@ -453,6 +622,13 @@ class _Isabelle_Session(BigStepMixin):
                 except (ValueError, TypeError):
                     report = {"timed_out": False, "commands": [],
                               "error": "unparseable backend report"}
+                # Retain the report of the MOST RECENT verify_chunk call
+                # (success or failure) so it stays queryable after submission.
+                self.last_chunk_report = {
+                    "report": report,
+                    "execution_time": execution_time,
+                    "timestamp": start_time,
+                }
                 commands = report.get("commands", []) or []
                 logger.info(
                     "verify_chunk finished commands=%s timed_out=%s execution_time=%s",

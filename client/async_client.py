@@ -65,12 +65,15 @@ class IsabelleGymAsyncClient:
         self,
         theories: list[str] | None = None,
         field: str | None = "HOL",
+        label: str | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {}
         if theories is not None:
             payload["theories"] = theories
         if field is not None:
             payload["field"] = field
+        if label is not None:
+            payload["label"] = label
         response = await self._request("POST", BASE_URL, json_body=payload)
         response.raise_for_status()
         return response.json()
@@ -211,6 +214,57 @@ class IsabelleGymAsyncClient:
             json_body={"chunk": chunk, "timeout": budget},
             headers=self._lease_headers(lease_id),
             # client waits a bit beyond the server's wall budget (server bounds the work)
+            timeout=(budget + 60.0) if budget is not None else None,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def get_last_report(
+        self, session_id: str, *, lease_id: str | None = None,
+    ) -> dict[str, Any]:
+        """The retained report of the session's most recent ``verify_chunk`` call:
+        ``{report, execution_time, timestamp}``. Raises for HTTP 404 if no
+        ``verify_chunk`` has run yet (or ``load_document`` cleared it)."""
+        response = await self._request(
+            "GET", f"{BASE_URL}/{session_id}/last_report",
+            headers=self._lease_headers(lease_id),
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def load_document(  # pylint: disable=too-many-arguments
+        self,
+        session_id: str,
+        text: str,
+        *,
+        thy_name: str | None = None,
+        imports: list[str] | None = None,
+        timeout: float | None = None,
+        report: bool = False,
+        lease_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Replace the session's whole document with ``text`` (file-sync primitive).
+
+        Resets the backend document and all session bookkeeping, then re-enters
+        the theory and issues the text as one edit. If ``imports`` is given the
+        server builds the theory header and ``text`` is the body after ``begin``
+        (``thy_name`` required); otherwise ``text`` must be a full .thy source
+        including its own header and ``thy_name`` defaults to the header's name.
+
+        With ``report=True`` the response carries a per-command status report
+        (same shape as ``verify_chunk``; failures are NOT rolled back, so broken
+        state stays for inspection). The report is also retained server-side and
+        queryable via :meth:`get_last_report`.
+
+        Returns ``{success, theory, output, error, execution_time, report}``.
+        """
+        budget = timeout if timeout is not None else self.timeout
+        response = await self._request(
+            "PUT",
+            f"{BASE_URL}/{session_id}/document",
+            json_body={"text": text, "thy_name": thy_name, "imports": imports,
+                       "timeout": budget, "report": report},
+            headers=self._lease_headers(lease_id),
             timeout=(budget + 60.0) if budget is not None else None,
         )
         response.raise_for_status()
@@ -357,6 +411,30 @@ class IsabelleGymAsyncClient:
         """Theory source as the prover sees it: ``{source, theory}``."""
         response = await self._request(
             "GET", f"{BASE_URL}/{session_id}/source",
+            headers=self._lease_headers(lease_id),
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def get_local_facts(
+        self, session_id: str, *, lease_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Facts in the current local proof context: ``{facts, count}``.
+        Read-only transient probe — the proof script is untouched."""
+        response = await self._request(
+            "GET", f"{BASE_URL}/{session_id}/facts/local",
+            headers=self._lease_headers(lease_id),
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def get_global_facts(
+        self, session_id: str, *, limit: int = 100, lease_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Theory-level facts, sorted by name, capped at ``limit``: ``{facts, count}``.
+        Read-only transient probe — the proof script is untouched."""
+        response = await self._request(
+            "GET", f"{BASE_URL}/{session_id}/facts/global?limit={int(limit)}",
             headers=self._lease_headers(lease_id),
         )
         response.raise_for_status()

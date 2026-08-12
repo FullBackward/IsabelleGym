@@ -39,8 +39,24 @@ fix_settings_tree "$REPO_ROOT"
 fix_settings_tree "$CONTRIB_DIR"
 
 "$ISABELLE" components -u "$REPO_ROOT/repl/Admin"
-"$ISABELLE" component_py4j
-"$ISABELLE" component_spliff
+# component_py4j/component_spliff fail if the contrib directory already exists,
+# so when present we skip the download but still ensure the component is
+# REGISTERED (components -u is idempotent) — keeps this script safe to re-run
+# on a warm isabelle_user_data volume, e.g. from repl/Admin/container_init.sh.
+py4j_dir="$(ls -d "${CONTRIB_DIR}"/py4j* 2>/dev/null | head -1 || true)"
+if [[ -n "$py4j_dir" ]]; then
+  echo "py4j contrib already present, ensuring registration"
+  "$ISABELLE" components -u "$py4j_dir"
+else
+  "$ISABELLE" component_py4j
+fi
+spliff_dir="$(ls -d "${CONTRIB_DIR}"/spliff* 2>/dev/null | head -1 || true)"
+if [[ -n "$spliff_dir" ]]; then
+  echo "spliff contrib already present, ensuring registration"
+  "$ISABELLE" components -u "$spliff_dir"
+else
+  "$ISABELLE" component_spliff
+fi
 
 # IMPORTANT: fix newly created contrib settings again
 fix_settings_tree "$CONTRIB_DIR"

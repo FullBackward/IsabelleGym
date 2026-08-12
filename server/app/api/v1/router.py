@@ -4,7 +4,7 @@ import asyncio
 import time
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, Header, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
 from .schemas.API_models import (
@@ -17,7 +17,10 @@ from .schemas.API_models import (
     CommandStatus,
     DiagnosticRequest,
     DiagnosticResponse,
+    DocumentLoadRequest,
+    DocumentLoadResponse,
     EnterTheoryRequest,
+    FactsResponse,
     ProofStateResponse,
     SessionAcquireRequest,
     SessionAcquireResponse,
@@ -116,14 +119,16 @@ async def create_session(
     with logging_context(field=field or "default"):
         logger.info("creating session theories=%s", theories or [])
         session, lease_id = await session_manager.create_leased_session(theories=theories, field=field)
+        session.label = request.label
 
-        logger.info("session created session_id=%s lease_id=%s", session.session_id, lease_id)
+        logger.info("session created session_id=%s lease_id=%s label=%s", session.session_id, lease_id, request.label)
         return SessionResponse(
             session_id=str(session.session_id),
             created_at=session.created_at,
             theories=session.theories or [],
             status=session.status.value if hasattr(session.status, "value") else str(session.status),
             lease_id=lease_id,
+            label=session.label,
         )
 
 
@@ -205,6 +210,7 @@ async def get_session_info(session_id: str, x_lease_id: str | None = Header(None
             "verified_theories": session.verified_theories if hasattr(session, "verified_theories") else [],
             "in_use": session.in_use,
             "active_requests": session.active_request_count,
+            "label": session.label,
         }
 
 
@@ -291,6 +297,54 @@ async def verify_chunk(session_id: str, request: ChunkVerifyRequest, x_lease_id:
         )
 
 
+@router.put("/api/v1/sessions/{session_id}/document", response_model=DocumentLoadResponse)
+async def load_document(session_id: str, request: DocumentLoadRequest, x_lease_id: str | None = Header(None, alias="X-Lease-Id"), session_manager=Depends(get_session_manager)):
+    """Replace the session's whole document with ``text`` (the file-sync primitive
+    for read-only, file-mirroring clients). Resets the backend document and all
+    session bookkeeping, then re-enters the theory and issues the text as one
+    edit. See DocumentLoadRequest for the two header modes."""
+    with logging_context(session_id=session_id):
+        lease_id = _require_lease_id(x_lease_id)
+        session = session_manager.get_session(session_id, lease_id=lease_id, require_lease=True)
+        logger.info(
+            "load_document requested thy_name=%s imports=%s report=%s preview=%s",
+            request.thy_name,
+            request.imports,
+            request.report,
+            _preview(request.text, Logging.COMMAND_PREVIEW_CHARS),
+        )
+        result = await asyncio.to_thread(
+            session.load_document, request.text, request.thy_name, request.imports, request.timeout, request.report
+        )
+        logger.info(
+            "load_document finished success=%s execution_time=%s",
+            getattr(result, "success", False),
+            float(getattr(result, "execution_time", 0.0) or 0.0),
+        )
+        return DocumentLoadResponse(
+            success=getattr(result, "success", False),
+            theory=session.entered_thy,
+            output=getattr(result, "output", None),
+            error=getattr(result, "error", None),
+            execution_time=float(getattr(result, "execution_time", 0.0) or 0.0),
+            report=(session.last_chunk_report or {}).get("report") if request.report else None,
+        )
+
+
+@router.get("/api/v1/sessions/{session_id}/last_report")
+async def get_last_report(session_id: str, x_lease_id: str | None = Header(None, alias="X-Lease-Id"), session_manager=Depends(get_session_manager)):
+    """The retained report of the session's MOST RECENT verify_chunk call
+    (success or failure). 404 until the first verify_chunk. Cleared by
+    load_document; NOT cleared by rollback/restore."""
+    with logging_context(session_id=session_id):
+        lease_id = _require_lease_id(x_lease_id)
+        session = session_manager.get_session(session_id, lease_id=lease_id, require_lease=True)
+        if session.last_chunk_report is None:
+            raise HTTPException(status_code=404, detail="no verify_chunk report yet for this session")
+        logger.debug("returning last verify_chunk report")
+        return session.last_chunk_report
+
+
 @router.post("/api/v1/sessions/{session_id}/diagnostic", response_model=DiagnosticResponse)
 async def run_diagnostic(session_id: str, request: DiagnosticRequest, x_lease_id: str | None = Header(None, alias="X-Lease-Id"), session_manager=Depends(get_session_manager)):
     """Run a single READ-ONLY diagnostic command (thm, term, find_theorems, print_*, ...)
@@ -358,6 +412,30 @@ async def get_subgoals(session_id: str, x_lease_id: str | None = Header(None, al
             "count": len(subgoals),
             "proof_finished": state.proof_finished,
         }
+
+
+@router.get("/api/v1/sessions/{session_id}/facts/local", response_model=FactsResponse)
+async def get_local_facts(session_id: str, x_lease_id: str | None = Header(None, alias="X-Lease-Id"), session_manager=Depends(get_session_manager)):
+    """Read-only probe: facts in the current local proof context. Transient —
+    the proof script, rollback chain, and command history are untouched."""
+    with logging_context(session_id=session_id):
+        lease_id = _require_lease_id(x_lease_id)
+        session = session_manager.get_session(session_id, lease_id=lease_id, require_lease=True)
+        facts = await asyncio.to_thread(session.local_facts)
+        logger.debug("returning %s local facts", len(facts))
+        return FactsResponse(facts=facts, count=len(facts))
+
+
+@router.get("/api/v1/sessions/{session_id}/facts/global", response_model=FactsResponse)
+async def get_global_facts(session_id: str, limit: int = Query(100, ge=1, le=1000), x_lease_id: str | None = Header(None, alias="X-Lease-Id"), session_manager=Depends(get_session_manager)):
+    """Read-only probe: theory-level facts, sorted by name, capped at ``limit``.
+    Transient — the proof script, rollback chain, and command history are untouched."""
+    with logging_context(session_id=session_id):
+        lease_id = _require_lease_id(x_lease_id)
+        session = session_manager.get_session(session_id, lease_id=lease_id, require_lease=True)
+        facts = await asyncio.to_thread(session.global_facts, limit)
+        logger.debug("returning %s global facts (limit=%s)", len(facts), limit)
+        return FactsResponse(facts=facts, count=len(facts))
 
 
 @router.get("/api/v1/sessions/{session_id}/source")
@@ -510,8 +588,6 @@ async def execute_big_step(request: BigStepTheoryRequest, session_manager=Depend
         subgoals=result.subgoals,
         execution_time=result.execution_time,
         mode=result.mode,
-        diagnostics=result.diagnostics,
-        failure_location=result.failure_location,
         theory_verified=result.theory_verified,
     )
 

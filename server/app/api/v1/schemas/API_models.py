@@ -1,6 +1,6 @@
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from server.app.core.config import Timeouts
 from server.app.core.diagnostic_guard import validate_diagnostic_command
 
@@ -8,6 +8,12 @@ from server.app.core.diagnostic_guard import validate_diagnostic_command
 class SessionCreateRequest(BaseModel):
     theories: List[str] | None = None
     field: str | None = None
+    label: str | None = Field(
+        default=None,
+        description="Free-form observability label (e.g. the file path a "
+                    "file-synced client is mirroring). Echoed in session info; "
+                    "no pooling behavior change.",
+    )
 
 
 class SessionResponse(BaseModel):
@@ -16,6 +22,7 @@ class SessionResponse(BaseModel):
     theories: List[str]
     status: str
     lease_id: str = Field(description="Exclusive lease identifier required for session-specific endpoints.")
+    label: str | None = None
 
 
 class CommandRequest(BaseModel):
@@ -32,10 +39,47 @@ class EnterTheoryRequest(BaseModel):
     )
 
 
-class FailureLocationResponse(BaseModel):
-    block_index: int
-    chunk_index: int | None = None
-    preview: str | None = None
+class DocumentLoadRequest(BaseModel):
+    text: str = Field(
+        min_length=1,
+        description="Document body after 'begin' when imports are given, else a "
+                    "full .thy source including its own 'theory ... imports ... begin' header.",
+    )
+    thy_name: Optional[str] = Field(
+        default=None,
+        description="Theory node name. Required when imports are given; otherwise "
+                    "defaults to the name in text's theory header.",
+    )
+    imports: Optional[List[str]] = Field(
+        default=None,
+        description="If given, the server builds the theory header (same convention "
+                    "as enter_theory) and text is the body after 'begin'. If omitted, "
+                    "text must contain the header itself (the file-sync case).",
+    )
+    timeout: Optional[float] = Timeouts.COMMAND_DEFAULT
+    report: bool = Field(
+        default=False,
+        description="If True, produce a per-command status report (same shape as "
+                    "verify_chunk's) stored as the session's last_chunk_report, "
+                    "WITHOUT rolling back ordinary failures (LSP-style: broken "
+                    "state stays for inspection). On budget timeout the edit is "
+                    "still discarded to cancel runaway commands.",
+    )
+
+    @model_validator(mode="after")
+    def _name_required_with_imports(self):
+        if self.imports and not self.thy_name:
+            raise ValueError("thy_name is required when imports are given")
+        return self
+
+
+class DocumentLoadResponse(BaseModel):
+    success: bool
+    theory: str
+    output: str | None = None
+    error: str | None = None
+    execution_time: float
+    report: Optional[Dict[str, Any]] = None
 
 
 class CommandResponse(BaseModel):
@@ -46,8 +90,6 @@ class CommandResponse(BaseModel):
     subgoals: List[str]
     execution_time: float
     mode: str | None = None
-    diagnostics: List[Any] = Field(default_factory=list)
-    failure_location: FailureLocationResponse | None = None
     theory_verified: bool = False
 
 
@@ -56,6 +98,11 @@ class ProofStateResponse(BaseModel):
     proof_finished: bool
     pending_qed: bool = False
     current_theory: str
+
+
+class FactsResponse(BaseModel):
+    facts: List[str]
+    count: int
 
 
 class StateCheckpoint(BaseModel):

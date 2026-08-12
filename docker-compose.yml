@@ -42,7 +42,9 @@ services:
     # Real cgroup ceiling so the memory admission gate bites at a known limit
     # and cAdvisor can report OOM events. Raise for bigger concurrent sweeps.
     mem_limit: 24g
-    command: bash
+    # Entrypoint re-registers Isabelle components into the isabelle_user_data
+    # volume on every start (docs/ISSUES.md Bug 7), then execs bash.
+    command: ./repl/Admin/container_init.sh bash
 
   prometheus:
     image: prom/prometheus:latest

@@ -188,6 +188,7 @@ class SessionManagerHelpersMixin:
                     "active_requests": session.active_request_count,
                     "leased": session.leased,
                     "lease_id": session.lease_id,
+                    "label": session.label,
                 }
                 for sid, session in self._lru.items()
             ]

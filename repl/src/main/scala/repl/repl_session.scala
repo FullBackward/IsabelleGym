@@ -40,7 +40,7 @@ class Repl_Session(session_manager: Session_Manager, initial_thys: List[String] 
 
   private def session: Headless.Session = session_data.session
 
-  private def entered_some_thy: Boolean = current_thy_info.isDefined
+  def entered_some_thy: Boolean = current_thy_info.isDefined
 
   def current_thy_begun: Boolean = current_thy_info match {
     case Some(thy_info) if thy_info.header_processed => true

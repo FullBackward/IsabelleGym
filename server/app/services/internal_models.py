@@ -18,22 +18,6 @@ class SmallStepExecuteResult(BaseModel):
     execution_time: float
 
 
-class BigStepDiagnostic(BaseModel):
-    stage: str
-    index: int
-    success: bool
-    preview: Optional[str] = None
-    output: Optional[str] = None
-    error: Optional[str] = None
-    execution_time: float
-
-
-class BigStepFailureLocation(BaseModel):
-    block_index: int
-    chunk_index: Optional[int] = None
-    preview: Optional[str] = None
-
-
 class BigStepExecuteResult(BaseModel):
     success: bool
     output: Optional[str] = None
@@ -41,8 +25,6 @@ class BigStepExecuteResult(BaseModel):
     execution_time: float
     subgoals: List[str] = Field(default_factory=list)
     mode: str = "strict_full"
-    diagnostics: List[BigStepDiagnostic] = Field(default_factory=list)
-    failure_location: Optional[BigStepFailureLocation] = None
     theory_verified: bool = False
 
 

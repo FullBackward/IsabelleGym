@@ -27,7 +27,7 @@ dev = [
 include-package-data = true
 
 [tool.setuptools.packages.find]
-include = ["client*", "gym*", "repl*", "server_gym*"]
+include = ["client*", "repl*", "server_gym*"]
 
 [tool.pylint.main]
 ignore-paths = [
@@ -54,7 +54,7 @@ profile = "black"
 line-length = 88
 
 [tool.coverage.run]
-source = ["repl", "gym"]
+source = ["server", "client", "server_gym"]
 
 [tool.pytest.ini_options]
-addopts = "--cov --cov=gym --cov-report=term --cov-report=lcov:cover/lcov.info"
+addopts = ""

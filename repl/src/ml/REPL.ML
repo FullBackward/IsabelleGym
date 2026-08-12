@@ -65,7 +65,7 @@ fun pretty_local_facts verbose ctxt =
   in
     if null local_facts then []
     else
-      [List.hd (map #1 (sort_by (#1 o #2) (map (`(Proof_Context.pretty_fact ctxt)) local_facts)))]
+      map #1 (sort_by (#1 o #2) (map (`(Proof_Context.pretty_fact ctxt)) local_facts))
       |> List.map (clean_string o Pretty.string_of)
   end;
 

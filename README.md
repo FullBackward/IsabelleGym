@@ -22,8 +22,8 @@ Components:
 | `MCP-comparison/` | Harness comparing this MCP against other Isabelle MCP servers |
 | `evaluation/` | Benchmark CLIs and corpora |
 
-Design rationale for the architecture lives in [DESIGN_CHOICES.md](DESIGN_CHOICES.md);
-the living bug log is [ISSUES.md](ISSUES.md).
+Design rationale for the architecture lives in [DESIGN_CHOICES.md](docs/DESIGN_CHOICES.md);
+the living bug log is [ISSUES.md](docs/ISSUES.md).
 
 ---
 
@@ -143,9 +143,10 @@ docker compose exec isabelle-gym isabelle build -b HOL-Computational_Algebra
 - **Changing `.env`:** requires recreating the container, not just restarting it:
   `docker compose up -d --force-recreate isabelle-gym`.
 - **After an image rebuild**, if the server fails with `Not found: py4j`: a pre-existing
-  named volume shadows the component registration. Fix:
-  `docker compose exec isabelle-gym ./repl/Admin/init` and start the server again
-  (ISSUES.md Bug 7).
+  named volume shadows the component registration. The container entrypoint
+  (`repl/Admin/container_init.sh`) now re-registers automatically on every start; the
+  manual fix is `docker compose exec isabelle-gym ./repl/Admin/init`
+  (docs/ISSUES.md Bug 7).
 - **Remote access:** the API listens on `0.0.0.0:8000` with no authentication — keep it
   firewalled (`sudo ufw allow from <your-ip> to any port 8000`) or tunnel over SSH.
 
@@ -330,4 +331,4 @@ Expected: the tool list, then `success=True proof_open=False used_sorry=False ..
 - **Evaluation scripts** for small-step/big-step benchmarking: `evaluation/scripts/`
   (each runs as `python -m evaluation.scripts.<name>`).
 - **Developer docs:** [CLAUDE.md](CLAUDE.md) (architecture + conventions),
-  [DESIGN_CHOICES.md](DESIGN_CHOICES.md) (rationale), [ISSUES.md](ISSUES.md) (bug log).
+  [DESIGN_CHOICES.md](docs/DESIGN_CHOICES.md) (rationale), [ISSUES.md](docs/ISSUES.md) (bug log).

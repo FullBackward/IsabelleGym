@@ -252,6 +252,41 @@ class ReplBackend(show_states: Boolean, enable_cache: Boolean = false, max_cache
     }
   }
 
+  /**
+   * Load a chunk and report per-command status, WITHOUT rollback on ordinary
+   * failure (LSP-style: broken state stays in the node so the caller can
+   * inspect and fix it — the dual of verify_chunk's transactional semantics).
+   * Returns the same JSON per-command report shape as verify_chunk.
+   *
+   * Two caveats:
+   *  - On BUDGET TIMEOUT the chunk IS discarded (discard_last_edit) to cancel
+   *    the runaway command — leaving a looping `metis` churning is never what a
+   *    caller wants. The report's `timed_out`/`running` line names the loop.
+   *  - `proof_open`/`pending_qed` are only probed when the chunk succeeded AND
+   *    `probe_state` is true. Callers pass probe_state=false when the text ends
+   *    with theory `end`: a probe appended past `end` never executes, so the
+   *    ML channel would hang until timeout. On failure both are false (the
+   *    caller inspects `commands[]` instead).
+   */
+  def step_chunk_report(isar_string: String, wall_budget_ms: Long, probe_state: Boolean): String = {
+    Repl_Output.reset()
+    // Guard on ENTERED (not begun): for a full-file load the theory header is part of
+    // the chunk itself, so `current_thy_begun` is still false before this first edit —
+    // send_edit processes the header as part of the insertion (need_header_processing).
+    if (!repl_session.entered_some_thy)
+      """{"timed_out":false,"success":false,"proof_open":false,"pending_qed":false,"used_sorry":false,"elapsed_ms":0,"commands":[],"error":"no theory entered"}"""
+    else {
+      repl_session.send_edit(isar_string)
+      val report = repl_session.chunk_status_report(wall_budget_ms)
+      val proof_open =
+        if (report.timed_out) { repl_session.discard_last_edit(); false }
+        else if (!report.success) false
+        else probe_state && in_proof()
+      val pending_qed = proof_open && open_subgoals().isEmpty
+      JSON.Format(report.fields + ("proof_open" -> proof_open) + ("pending_qed" -> pending_qed))
+    }
+  }
+
   def vector_step(isar_strings: java.util.List[String]): Repl_Result = build_result {
     repl_session.send_vector_edit(isar_strings.asScala.toList)
     repl_session.output_current_node_results()

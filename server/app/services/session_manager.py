@@ -56,7 +56,7 @@ class SessionManager(SessionManagerHelpersMixin):
 
         # Bound concurrent sledgehammer (heavy ML) calls server-wide. Without
         # this, a burst of simultaneous sledgehammers spikes memory and can
-        # OOM-kill the shared gateway JVM (see ISSUES.md). Lazily bound to the
+        # OOM-kill the shared gateway JVM (see docs/ISSUES.md). Lazily bound to the
         # running loop on first use.
         self.sledgehammer_sem = asyncio.Semaphore(Server.MAX_CONCURRENT_SLEDGEHAMMER)
         self.max_concurrent_sledgehammer = Server.MAX_CONCURRENT_SLEDGEHAMMER

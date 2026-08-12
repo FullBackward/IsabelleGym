@@ -6,8 +6,10 @@ import isabelle._
  *  flag computed under the SAME rule the server uses (router.py): not timed out, at least
  *  one reported command, and every reported command `ok`. `verify_chunk` uses `success` to
  *  decide whether to keep the chunk in the node or roll it back transactionally, and may
- *  enrich `fields` (e.g. with `proof_open`) before serialising. */
-case class Chunk_Report(success: Boolean, fields: JSON.Object.T) {
+ *  enrich `fields` (e.g. with `proof_open`) before serialising. `timed_out` is exposed
+ *  separately (not just inside `fields`) so callers like `step_chunk_report` can cancel
+ *  runaway commands without re-parsing the JSON. */
+case class Chunk_Report(success: Boolean, fields: JSON.Object.T, timed_out: Boolean = false) {
   def json: String = JSON.Format(fields)
 }
 
@@ -251,7 +253,7 @@ object Document_Utils {
       "elapsed_ms" -> (System.currentTimeMillis() - start_ms).toInt,
       "commands" -> cmd_pairs.map(_._2)
     )
-    Chunk_Report(success, fields)
+    Chunk_Report(success, fields, timed_out)
   }
 
   def node_source(session: Headless.Session, node_name: Document.Node.Name) = stable_node_snapshot(
