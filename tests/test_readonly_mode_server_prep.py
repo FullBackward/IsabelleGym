@@ -1,10 +1,14 @@
 """Tests for the read-only-mode server preparation
-(claude-work/research-lsp-readonly-mode, plan: server prep for dual MCP support).
+(claude-work/2026-8-8-research-lsp-readonly-mode, plan: server prep for dual MCP support).
 
 Covers the pieces testable without a running Isabelle backend:
 - DocumentLoadRequest schema validation (empty text, imports without thy_name)
 - Session.load_document: backend reset, theory-name derivation, bookkeeping reset
 - Session.verify_chunk retains last_chunk_report; load_document clears it
+- Per-command `range` in chunk reports: backend-JSON pass-through and the
+  router's defensive CommandStatus mapping (present / absent / malformed)
+- goals_at_line / command_at_line read-only line queries: Session-level parsing
+  and pass-through of the backend JSON, response-model defaults
 """
 from __future__ import annotations
 
@@ -14,7 +18,16 @@ import uuid
 import pytest
 from pydantic import ValidationError
 
-from server.app.api.v1.schemas.API_models import DocumentLoadRequest
+from server.app.api.v1.router import _parse_command_range
+from server.app.api.v1.schemas.API_models import (
+    CommandAtLineResponse,
+    CommandRange,
+    CommandStatus,
+    DocumentLoadRequest,
+    GoalsResponse,
+    LocatedCommand,
+    Position,
+)
 from server.app.errors import SessionError
 from server.app.services.session import _Isabelle_Session
 
@@ -45,6 +58,7 @@ class _FakeRaw:
             '{"timed_out": false, "success": true, "proof_open": false, '
             '"pending_qed": false, "used_sorry": false, "elapsed_ms": 1, '
             '"commands": [{"i": 0, "line": 1, "kind": "theorem", "status": "ok", '
+            '"range": {"start": {"line": 1, "col": 1}, "end": {"line": 1, "col": 20}}, '
             '"messages": []}]}'
         )
 
@@ -58,6 +72,13 @@ class _FakeRaw:
             '{"i": 1, "line": 2, "kind": "lemma", "status": "failed", "messages": '
             '[{"sev": "error", "text": "Failed to finish proof"}]}'
             "]}"
+        )
+
+    def goals_at_line(self, line):
+        return (
+            '{"found": true, "command": {"kind": "apply", "source": "apply simp", '
+            '"range": {"start": {"line": 3, "col": 1}, "end": {"line": 3, "col": 11}}}, '
+            '"goals_before": ["A \u2227 B"], "goals_after": ["B \u2227 A"]}'
         )
 
 
@@ -210,3 +231,76 @@ def test_load_document_without_report_leaves_last_report_none():
     session.load_document("theory Foo imports Main begin\nlemma True by simp")
     assert session.last_chunk_report is None
     assert session.backend.raw.probe_states == []
+
+
+# ------------------------------------------------------- per-command range
+
+
+def test_verify_chunk_report_preserves_command_range():
+    # The backend JSON's per-command `range` passes through json.loads untouched.
+    session = _make_session()
+    session.verify_chunk("lemma True by simp", timeout=5.0)
+    cmd = session.last_chunk_report["report"]["commands"][0]
+    assert cmd["range"] == {
+        "start": {"line": 1, "col": 1},
+        "end": {"line": 1, "col": 20},
+    }
+
+
+def test_command_range_mapped_when_present():
+    rng = _parse_command_range(
+        {"start": {"line": 3, "col": 1}, "end": {"line": 3, "col": 22}}
+    )
+    assert rng == CommandRange(
+        start=Position(line=3, col=1), end=Position(line=3, col=22)
+    )
+    cmd = CommandStatus(index=1, line=3, kind="lemma", status="failed", range=rng)
+    assert cmd.range.start.line == 3
+    assert cmd.range.end.col == 22
+
+
+def test_command_range_absent_or_malformed_tolerated():
+    assert _parse_command_range(None) is None
+    assert _parse_command_range("bogus") is None
+    assert _parse_command_range({"start": {"line": 1, "col": 1}}) is None
+    assert _parse_command_range({"start": {"line": "x", "col": 1},
+                                 "end": {"line": 1, "col": 2}}) is None
+    # CommandStatus itself defaults to range=None when the backend omits it.
+    cmd = CommandStatus(index=0, line=1, kind="theory", status="ok")
+    assert cmd.range is None
+
+
+# ------------------------------------------------------- line-based read-only queries
+
+
+def test_goals_at_line_parses_and_passes_through():
+    session = _make_session()
+    result = session.goals_at_line(3)
+    assert result["found"] is True
+    assert result["command"]["kind"] == "apply"
+    assert result["command"]["range"]["start"] == {"line": 3, "col": 1}
+    assert result["goals_before"] == ["A \u2227 B"]
+    assert result["goals_after"] == ["B \u2227 A"]
+
+
+def test_goals_at_line_tolerates_junk_backend_reply():
+    session = _make_session()
+    session.backend.raw.goals_at_line = lambda line: "not json"
+    result = session.goals_at_line(3)
+    assert result["found"] is False
+    assert "error" in result
+
+
+def test_line_query_response_schemas():
+    rng = CommandRange(start=Position(line=3, col=1), end=Position(line=3, col=11))
+    cmd = LocatedCommand(kind="apply", source="apply simp", range=rng)
+    goals = GoalsResponse(
+        found=True, command=cmd, goals_before=["A \u2227 B"], goals_after=["B \u2227 A"]
+    )
+    assert goals.command.range.end.col == 11
+    # found:false replies carry only an error; everything else defaults out
+    miss = CommandAtLineResponse(found=False, error="no command at line 99")
+    assert miss.kind is None and miss.range is None
+    goals_miss = GoalsResponse(found=False, error="no theory entered")
+    assert goals_miss.command is None
+    assert goals_miss.goals_before == [] and goals_miss.goals_after == []

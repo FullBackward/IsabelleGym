@@ -4,6 +4,10 @@ import isabelle._
 import scala.collection.mutable
 import scala.util.Random
 
+/** Vectorised proof environments (IsabelleGym 1.0 lineage): duplicates of the
+ *  current theory so one command can be stepped across N independent copies
+ *  (`vectorise` / `vector_step` / `scalarise` on Backend_Chunk_Ops). Consumed
+ *  only by the chunk-centric/small-step execution surface. */
 class Vector_Env(vector_size: Int, current_thy: Option[Thy_Info]) {
   require(vector_size > 0, "Vector size must be positive")
 

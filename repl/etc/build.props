@@ -6,7 +6,12 @@ requirements = \
 sources = \
   src/main/scala/repl/document_utils.scala \
     src/main/scala/repl/edit_utils.scala \
+  src/main/scala/repl/json_reports.scala \
   src/main/scala/repl/repl_backend.scala \
+  src/main/scala/repl/backend_lifecycle.scala \
+  src/main/scala/repl/backend_probes.scala \
+  src/main/scala/repl/backend_chunk_ops.scala \
+  src/main/scala/repl/backend_file_ops.scala \
   src/main/scala/repl/repl_backend_gateway.scala \
   src/main/scala/repl/repl_ml_communication.scala \
   src/main/scala/repl/repl_output.scala \

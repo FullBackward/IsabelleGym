@@ -3,6 +3,10 @@ package repl
 import isabelle._
 import scala.collection.mutable
 
+/** Mutable per-theory bookkeeping: insertion point, theory-header
+ *  accumulation, the chain of [[Thy_Status]] snapshots behind rollback, and
+ *  saved states behind checkpoints. Shared infrastructure used by
+ *  [[Repl_Session]] for both workflows. */
 class Thy_Info(val name: String, status: Option[Thy_Status] = None) {
   private var current_status: Thy_Status = status.getOrElse(Thy_Status())
   private val saved_states: mutable.Map[EnvStateID, Thy_Status] = mutable.Map.empty

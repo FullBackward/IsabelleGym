@@ -4,6 +4,11 @@ import isabelle._
 import py4j.GatewayServer
 import scala.jdk.CollectionConverters._
 
+/** JVM entrypoint of the shared gateway: `Gateway_App.main` starts the Py4J
+ *  GatewayServer (launched by repl_backend_gateway.py via `isabelle scala`),
+ *  and [[ReplBackendGateway]] is the factory object Python calls to obtain
+ *  [[ReplBackend]] instances — one per HTTP-server session, all in this ONE
+ *  JVM. Shared infrastructure serving both MCP workflows. */
 object ReplBackendGateway {
   def get_repl_backend(show_states: Boolean): ReplBackend = new ReplBackend(show_states)
   def get_repl_backend_with_cache(show_states: Boolean, enable_cache: Boolean): ReplBackend = 

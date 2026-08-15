@@ -222,6 +222,53 @@ one heap build measured 15+ min emulated vs 2m56s native).
 expensive; one blessed layout keeps it reproducible. The arch lesson is recorded because it
 was invisible: everything *worked*, just absurdly slowly.
 
+### 1.13 Imports: static verified heaps in a shared heap pool — not live file sync
+
+**Chosen (2026-08, for the LSP-like read-only mode):** imported theories are **static** for
+a session's lifetime and are served from **verified session heaps** — each project is built
+once with `isabelle build -b` (build passing IS the verification gate), kept in a
+server-side heap pool, and shared by every session working on that project. Agents write
+qualified heap imports (`imports "HeapTest.Bar"`); the wrapper theory states them (the
+header-overwrite behavior in `edit_utils.scala` is load-bearing: a document's own import
+list only gates loading — the visible context comes from the wrapper). Stale sources →
+explicit rebuild, never silent live re-sync.
+**Alternative researched and rejected: live draft-node syncing** (editor-style: watch/pull
+file changes, `use_theories` reloads, dependencies auto-open — Isabelle-MCP's model).
+A second alternative, the **overlay/query-operation query layer** (Pure's
+`Query_Operation`, no vscode fork needed), was also fully researched and validated as
+feasible — then deferred, not rejected.
+
+- *Live-sync pros:* imports editable mid-session; matches how human editors work.
+- *Live-sync cons:* it is an IDE feature, and our workload is agents — dependency sets are
+  fixed per attempt, the agent edits the entry file, and mid-run import changes essentially
+  don't happen. It also needs the full style-4 stack (real-path nodes, perspective-driven
+  evaluation, live dependency manager, document-bookkeeping rework) — weeks, for a
+  capability agents won't use. Spike evidence: file-backed nodes accept content reloads but
+  not interactive probe edits (without perspective work), and the probe ML environment
+  cannot reach them (ML envs inherit only through imports — hard Isabelle semantics).
+- *Heap-pool pros:* build = verification (an unbuildable import can never be served);
+  startup ~4 s vs tens of seconds re-checking sources (this is also the fix for the slow
+  HOL-Computational_Algebra-scale wrapper loads); heap pages shared read-only across
+  sessions via mmap/COW; imports are Milan's reuse boundary made explicit (IsabelleGym 1.0
+  already treated "import a finished theory" as the freeze point for sharing results).
+- *Heap-pool cons:* import edits require an explicit rebuild (deliberate — that IS the
+  gate); agents must write qualified names (a header-normalization shim is a deferred
+  option); disk footprint of the pool needs watching (PISA's ~35 GB/instance duplication
+  is the cautionary tale — our pool builds once per project, not per instance).
+
+**Why:** the target is agent workflows (training/eval + MCP), not interactive editing. The
+heap model gives verified, fast, shareable imports with one small Scala change (`dirs`
+plumbing), while live sync buys nothing agents use and costs the largest reconstruction on
+the table. **Given up (deliberately):** live import editing without rebuild, and the
+overlay query layer's "query any position in any node without probes" generality. Full
+evidence: `claude-work/2026-8-12(1)-research-use-theories-spike/`,
+`claude-work/2026-8-12(2)-research-heap-pool/`,
+`claude-work/2026-8-14(1)-research-style4-feasibility/`; plan:
+`claude-work/2026-8-8-research-lsp-readonly-mode/IMPORT_SYNC_PLAN.md`. The overlay path
+remains a validated upgrade if position-explicit-anywhere queries ever become a
+requirement (sledgehammer parity and a generic one-registration diagnostic dispatcher were
+both proven with running code).
+
 ---
 
 ## 2. MCP server — agent-facing design

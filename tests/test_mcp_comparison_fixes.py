@@ -1,5 +1,5 @@
 """Tests for the MCP-comparison harness fixes
-(claude-work/research-mcp-comparison-audit/FINDINGS.md §2, H1–H6).
+(claude-work/2026-7-15(3)-research-mcp-comparison-audit/FINDINGS.md §2, H1–H6).
 """
 from __future__ import annotations
 

@@ -261,7 +261,7 @@ Reply DONE when the theorem is proved.
 ## Results & analysis — rewritten 2026-07-16 (post harness-fix audit)
 
 The previous attempt tables and observations were REMOVED: the audit
-(`claude-work/research-mcp-comparison-audit/FINDINGS.md`) showed they largely measured
+(`claude-work/2026-7-15(3)-research-mcp-comparison-audit/FINDINGS.md`) showed they largely measured
 harness artifacts, not systems. Specifically:
 
 - Every "⚠ EMPTY / content filter" row was `max_tokens: 4096` truncation of a reasoning
@@ -275,8 +275,8 @@ harness artifacts, not systems. Specifically:
   general/run1 was **0.3** (not 0.7) and segment/run3 was **0.2** (not 0.3). JSONL
   metadata is authoritative.
 
-All of those failure modes are fixed (`claude-work/fix-mcp-comparison/`,
-`claude-work/fix-arm-native-and-eventloop/`). What follows uses only **useful** attempts:
+All of those failure modes are fixed (`claude-work/2026-7-15(6)-fix-mcp-comparison/`,
+`claude-work/2026-7-16(1)-fix-arm-native-and-eventloop/`). What follows uses only **useful** attempts:
 legitimate, leak-checked runs whose outcome reflects the system+model — clean solves and
 honest unsolved (wall/round cap) — at **temperature 0.3, deepseek-v4-pro, single problem
 `mathd_algebra_276`** (restrictive prompt excluded by decision).

@@ -2,6 +2,11 @@ package repl
 
 import isabelle._
 
+/** Low-level Isabelle server lifecycle: start/stop the `isabelle server`
+ *  process and start/stop individual headless sessions on it (via
+ *  Server_Commands, with reflective access to Server.Context). Shared
+ *  infrastructure used only by [[Session_Manager]]; neither MCP workflow
+ *  touches it directly. */
 object Server_Utils {
   private def withServerContext(
       server_info: Server.Info,

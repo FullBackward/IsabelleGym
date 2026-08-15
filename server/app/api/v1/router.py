@@ -11,7 +11,9 @@ from .schemas.API_models import (
     BigStepTheoryRequest,
     ChunkVerifyRequest,
     ChunkVerifyResponse,
+    CommandAtLineResponse,
     CommandMessage,
+    CommandRange,
     CommandRequest,
     CommandResponse,
     CommandStatus,
@@ -21,6 +23,9 @@ from .schemas.API_models import (
     DocumentLoadResponse,
     EnterTheoryRequest,
     FactsResponse,
+    GoalsResponse,
+    LocatedCommand,
+    Position,
     ProofStateResponse,
     SessionAcquireRequest,
     SessionAcquireResponse,
@@ -54,6 +59,24 @@ def _preview(text: str | None, limit: int) -> str:
     if len(compact) <= limit:
         return compact
     return compact[: max(0, limit - 3)] + "..."
+
+
+def _parse_command_range(raw) -> CommandRange | None:
+    """Parse the optional per-command `range` from a backend chunk report.
+
+    Defensive: any malformed shape (missing start/end, non-int line/col) yields
+    None so one bad entry never fails the whole report.
+    """
+    try:
+        if not isinstance(raw, dict):
+            return None
+        start, end = raw["start"], raw["end"]
+        return CommandRange(
+            start=Position(line=int(start["line"]), col=int(start["col"])),
+            end=Position(line=int(end["line"]), col=int(end["col"])),
+        )
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return None
 
 
 @router.get("/")
@@ -269,6 +292,7 @@ async def verify_chunk(session_id: str, request: ChunkVerifyRequest, x_lease_id:
                 node_line=c.get("node_line"),
                 kind=str(c.get("kind", "")),
                 status=str(c.get("status", "unprocessed")),
+                range=_parse_command_range(c.get("range")),
                 messages=[CommandMessage(sev=str(m.get("sev", "")), text=str(m.get("text", "")))
                           for m in (c.get("messages", []) or [])],
             )
@@ -436,6 +460,58 @@ async def get_global_facts(session_id: str, limit: int = Query(100, ge=1, le=100
         facts = await asyncio.to_thread(session.global_facts, limit)
         logger.debug("returning %s global facts (limit=%s)", len(facts), limit)
         return FactsResponse(facts=facts, count=len(facts))
+
+
+def _parse_located_command(raw) -> LocatedCommand | None:
+    """Parse the {kind, source, range} command object of a backend line-query
+    reply; None on any malformed shape."""
+    try:
+        if not isinstance(raw, dict):
+            return None
+        return LocatedCommand(
+            kind=str(raw.get("kind", "")),
+            source=str(raw.get("source", "")),
+            range=_parse_command_range(raw.get("range")),
+        )
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
+@router.get("/api/v1/sessions/{session_id}/command_at_line", response_model=CommandAtLineResponse)
+async def command_at_line(session_id: str, line: int = Query(..., ge=1), x_lease_id: str | None = Header(None, alias="X-Lease-Id"), session_manager=Depends(get_session_manager)):
+    """Read-only jEdit-style query: the command containing `line` (1-based) of the
+    current node. Snapshot-based — the proof script, rollback chain, and command
+    history are untouched, and it works past a trailing theory `end`."""
+    with logging_context(session_id=session_id):
+        lease_id = _require_lease_id(x_lease_id)
+        session = session_manager.get_session(session_id, lease_id=lease_id, require_lease=True)
+        result = await asyncio.to_thread(session.command_at_line, line)
+        return CommandAtLineResponse(
+            found=bool(result.get("found", False)),
+            kind=result.get("kind"),
+            source=result.get("source"),
+            range=_parse_command_range(result.get("range")),
+            error=result.get("error"),
+        )
+
+
+@router.get("/api/v1/sessions/{session_id}/goals", response_model=GoalsResponse)
+async def goals_at_line(session_id: str, line: int = Query(..., ge=1), x_lease_id: str | None = Header(None, alias="X-Lease-Id"), session_manager=Depends(get_session_manager)):
+    """Read-only jEdit-style query: rendered goal state before/after the command
+    containing `line` (1-based). Snapshot-based like command_at_line. Requires
+    show_states on (ISABELLE_SHOW_STATES, default true); goal lists are empty
+    otherwise."""
+    with logging_context(session_id=session_id):
+        lease_id = _require_lease_id(x_lease_id)
+        session = session_manager.get_session(session_id, lease_id=lease_id, require_lease=True)
+        result = await asyncio.to_thread(session.goals_at_line, line)
+        return GoalsResponse(
+            found=bool(result.get("found", False)),
+            command=_parse_located_command(result.get("command")),
+            goals_before=[str(g) for g in (result.get("goals_before") or [])],
+            goals_after=[str(g) for g in (result.get("goals_after") or [])],
+            error=result.get("error"),
+        )
 
 
 @router.get("/api/v1/sessions/{session_id}/source")

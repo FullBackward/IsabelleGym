@@ -2,6 +2,11 @@ package repl
 
 import isabelle._
 
+/** Construction of PIDE document edits: text insert/remove edits, node
+ *  perspective edits, and theory-header processing (parsing the accumulated
+ *  header, importing its dependencies, emulating the REPL helper import).
+ *  Shared infrastructure used by [[Repl_Session]] for every edit path in both
+ *  workflows. */
 type Edit = Document.Node.Edit[Text.Edit, Text.Perspective]
 
 object Edit_Utils {

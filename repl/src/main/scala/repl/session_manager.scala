@@ -4,6 +4,12 @@ import isabelle._
 
 import scala.collection.mutable
 
+/** Owns the Isabelle server process and the headless sessions created from it:
+ *  session start/stop, an optional LRU session cache (with refcounting and
+ *  eviction), and per-session PIDE options (parallel_proofs, capped threads —
+ *  read from the gateway JVM's environment at session creation). Shared
+ *  infrastructure underneath every [[Repl_Session]]; consumed indirectly by
+ *  both MCP workflows. */
 case class Session_Data(id: UUID.T, session: Headless.Session)
 
 class Session_Manager(show_states: Boolean, enable_cache: Boolean = false, max_cache_size: Int = 10) {

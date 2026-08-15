@@ -2,6 +2,13 @@ package repl
 
 import isabelle._
 
+/** Per-session document state and execution engine beneath [[ReplBackend]]:
+ *  text edits into the PIDE document, output extraction, the rollback chain
+ *  (`rollback_last_text_edit` / `discard_last_edit`), checkpoints
+ *  (`save_state` / `restore_state`), wall-bounded chunk status reports, and
+ *  vectorised environments. Shared infrastructure consumed by BOTH workflows
+ *  (chunk-centric and LSP-like file-sync) — all access is serialized through
+ *  the session's single worker thread on the Python side. */
 type EnvStateID = Long
 
 class Repl_Session(session_manager: Session_Manager, initial_thys: List[String] = List("$ISABELLE_REPL_HOME/thys/IsabelleREPL"), field: String = "HOL") {
@@ -112,11 +119,82 @@ class Repl_Session(session_manager: Session_Manager, initial_thys: List[String] 
           wall_budget_ms
         )
       case None =>
-        Chunk_Report(false, JSON.Object(
-          "timed_out" -> false, "success" -> false, "used_sorry" -> false,
-          "elapsed_ms" -> 0, "commands" -> List.empty[JSON.T]
-        ))
+        Chunk_Report(false, Json_Reports.empty_chunk_fields())
     }
+
+  /** Read-only jEdit-style line queries on a fresh stable snapshot (no edits, no ML
+   *  probes). Consumed by Backend_File_Ops for the LSP-like file-sync mode. */
+  def command_at_line(line: Int): String =
+    current_thy_info match {
+      case Some(_) => Document_Utils.command_at_line_json(session, current_thy_node_name, line)
+      case None    => Json_Reports.line_query_not_found("no theory entered")
+    }
+
+  def goals_at_line(line: Int): String =
+    current_thy_info match {
+      case Some(_) => Document_Utils.goals_at_line_json(session, current_thy_node_name, line)
+      case None    => Json_Reports.line_query_not_found("no theory entered")
+    }
+
+  /** True when the current document ends with theory `end` (last non-ignored command
+   *  has span `end`). A successful `end` implies NO proof is open, and probe commands
+   *  appended past it never execute (parsed without a theory context — they fail with
+   *  "missing theory context" and the ML channel never replies). Backend_Probes uses
+   *  this to short-circuit trivial post-`end` answers and reroute the rest through
+   *  with_probe_before_end. */
+  def current_thy_ended: Boolean =
+    current_thy_info.exists(_ => Document_Utils.node_ends_with_end(session, current_thy_node_name))
+
+  /** Insert `isar_string` immediately BEFORE the trailing theory `end` command,
+   *  bypassing Thy_Info's append-only insertion_point bookkeeping (the document tip
+   *  logically stays at `end`). A trailing newline is appended so the probe span does
+   *  not glue to the `end` command. Returns the insertion offset and the exact
+   *  inserted text; None when the node has no `end` command. */
+  private def insert_before_end(isar_string: String): Option[(Text.Offset, String)] =
+    if (!entered_some_thy) None
+    else
+      Document_Utils.last_end_offset(session, current_thy_node_name).map { end_offset =>
+        val text = isar_string + "\n"
+        update_session_with_edits(
+          List(Edit_Utils.edit_from_text_edit(Text.Edit.insert(end_offset, text)))
+        )
+        (end_offset, text)
+      }
+
+  /** Symmetric remove for insert_before_end. */
+  private def remove_before_end(offset: Text.Offset, text: String): Unit =
+    if (entered_some_thy)
+      update_session_with_edits(
+        List(Edit_Utils.edit_from_text_edit(Text.Edit.remove(offset, text)))
+      )
+
+  /** Bracket for transient probes on a FINISHED theory: `body` receives an inserter
+   *  that places the probe command immediately before the trailing `end` and returns
+   *  its offset. The probe's evaluation is awaited BEFORE removal (same settle
+   *  rationale as ReplBackend.with_probe_settle), and the insert is ALWAYS removed
+   *  (try/finally, including on channel timeout), leaving the document byte-identical.
+   *  Thy_Info bookkeeping is bypassed, so discard_last_edit must NOT be called for
+   *  these probes. */
+  def with_probe_before_end[T](body: (String => Option[Text.Offset]) => T): T = {
+    var inserted: Option[(Text.Offset, String)] = None
+    try {
+      val result = body { text =>
+        inserted = insert_before_end(text)
+        inserted.map(_._1)
+      }
+      await_current_node_settled()
+      result
+    } finally {
+      inserted.foreach { case (offset, text) => remove_before_end(offset, text) }
+    }
+  }
+
+  /** Output the results of the single command starting at `offset` — for mid-document
+   *  probes (with_probe_before_end), where output_current_node_results'
+   *  last-insertion-line filter would hide them. */
+  def output_command_at_offset(offset: Text.Offset): Unit =
+    current_thy_info.foreach(_ =>
+      Document_Utils.output_command_at_offset(session, current_thy_node_name, offset))
 
   def send_edit(isar_string: String, node: Option[Document.Node.Name] = None): Unit = {
     val edits = current_thy_info match {

@@ -440,6 +440,31 @@ class IsabelleGymAsyncClient:
         response.raise_for_status()
         return response.json()
 
+    async def command_at_line(
+        self, session_id: str, line: int, *, lease_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Command containing the 1-based ``line``: ``{found, kind, source, range}``.
+        Read-only snapshot query (no ML probes) — safe past a trailing theory end."""
+        response = await self._request(
+            "GET", f"{BASE_URL}/{session_id}/command_at_line?line={int(line)}",
+            headers=self._lease_headers(lease_id),
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def goals_at_line(
+        self, session_id: str, line: int, *, lease_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Goal state before/after the command containing the 1-based ``line``:
+        ``{found, command, goals_before, goals_after}``. Read-only snapshot query;
+        goal lists are empty unless show_states is on (default true)."""
+        response = await self._request(
+            "GET", f"{BASE_URL}/{session_id}/goals?line={int(line)}",
+            headers=self._lease_headers(lease_id),
+        )
+        response.raise_for_status()
+        return response.json()
+
     # --- checkpoints / rollback ----------------------------------------------
     async def save_checkpoint(
         self, session_id: str, *, lease_id: str | None = None,

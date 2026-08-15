@@ -199,6 +199,16 @@ class CommandMessage(BaseModel):
     text: str
 
 
+class Position(BaseModel):
+    line: int = Field(description="1-based line.")
+    col: int = Field(description="1-based column (UTF-16 units, i.e. LSP columns).")
+
+
+class CommandRange(BaseModel):
+    start: Position
+    end: Position
+
+
 class CommandStatus(BaseModel):
     index: int = Field(description="Command position in the node (source order).")
     line: int = Field(description="1-based start line of the command WITHIN the submitted chunk.")
@@ -206,7 +216,44 @@ class CommandStatus(BaseModel):
         default=None, description="Absolute 1-based line in the accumulated theory node (debug).")
     kind: str = Field(description="Command keyword, e.g. 'have', 'lemma', 'by'.")
     status: str = Field(description="One of: ok | failed | running | unprocessed.")
+    range: Optional[CommandRange] = Field(
+        default=None,
+        description="1-based line/column extent of this command (node-absolute). "
+                    "Message-level offsets do not exist for DRAFT nodes, so diagnostics "
+                    "carry their owning command's range (jEdit granularity).")
     messages: List[CommandMessage] = Field(default_factory=list)
+
+
+class LocatedCommand(BaseModel):
+    """A command located by a line-based read-only query (jEdit cursor semantics:
+    comment/blank lines resolve to the nearest preceding non-ignored command)."""
+    kind: str = Field(description="Command keyword, e.g. 'have', 'lemma', 'by'.")
+    source: str = Field(description="Source text of the command.")
+    range: Optional[CommandRange] = Field(
+        default=None, description="1-based line/column extent (node-absolute).")
+
+
+class CommandAtLineResponse(BaseModel):
+    """Read-only query: the command containing a 1-based line of the current node.
+    Snapshot-based (no edits, no ML probes); consumed by the LSP-like file-sync mode."""
+    found: bool
+    kind: Optional[str] = None
+    source: Optional[str] = None
+    range: Optional[CommandRange] = None
+    error: Optional[str] = None
+
+
+class GoalsResponse(BaseModel):
+    """Read-only query: rendered goal state before/after the command containing a
+    1-based line. State messages only exist with show_states on
+    (ISABELLE_SHOW_STATES, default true); with it off the goal lists are empty.
+    `goals_after` is the command's last state message as one raw text element (no
+    subgoal splitting); `goals_before` likewise for the previous non-ignored command."""
+    found: bool
+    command: Optional[LocatedCommand] = None
+    goals_before: List[str] = Field(default_factory=list)
+    goals_after: List[str] = Field(default_factory=list)
+    error: Optional[str] = None
 
 
 class ChunkVerifyRequest(BaseModel):

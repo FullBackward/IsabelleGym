@@ -17,7 +17,13 @@ class Server:
     }
     INITIAL_SESSIONS: Final = int(os.getenv("ISABELLE_INITIAL_SESSIONS", "3"))
     MAX_CACHE_SIZE: Final = int(os.getenv("ISABELLE_MAX_CACHE_SIZE", "1"))
-    SHOW_STATES: Final = os.getenv("ISABELLE_SHOW_STATES", "false").lower() in {
+    # Default true since Stage 2.2: goals_at_line (GET .../goals) REQUIRES state
+    # messages, which only exist with show_states on. Trade-off: one state message
+    # per command, so small-step output grows; the chunk-centric MCP is
+    # verify_chunk-based (JSON status reports, not state text) so impact is small.
+    # Set ISABELLE_SHOW_STATES=false to opt out (goals_at_line then returns empty
+    # goal lists).
+    SHOW_STATES: Final = os.getenv("ISABELLE_SHOW_STATES", "true").lower() in {
         "1", "true", "yes", "on",
     }
     DEFAULT_FIELD: Final = os.getenv("ISABELLE_DEFAULT_FIELD", "HOL")

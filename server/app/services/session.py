@@ -207,6 +207,27 @@ class _Isabelle_Session(BigStepMixin):
     def get_source(self, timeout: Optional[float] = None):
         return self._call_backend(lambda: self.backend.raw.get_source(), timeout=timeout)
 
+    def command_at_line(self, line: int, timeout: Optional[float] = None) -> Dict[str, Any]:
+        """Read-only jEdit-style query: the command containing the 1-based `line` of the
+        current node (snapshot-based; no edits, no ML probes). Passes the backend's
+        JSON through as a dict, tolerating junk."""
+        result = self._call_backend(lambda: self.backend.raw.command_at_line(line), timeout=timeout)
+        try:
+            return json.loads(result) if result else {"found": False, "error": "empty backend reply"}
+        except (ValueError, TypeError):
+            return {"found": False, "error": "unparseable backend reply"}
+
+    def goals_at_line(self, line: int, timeout: Optional[float] = None) -> Dict[str, Any]:
+        """Read-only jEdit-style query: rendered goal state before/after the command
+        containing the 1-based `line` (snapshot-based; no edits, no ML probes).
+        Goal lists are empty unless show_states is on. Passes the backend's JSON
+        through as a dict, tolerating junk."""
+        result = self._call_backend(lambda: self.backend.raw.goals_at_line(line), timeout=timeout)
+        try:
+            return json.loads(result) if result else {"found": False, "error": "empty backend reply"}
+        except (ValueError, TypeError):
+            return {"found": False, "error": "unparseable backend reply"}
+
     @property
     def current_thy(self) -> str:
         return self._call_backend(lambda: self.backend.raw.current_thy_name_string())

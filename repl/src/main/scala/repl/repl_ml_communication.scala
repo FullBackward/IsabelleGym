@@ -4,7 +4,11 @@ import isabelle.*
 import java.util.concurrent.{ConcurrentHashMap, LinkedBlockingQueue, TimeUnit}
 
 /**
- * Per-session ML communication channels.
+ * Per-session ML communication channels — the Scala half of the transient
+ * read-only probes in Backend_Probes (backend_probes.scala): per-channel
+ * blocking queues plus the `Scala.Fun_Strings` callbacks the ML side
+ * (repl/src/ml/REPL.ML) pushes replies into. Consumed by BOTH MCP workflows,
+ * since both use the probes.
  *
  * The original implementation used a single global `Synchronized[Option[…]]`
  * slot for subgoals/local-facts/global-facts.  When multiple ReplBackend

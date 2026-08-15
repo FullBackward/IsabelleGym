@@ -1,3 +1,13 @@
+(* REPL.ML — the Isabelle/ML side of the transient read-only probes.
+
+   Loaded into every session via the generated wrapper theories (repl/thys/,
+   see thy_init.py). Consumed by the probes in Backend_Probes
+   (backend_probes.scala), which insert `ML_val ‹Repl.send_*_tagged ...›`
+   commands; the functions here extract subgoals/facts/proof-status from the
+   toplevel state and push the results back to Scala through the tagged
+   channel callbacks in Repl_ML_Communication (repl_ml_communication.scala).
+   Serves BOTH MCP workflows, since both use the probes. *)
+
 signature REPL =
 sig
 
@@ -17,6 +27,8 @@ end;
 
 structure Repl : REPL =
 struct
+
+(* === Subgoal extraction and channel senders === *)
 
 fun open_subgoals state =
   if (Toplevel.is_proof state) then (
@@ -42,6 +54,8 @@ fun send_open_subgoals_tagged channel_id state =
   let val goals = open_subgoals state
   in ("CH:" ^ channel_id) :: goals |> \<^scala>\<open>add_open_subgoals\<close> |> ignore end
 
+(* === In-proof predicate (block lifetime, incl. pending qed) === *)
+
 (* Whether the toplevel is still inside a proof block.  True for the whole
    block lifetime — INCLUDING after a successful terminal `show`, while `qed`
    is still pending — and false once `qed` lands (or for theory-level text).
@@ -51,6 +65,8 @@ fun send_open_subgoals_tagged channel_id state =
 fun send_in_proof_tagged channel_id state =
   ("CH:" ^ channel_id) :: [if Toplevel.is_proof state then "1" else "0"]
     |> \<^scala>\<open>add_in_proof\<close> |> ignore
+
+(* === Local fact extraction and channel senders === *)
 
 fun pretty_local_facts verbose ctxt =
   let
@@ -84,6 +100,8 @@ fun send_local_facts state =
 fun send_local_facts_tagged channel_id state =
   let val facts = local_facts state
   in ("CH:" ^ channel_id) :: facts |> \<^scala>\<open>add_local_facts\<close> |> ignore end
+
+(* === Global fact extraction and channel senders === *)
 
 fun global_facts state limit =
   if (Toplevel.is_proof state) then (
@@ -125,6 +143,8 @@ fun send_global_facts_tagged channel_id state limit =
   in
     ("CH:" ^ channel_id) :: facts |> \<^scala>\<open>add_global_facts\<close> |> ignore
   end
+
+(* === Sledgehammer: run + non-blocking channel sender === *)
 
 (* Run sledgehammer on the first subgoal and collect every line it would
    normally print (e.g. "metis found a proof...", "Try this: by (metis ...)",
@@ -193,6 +213,8 @@ fun send_sledgehammer_tagged channel_id timeout_s state =
   end
 
 end
+
+(* Re-export the channel senders at top level for the wrapper theories. *)
 
 val send_open_subgoals = Repl.send_open_subgoals;
 val send_local_facts = Repl.send_local_facts;

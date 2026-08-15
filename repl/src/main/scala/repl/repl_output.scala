@@ -4,6 +4,10 @@ import isabelle.Output
 
 import scala.collection.mutable
 
+/** Result buffer for one backend call (`Repl_Result`, returned over Py4J) and
+ *  its thread-local accumulator ([[Repl_Output]]). Shared infrastructure:
+ *  every output-producing method on [[ReplBackend]] in both workflows funnels
+ *  through `build_result` → this buffer. */
 class Repl_Result() {
 
   sealed trait Message { def message: String }

@@ -6,6 +6,11 @@ import io.bullet.spliff.Diff
 
 import scala.collection.mutable
 
+/** Immutable snapshot of one theory's edit state, chained via `parent` to form
+ *  the rollback history; `difference_edits` computes the minimal insert/remove
+ *  edits between two snapshots (text diff from the nearest common ancestor),
+ *  which backs checkpoint restore. Shared infrastructure used by [[Thy_Info]]
+ *  for both workflows. */
 case class Thy_Status(
     last_text_edit: Option[Text.Edit] = None,
     parent: Option[Thy_Status] = None,

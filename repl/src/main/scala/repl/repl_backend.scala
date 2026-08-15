@@ -1,43 +1,50 @@
 package repl
 
 import isabelle._
-import scala.jdk.CollectionConverters._
 
-import scala.collection.mutable
-
-class ReplBackend(show_states: Boolean, enable_cache: Boolean = false, max_cache_size: Int = 10, initial_thys: List[String] = List("$ISABELLE_REPL_HOME/thys/IsabelleREPL"), session_manager: Option[Session_Manager] = None, field: String = "HOL") {
-  private val session_manager_instance = session_manager.getOrElse(new Session_Manager(show_states, enable_cache, max_cache_size))
-  private var repl_session = new Repl_Session(session_manager_instance, initial_thys, field)
+/** Py4J entrypoint facade: one `ReplBackend` instance per HTTP-server session, all
+ *  sharing ONE gateway JVM (see repl_backend_gateway.scala). Python addresses this
+ *  exact class via Py4J and the `ReplBackend` Protocol in
+ *  repl/src/python/repl_backend_gateway.py — the public method set and signatures
+ *  ARE the wire contract and must stay in sync with that Protocol.
+ *
+ *  The class itself only holds the constructor state and the shared probe plumbing
+ *  (`build_result`, `send_ml_command`, `with_probe_settle`). The public surface is
+ *  split into one trait per consuming workflow, each in its own file:
+ *    - Backend_Lifecycle (backend_lifecycle.scala) — session lifecycle and cache.
+ *    - Backend_Probes    (backend_probes.scala)    — transient read-only probes (BOTH MCPs).
+ *    - Backend_Chunk_Ops (backend_chunk_ops.scala) — chunk-centric execution surface.
+ *    - Backend_File_Ops  (backend_file_ops.scala)  — LSP-like file-sync surface. */
+class ReplBackend(show_states: Boolean, enable_cache: Boolean = false, max_cache_size: Int = 10, protected val initial_thys: List[String] = List("$ISABELLE_REPL_HOME/thys/IsabelleREPL"), session_manager: Option[Session_Manager] = None, field: String = "HOL")
+    extends Backend_Lifecycle
+    with Backend_Probes
+    with Backend_Chunk_Ops
+    with Backend_File_Ops {
+  // protected (not private) so the mixed-in traits can reach them via the
+  // self-type; still off the Py4J-callable public surface.
+  protected val session_manager_instance = session_manager.getOrElse(new Session_Manager(show_states, enable_cache, max_cache_size))
+  protected var repl_session = new Repl_Session(session_manager_instance, initial_thys, field)
 
   /** Unique channel ID for this backend instance, used to isolate ML
    *  communication (subgoals, local facts, global facts) from other
    *  concurrent backends sharing the same JVM process. */
   val channel_id: String = java.util.UUID.randomUUID().toString.replace("-", "").take(16)
 
-  def current_thy_name_string: String = repl_session.current_thy_name_string
-
-  def get_cache_status(): String = session_manager_instance.get_cache_status()
-  
-  def get_cache_stats(): java.util.Map[String, Int] = {
-    val stats = session_manager_instance.get_cache_stats()
-    stats.asJava
-  }
-
+  /** Reset the per-thread result buffer, run `command_logic`, and return the
+   *  accumulated Repl_Result. The standard wrapper for output-producing methods. */
   def build_result[A](command_logic: => A): Repl_Result = {
     Repl_Output.reset()
     command_logic
     Repl_Output.result
   }
 
-  def enter_thy(input_thy_name: String): Repl_Result = build_result {
-    Thy_Parsing.extract_thy_name(input_thy_name) match {
-      case None           => Repl_Output.add_error(s"Invalid theory name: $input_thy_name")
-      case Some(thy_name) => repl_session.enter_thy(thy_name)
-    }
-  }
-
-  private def send_ml_command(ml_text: String): Unit = repl_session.send_edit(
+  /** The `ML_val ‹…›` command text for an ML probe — shared by send_ml_command
+   *  (append path) and the post-`end` insert path in Backend_Probes. */
+  protected def ml_command_text(ml_text: String): String =
     s"ML_val ${Symbol.open} $ml_text ${Symbol.close}"
+
+  protected def send_ml_command(ml_text: String): Unit = repl_session.send_edit(
+    ml_command_text(ml_text)
   )
 
   /** Run a transient ML probe TRANSACTIONALLY: wait for the probe's channel
@@ -47,7 +54,7 @@ class ReplBackend(show_states: Boolean, enable_cache: Boolean = false, max_cache
    *  a stale or canceled document state (empty results / blind channel
    *  timeout, e.g. sledgehammer calls right after other probes). One retry:
    *  a canceled probe otherwise surfaces only as a queue timeout. */
-  private def with_probe_settle[T](probe: => T): T = {
+  protected def with_probe_settle[T](probe: => T): T = {
     def attempt(): T = {
       val r = probe
       repl_session.await_current_node_settled()
@@ -55,286 +62,5 @@ class ReplBackend(show_states: Boolean, enable_cache: Boolean = false, max_cache
     }
     try attempt()
     catch { case _: Exception => attempt() }
-  }
-
-  def open_subgoals(): java.util.List[String] = {
-    val subgoals =
-      if (!repl_session.current_thy_begun) List()
-      else {
-        val message = with_probe_settle(
-          Repl_ML_Communication.waiting_for_subgoals_message(
-            {
-              // The ML side prepends "CH:<channel_id>" so the Scala callback
-              // can route the response to the correct per-backend queue.
-              send_ml_command(
-                s"""Repl.send_open_subgoals_tagged "${channel_id}" @{Isar.state}"""
-              )
-            },
-            channel_id
-          )
-        )
-        repl_session.discard_last_edit()  // probe is transient: no doc/rollback pollution
-        message
-      }
-    subgoals.asJava
-  }
-
-  def in_proof(): Boolean = {
-    if (!repl_session.current_thy_begun) false
-    else {
-      val message = with_probe_settle(
-        Repl_ML_Communication.waiting_for_in_proof_message(
-          {
-            // The ML side prepends "CH:<channel_id>" so the Scala callback
-            // can route the response to the correct per-backend queue.
-            send_ml_command(
-              s"""Repl.send_in_proof_tagged "${channel_id}" @{Isar.state}"""
-            )
-          },
-          channel_id
-        )
-      )
-      repl_session.discard_last_edit()  // probe is transient: no doc/rollback pollution
-      message == List("1")
-    }
-  }
-
-  def local_facts(): java.util.List[String] = {
-    val local_facts =
-      if (!repl_session.current_thy_begun) List()
-      else {
-        val message = with_probe_settle(
-          Repl_ML_Communication.waiting_for_local_facts_message(
-            {
-              send_ml_command(
-                s"""Repl.send_local_facts_tagged "${channel_id}" @{Isar.state}"""
-              )
-            },
-            channel_id
-          )
-        )
-        repl_session.discard_last_edit()  // probe is transient
-        message
-      }
-    local_facts.asJava
-  }
-
-  def global_facts(limit: Int): java.util.List[String] = {
-    require(limit > 0, "limit must be positive")
-    val global_facts =
-      if (!repl_session.current_thy_begun) List()
-      else {
-        val message = with_probe_settle(
-          Repl_ML_Communication.waiting_for_global_facts_message(
-            {
-              send_ml_command(
-                s"""Repl.send_global_facts_tagged "${channel_id}" @{Isar.state} ${limit}"""
-              )
-            },
-            channel_id
-          )
-        )
-        repl_session.discard_last_edit()  // probe is transient
-        message
-      }
-    global_facts.asJava
-  }
-
-  def sledgehammer(timeout_s: Int): java.util.List[String] = {
-    val suggestions =
-      if (!repl_session.current_thy_begun) List()
-      else {
-        try {
-          val message = with_probe_settle(
-            Repl_ML_Communication.waiting_for_sledgehammer_message(
-              {
-                send_ml_command(
-                  s"""Repl.send_sledgehammer_tagged "${channel_id}" ${timeout_s} @{Isar.state}"""
-                )
-              },
-              channel_id,
-              timeout_s
-            )
-          )
-          message
-        } finally {
-          repl_session.discard_last_edit()  // ALWAYS discard, even on timeout
-        }
-      }
-    suggestions.asJava
-  }
-
-  def get_proof_state(): Repl_Result = build_result {
-    if (!repl_session.current_thy_begun)
-      Repl_Output.add_error(
-        "Cannot retrieve proof state without beginning theory."
-      )
-    else {
-      send_ml_command("Repl.get_proof_state @{Isar.state}")
-      repl_session.output_current_node_results()  // read the probe's output first
-      repl_session.discard_last_edit()             // then drop the transient probe
-    }
-  }
-
-  /** Execute a command TRANSIENTLY: insert it, capture its writeln/state output, then
-   *  discard the edit so the theory node and rollback chain are untouched. This is the
-   *  low-level probe primitive; higher-level transient helpers (`sledgehammer`,
-   *  `open_subgoals`, etc.) delegate to this.
-   *
-   *  Use this for ANY read-only query (diagnostic, ML probe, search, etc.) where you
-   *  need the command's output but do NOT want it to persist in the proof script.
-   *  Keyword allowlist/denylist gatekeeping is enforced upstream on the server side. */
-  def probe_transient(isar_string: String): Repl_Result = build_result {
-    if (!repl_session.current_thy_begun)
-      Repl_Output.add_error("Cannot run probe without beginning theory.")
-    else {
-      repl_session.send_edit(isar_string)
-      repl_session.output_current_node_results()  // read the probe's output first
-      repl_session.discard_last_edit()             // then drop the transient command
-    }
-  }
-
-  def get_source(): Repl_Result = build_result {
-    Repl_Output.add_output(repl_session.current_source)
-  }
-
-  def rollback(): Repl_Result = build_result {
-    repl_session.rollback_last_text_edit()
-    repl_session.output_current_node_results()
-  }
-
-  def step(isar_string: String): Repl_Result = build_result {
-    repl_session.send_edit(isar_string)
-    repl_session.output_current_node_results()
-  }
-
-  /**
-   * Verify a whole proof CHUNK in one shot: insert it as a single edit (parallel proof
-   * checking stays on per parallel_proofs), then return a JSON per-command status report
-   * under ONE wall budget (no per-command timeouts). On budget expiry the report is partial
-   * and names the still-`running` line (the loop). Requires the theory to be begun.
-   *
-   * TRANSACTIONAL: the chunk is kept in the theory node only if it verifies fully
-   * (`Chunk_Report.success`); on any failure OR timeout it is rolled back via
-   * `discard_last_edit` so the attempt leaves no trace. This makes repeated attempts
-   * independent: the next try can't hit "Duplicate fact declaration" (re-declaring the same
-   * lemma) or "Bad context for command ... -- using reset state" (a still-running command
-   * poisoning the node), and the removal edit cancels the obsolete (e.g. looping `metis`)
-   * command instead of leaving it churning. Since the theory is begun, send_edit always
-   * records the chunk as the last text edit, so discard removes exactly this chunk.
-   *
-   * The report carries `proof_open`: even a `success` chunk (no command errors) may leave an
-   * UNCLOSED proof — e.g. `theorem ... using assms` or a trailing `have ...` with no `qed`.
-   * Such a chunk is kept (so the caller can `sledgehammer` the open goal), but `proof_open`
-   * is true so the caller knows the theorem is NOT actually proved and must close it (or
-   * rollback) before starting a new `theorem`/`lemma` — declaring one while a proof is open
-   * is exactly what triggers "Bad context for command -- using reset state". `proof_open` is
-   * the ML `Toplevel.is_proof` predicate (block lifetime), NOT bare subgoal counting: a
-   * successful terminal `show` leaves zero subgoals but the block still awaits `qed`, and
-   * batch builds reject that with "Goal present in this block". In that situation the report
-   * also carries `pending_qed`=true so the caller knows the only missing step is `qed`
-   * (vs. real remaining goals, which need proof work). For a rolled-back (failed) chunk
-   * both are false (nothing was kept).
-   */
-  def verify_chunk(isar_string: String, wall_budget_ms: Long): String = {
-    Repl_Output.reset()
-    if (!repl_session.current_thy_begun)
-      """{"timed_out":false,"success":false,"proof_open":false,"pending_qed":false,"used_sorry":false,"elapsed_ms":0,"commands":[],"error":"theory not begun"}"""
-    else {
-      repl_session.send_edit(isar_string)
-      val report = repl_session.chunk_status_report(wall_budget_ms)
-      val proof_open =
-        if (!report.success) { repl_session.discard_last_edit(); false }
-        else in_proof()  // kept chunk: block still open (goals pending OR qed pending)
-      val pending_qed =
-        report.success && proof_open && open_subgoals().isEmpty  // discharged, needs only qed
-      JSON.Format(report.fields + ("proof_open" -> proof_open) + ("pending_qed" -> pending_qed))
-    }
-  }
-
-  /**
-   * Load a chunk and report per-command status, WITHOUT rollback on ordinary
-   * failure (LSP-style: broken state stays in the node so the caller can
-   * inspect and fix it — the dual of verify_chunk's transactional semantics).
-   * Returns the same JSON per-command report shape as verify_chunk.
-   *
-   * Two caveats:
-   *  - On BUDGET TIMEOUT the chunk IS discarded (discard_last_edit) to cancel
-   *    the runaway command — leaving a looping `metis` churning is never what a
-   *    caller wants. The report's `timed_out`/`running` line names the loop.
-   *  - `proof_open`/`pending_qed` are only probed when the chunk succeeded AND
-   *    `probe_state` is true. Callers pass probe_state=false when the text ends
-   *    with theory `end`: a probe appended past `end` never executes, so the
-   *    ML channel would hang until timeout. On failure both are false (the
-   *    caller inspects `commands[]` instead).
-   */
-  def step_chunk_report(isar_string: String, wall_budget_ms: Long, probe_state: Boolean): String = {
-    Repl_Output.reset()
-    // Guard on ENTERED (not begun): for a full-file load the theory header is part of
-    // the chunk itself, so `current_thy_begun` is still false before this first edit —
-    // send_edit processes the header as part of the insertion (need_header_processing).
-    if (!repl_session.entered_some_thy)
-      """{"timed_out":false,"success":false,"proof_open":false,"pending_qed":false,"used_sorry":false,"elapsed_ms":0,"commands":[],"error":"no theory entered"}"""
-    else {
-      repl_session.send_edit(isar_string)
-      val report = repl_session.chunk_status_report(wall_budget_ms)
-      val proof_open =
-        if (report.timed_out) { repl_session.discard_last_edit(); false }
-        else if (!report.success) false
-        else probe_state && in_proof()
-      val pending_qed = proof_open && open_subgoals().isEmpty
-      JSON.Format(report.fields + ("proof_open" -> proof_open) + ("pending_qed" -> pending_qed))
-    }
-  }
-
-  def vector_step(isar_strings: java.util.List[String]): Repl_Result = build_result {
-    repl_session.send_vector_edit(isar_strings.asScala.toList)
-    repl_session.output_current_node_results()
-  }
-
-  def reset(): Repl_Result = build_result {
-
-    if (session_manager_instance.get_cache_status().contains("Enabled: true")) {
-      // with cache
-      repl_session.stop_with_cache()
-      repl_session = new Repl_Session(session_manager_instance)
-    } else {
-      // cache disabled
-      repl_session.stop()
-      repl_session = new Repl_Session(session_manager_instance)
-    }
-  }
-
-  def exit(): Unit = {
-    Repl_ML_Communication.clear_channel(channel_id)
-    session_manager_instance.shutdown()
-  }
-
-  def save_state(): EnvStateID = repl_session.save_state()
-
-  def restore_state(state_id: EnvStateID): Boolean = repl_session.restore_state(state_id)
-
-  def vectorise(size: Int): Unit =
-    repl_session.vectorise(size)
-
-  def scalarise(index_to_keep: Int): Unit =
-    repl_session.scalarise(index_to_keep)
-  
-  // validate session
-  def is_session_valid(): Boolean = {
-    try {
-      
-      repl_session.current_thy_name_string
-      true
-    } catch {
-      case _: Throwable => false
-    }
-  }
-  
-  def recreate_session_if_needed(): Unit = {
-    if (!is_session_valid()) {
-      println("Invalid session found, recreating...")
-      repl_session = new Repl_Session(session_manager_instance, initial_thys)
-    }
   }
 }

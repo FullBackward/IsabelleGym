@@ -4,6 +4,10 @@ import isabelle._
 
 import scala.util.parsing.input.Reader
 
+/** Theory-source lexing/parsing helpers: tokenising theory text, extracting
+ *  and validating theory names, and parsing the accumulated header tokens into
+ *  a `Thy_Header`. Shared infrastructure used by [[ReplBackend]] (theory
+ *  entry) and [[Edit_Utils]] (header processing) in both workflows. */
 object Thy_Parsing {
   private def get_thy_tokens(reader: Reader[Char]): LazyList[Token] = {
     val token = Token.Parsers.token(Thy_Header.bootstrap_keywords)
