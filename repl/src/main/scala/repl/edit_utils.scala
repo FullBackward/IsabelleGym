@@ -115,6 +115,14 @@ object Edit_Utils {
 
         dependencies_edit(session, node_name, thy_header).map { true_deps_edit =>
           thy_info.set_header_processed(true)
+          // LOAD-BEARING (heap-pool model, Stage 3): the emulated wrapper-import
+          // Deps edit is applied AFTER the true-deps edit and REPLACES the header
+          // (the PIDE keeps the last Deps edit). Consequence: the document's own
+          // import list only gates LOADING (import_all_theories above); the visible
+          // parent context comes from the wrapper alone. Therefore the wrapper must
+          // state every import whose facts/ML environment the document needs.
+          // Do NOT merge the two Deps edits — the design relies on the overwrite
+          // (claude-work/2026-8-12(2)-research-heap-pool/FINDINGS.md, spike 3).
           true_deps_edit :: emulated_imports_edits
         }
     }

@@ -1,0 +1,251 @@
+"""Unit tests for mcp_lsp_server (file-sync pool logic) — no backend, no mcp
+package: tests target pool.py with a fake IsabelleGymAsyncClient.
+"""
+from __future__ import annotations
+
+import asyncio
+
+import httpx
+import pytest
+
+from mcp_lsp_server.pool import (
+    LspPool,
+    attempt_prefix,
+    canonical_path,
+    header_imports,
+)
+
+
+class FakeClient:
+    """Stub for IsabelleGymAsyncClient — records calls, programmable 404s.
+
+    Emulates the server's acquire semantics: released sessions go back to an
+    idle pool and the next acquire reuses one (warm) before creating new."""
+
+    def __init__(self):
+        self.created = []
+        self.acquired = []
+        self.released = []
+        self.closed = []
+        self.loads = []
+        self.idle = []  # (session_id, lease_id) released back to the pool
+        self._counter = 0
+        self.fail_next_load_404 = False
+
+    async def create_session(self, theories=None, field="HOL", task_group=None,
+                             heap_session=None, project=None, label=None):
+        self._counter += 1
+        self.created.append({
+            "theories": theories, "field": field, "task_group": task_group,
+            "heap_session": heap_session, "label": label,
+        })
+        return {"session_id": f"s{self._counter}", "lease_id": f"L{self._counter}"}
+
+    async def acquire_session(self, theories=None, field="HOL", reuse_dirty=True,
+                              task_group=None, heap_session=None, project=None,
+                              label=None):
+        self.acquired.append({
+            "theories": theories, "field": field, "reuse_dirty": reuse_dirty,
+            "task_group": task_group, "heap_session": heap_session,
+            "label": label,
+        })
+        if self.idle:
+            session_id, lease_id = self.idle.pop()
+            return {"session_id": session_id, "lease_id": lease_id, "reused": True}
+        self._counter += 1
+        return {
+            "session_id": f"s{self._counter}",
+            "lease_id": f"L{self._counter}",
+            "reused": False,
+        }
+
+    async def release_session(self, session_id, lease_id=None):
+        self.released.append(session_id)
+        self.idle.append((session_id, lease_id))
+        return {"success": True}
+
+    async def close_session(self, session_id, lease_id=None):
+        self.closed.append(session_id)
+        return {"success": True}
+
+    async def load_document(self, session_id, text, thy_name=None, imports=None,
+                            timeout=None, report=False, lease_id=None):
+        if self.fail_next_load_404:
+            self.fail_next_load_404 = False
+            raise httpx.HTTPStatusError(
+                "404",
+                request=httpx.Request("PUT", "http://test"),
+                response=httpx.Response(404),
+            )
+        self.loads.append({"session_id": session_id, "text": text, "report": report})
+        return {"success": True, "report": {"success": True, "commands": []}}
+
+    async def goals_at_line(self, session_id, line, lease_id=None):
+        return {"found": True, "goals_after": ["True"]}
+
+
+def _pool_with_fake():
+    pool = LspPool()
+    pool._client = FakeClient()
+    return pool
+
+
+def test_sync_unchanged_file_no_reload(tmp_path):
+    f = tmp_path / "T.thy"
+    f.write_text("theory T imports Main begin\nlemma t: True by simp\nend\n")
+    pool = _pool_with_fake()
+
+    async def run():
+        binding = await pool.get_binding(str(f))
+        first = await pool.sync(binding)   # first sync loads
+        second = await pool.sync(binding)  # unchanged: no reload
+        return first, second
+
+    first, second = asyncio.run(run())
+    assert first is True and second is False
+    assert len(pool._client.loads) == 1
+    assert pool._client.loads[0]["report"] is True
+
+
+def test_sync_changed_file_reloads_once(tmp_path):
+    f = tmp_path / "T.thy"
+    f.write_text("theory T imports Main begin\nlemma t: True by simp\nend\n")
+    pool = _pool_with_fake()
+
+    async def run():
+        binding = await pool.get_binding(str(f))
+        await pool.sync(binding)
+        f.write_text("theory T imports Main begin\nlemma t: True by simp\nlemma u: True by simp\nend\n")
+        return await pool.sync(binding)
+
+    assert asyncio.run(run()) is True
+    assert len(pool._client.loads) == 2
+    assert "lemma u" in pool._client.loads[1]["text"]
+
+
+def test_sync_missing_file_clean_error(tmp_path):
+    pool = _pool_with_fake()
+
+    async def run():
+        binding = await pool.get_binding(str(tmp_path / "Nope.thy"))
+        await pool.sync(binding)
+
+    with pytest.raises(FileNotFoundError):
+        asyncio.run(run())
+
+
+def test_auto_open_defaults(tmp_path):
+    f = tmp_path / "T.thy"
+    f.write_text("theory T imports Main begin\nlemma t: True by simp\nend\n")
+    pool = _pool_with_fake()
+    binding = asyncio.run(pool.get_binding(str(f)))
+    acquired = pool._client.acquired[0]
+    assert acquired["task_group"] == "default"
+    assert acquired["heap_session"] is None
+    assert acquired["reuse_dirty"] is True
+    assert acquired["label"] == canonical_path(str(f))
+    assert binding.session_id == "s1"
+
+
+def test_binding_warm_reuse_after_release(tmp_path):
+    """A released binding's session is re-acquired warm by the next binding."""
+    f1 = tmp_path / "A.thy"
+    f2 = tmp_path / "B.thy"
+    f1.write_text("theory A imports Main begin\nend\n")
+    f2.write_text("theory B imports Main begin\nend\n")
+    pool = _pool_with_fake()
+
+    async def run():
+        b1 = await pool.get_binding(str(f1))
+        await pool.close_binding(str(f1))
+        b2 = await pool.get_binding(str(f2))
+        return b1, b2
+
+    b1, b2 = asyncio.run(run())
+    assert b2.session_id == b1.session_id  # warm reuse, no new session
+    assert pool._client._counter == 1
+    assert len(pool._client.acquired) == 2
+
+
+def test_rebind_on_404(tmp_path):
+    f = tmp_path / "T.thy"
+    f.write_text("theory T imports Main begin\nlemma t: True by simp\nend\n")
+    pool = _pool_with_fake()
+
+    async def run():
+        binding = await pool.get_binding(str(f))
+        await pool.sync(binding)
+        assert binding.session_id == "s1"
+        pool._client.fail_next_load_404 = True
+        f.write_text("theory T imports Main begin\nlemma t2: True by simp\nend\n")
+        reloaded = await pool.sync(binding)
+        return binding, reloaded
+
+    binding, reloaded = asyncio.run(run())
+    assert reloaded is True
+    assert binding.session_id == "s2"  # rebound to a fresh session
+    assert pool._client.released == ["s1"]  # old session released on rebind
+    assert pool._client.loads[-1]["session_id"] == "s2"
+
+
+def test_close_binding_releases(tmp_path):
+    f = tmp_path / "T.thy"
+    f.write_text("theory T imports Main begin\nend\n")
+    pool = _pool_with_fake()
+
+    async def run():
+        await pool.get_binding(str(f))
+        return await pool.close_binding(str(f)), await pool.close_binding(str(f))
+
+    first, second = asyncio.run(run())
+    assert first is True and second is False
+    assert pool._client.released == ["s1"]
+
+
+def test_scratch_pool_reuse_and_cap():
+    pool = _pool_with_fake()
+    key = pool.scratch_key("default", None, ["Main"], None)
+
+    async def run():
+        a = await pool.acquire_scratch(key)
+        b = await pool.acquire_scratch(key)
+        # at cap (default 4? set explicitly) — release and re-acquire reuses
+        await pool.release_scratch(key, *a)
+        c = await pool.acquire_scratch(key)
+        return a, b, c
+
+    a, b, c = asyncio.run(run())
+    assert c == a  # reused the released session
+    assert len(pool._client.created) == 2  # only two ever created
+    # key components flow into session creation
+    created = pool._client.created[0]
+    assert created["task_group"] == "default"
+    assert created["theories"] == ["Main"]
+
+
+def test_scratch_drop_decrements_count():
+    pool = _pool_with_fake()
+    key = pool.scratch_key("g", "Hp1", ["Main"], None)
+
+    async def run():
+        a = await pool.acquire_scratch(key)
+        await pool.drop_scratch(key, *a)
+        b = await pool.acquire_scratch(key)
+        return a, b
+
+    a, b = asyncio.run(run())
+    assert a != b  # a fresh session after the drop
+    assert pool._client.closed == [a[0]]
+    assert pool._client.created[0]["heap_session"] == "Hp1"
+
+
+def test_attempt_prefix_truncation():
+    text = "theory T imports Main begin\nlemma a: True by simp\nlemma b: True by auto\nend\n"
+    assert attempt_prefix(text, 3) == "theory T imports Main begin\nlemma a: True by simp\n"
+    assert attempt_prefix(text, 1) == "\n"
+
+
+def test_header_imports_parsing():
+    text = 'theory T imports Main "HOL-Library.Multiset" Sub/Dir begin\nlemma a: True by simp'
+    assert header_imports(text) == ["Main", "HOL-Library.Multiset", "Sub/Dir"]
+    assert header_imports("lemma a: True by simp") == []

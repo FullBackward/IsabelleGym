@@ -82,4 +82,33 @@ trait Backend_File_Ops { this: ReplBackend =>
     Repl_Output.reset()
     repl_session.goals_at_line(line)
   }
+
+  /** Hover info at a 1-based line/col (UTF-16 columns), as JSON
+   *  {found, range, contents: [str]}. Snapshot + Rendering — no evaluation, no
+   *  edits, no overlays. Consumed via GET /api/v1/sessions/{id}/hover by the
+   *  LSP-like file-sync mode. */
+  def hover_at(line: Int, col: Int): String = {
+    Repl_Output.reset()
+    repl_session.hover_at(line, col)
+  }
+
+  /** Go-to-definition at a 1-based line/col, as JSON {found, targets: [...]}.
+   *  Heap/source entities resolve to file positions (`~~/` expanded); entities
+   *  defined in the entry node itself resolve to in-node line ranges. Snapshot
+   *  markup only — no evaluation. Consumed via GET /api/v1/sessions/{id}/definition
+   *  by the LSP-like file-sync mode. */
+  def definition_at(line: Int, col: Int): String = {
+    Repl_Output.reset()
+    repl_session.definition_at(line, col)
+  }
+
+  /** Sledgehammer on the open goal at a 1-based line (optional subgoal index),
+   *  via the `isabellegym_sledgehammer` overlay print op (REPL.ML) — no text
+   *  edits, no channel probes. JSON: {found, results: [str]} or
+   *  {found:false, error} (no open goal / timeout). Consumed via
+   *  POST /api/v1/sessions/{id}/sledgehammer_at (semaphore-bounded server-side). */
+  def sledgehammer_at(line: Int, subgoal: Int, timeout_s: Int): String = {
+    Repl_Output.reset()
+    repl_session.sledgehammer_at(line, subgoal, timeout_s)
+  }
 }

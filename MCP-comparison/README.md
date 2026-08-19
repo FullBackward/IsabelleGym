@@ -1,10 +1,11 @@
 # MCP comparison harness
 
-This directory compares three Isabelle MCP servers on the same set of `.thy` problems:
+This directory compares Isabelle MCP servers on the same set of `.thy` problems:
 
-1. **IsabelleGym MCP** (`run_isabellegym.py`) — this repo
-2. **Isabelle-MCP** (`run_isabelle_mcp.py`) — `~/GitHub/Isabelle-MCP`
-3. **AutoCorrode I/Q** (`run_autocorrode_iq.py`) — `~/GitHub/AutoCorrode`
+1. **IsabelleGym MCP** (`run_isabellegym.py`) — this repo (chunk-centric MCP)
+2. **IsabelleGym LSP MCP** (`run_isabellegym_lsp.py`) — this repo (file-sync LSP-like MCP)
+3. **Isabelle-MCP** (`run_isabelle_mcp.py`) — `~/GitHub/Isabelle-MCP`
+4. **AutoCorrode I/Q** (`run_autocorrode_iq.py`) — `~/GitHub/AutoCorrode`
 
 The harness uses a **shared OpenAI-compatible chat client** (`common/model.py` — DeepSeek,
 Kimi, or any compatible endpoint) and the same agent-loop structure for all three systems.
@@ -28,6 +29,7 @@ MCP-comparison/
 │   └── arbiter.py               # neutral isabelle build checker
 ├── problems/                    # benchmark .thy files (theorem … sorry)
 ├── run_isabellegym.py           # IsabelleGym runner
+├── run_isabellegym_lsp.py       # IsabelleGym LSP-MCP runner (file-sync workflow)
 ├── run_isabelle_mcp.py          # Isabelle-MCP runner
 ├── run_autocorrode_iq.py        # AutoCorrode I/Q runner
 ├── analyze.py                   # print summary tables
@@ -165,6 +167,23 @@ Then run:
 ```bash
 python MCP-comparison/run_isabellegym.py --thy-dir MCP-comparison/problems --prompt segment --repeats 10
 ```
+
+### 1b. IsabelleGym LSP (file-sync workflow)
+
+The LSP-like MCP (`mcp_lsp_server/`) is READ-ONLY by design — it observes files.
+So this runner differs in shape: the agent edits a per-attempt workdir copy of
+the problem with LOCAL `read_file`/`write_file` tools (sandboxed to the workdir),
+and the MCP sees each edit via its disk→session sync on the next query. Setup
+per attempt is `isabelle_open(file_path)`; the verdict is the same neutral
+arbiter on the final file state.
+
+```bash
+python -m server.app.main   # the LSP MCP talks to the same HTTP server
+python MCP-comparison/run_isabellegym_lsp.py --thy-dir MCP-comparison/problems --repeats 10
+```
+
+Results land in `runs/isabellegym_lsp/` (same results.jsonl schema;
+`analyze.py` picks it up as a fourth system row).
 
 ### 2. Isabelle-MCP
 

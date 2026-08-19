@@ -8,6 +8,8 @@ import httpx
 
 THEORY_RE = re.compile(r'(?ms)^[ \t]*theory\s+(?:"([^"\n]+)"|([A-Za-z0-9_\'.-]+))')
 BASE_URL = "/api/v1/sessions"
+HEAPS_URL = "/api/v1/heaps"
+HEAP_GROUPS_URL = "/api/v1/heap_groups"
 
 
 def extract_theory_name(text: str) -> Optional[str]:
@@ -66,6 +68,9 @@ class IsabelleGymAsyncClient:
         theories: list[str] | None = None,
         field: str | None = "HOL",
         label: str | None = None,
+        task_group: str | None = None,
+        heap_session: str | None = None,
+        project: str | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {}
         if theories is not None:
@@ -74,6 +79,12 @@ class IsabelleGymAsyncClient:
             payload["field"] = field
         if label is not None:
             payload["label"] = label
+        if task_group is not None:
+            payload["task_group"] = task_group
+        if heap_session is not None:
+            payload["heap_session"] = heap_session
+        if project is not None:
+            payload["project"] = project
         response = await self._request("POST", BASE_URL, json_body=payload)
         response.raise_for_status()
         return response.json()
@@ -83,13 +94,65 @@ class IsabelleGymAsyncClient:
         theories: list[str] | None = None,
         field: str | None = "HOL",
         reuse_dirty: bool = True,
+        task_group: str | None = None,
+        heap_session: str | None = None,
+        project: str | None = None,
+        label: str | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {"reuse_dirty": reuse_dirty}
         if theories is not None:
             payload["theories"] = theories
         if field is not None:
             payload["field"] = field
+        if task_group is not None:
+            payload["task_group"] = task_group
+        if heap_session is not None:
+            payload["heap_session"] = heap_session
+        if project is not None:
+            payload["project"] = project
+        if label is not None:
+            payload["label"] = label
         response = await self._request("POST", f"{BASE_URL}/acquire", json_body=payload)
+        response.raise_for_status()
+        return response.json()
+
+    # --- heap pool (Stage 3) ---------------------------------------------------
+    async def heap_build(
+        self, task_group: str, project: str, session_name: str | None = None,
+    ) -> dict[str, Any]:
+        """Build/rebuild the verified heap for (task_group, project)."""
+        payload: dict[str, Any] = {"task_group": task_group, "project": project}
+        if session_name is not None:
+            payload["session_name"] = session_name
+        response = await self._request("POST", f"{HEAPS_URL}/build", json_body=payload)
+        response.raise_for_status()
+        return response.json()
+
+    async def list_heaps(self, task_group: str | None = None) -> dict[str, Any]:
+        url = f"{HEAPS_URL}?task_group={task_group}" if task_group else HEAPS_URL
+        response = await self._request("GET", url)
+        response.raise_for_status()
+        return response.json()
+
+    async def get_heap(self, task_group: str, project: str) -> dict[str, Any]:
+        """Full manifest. The project path follows the group segment verbatim
+        (server uses a :path converter): get_heap("alpha", "/tmp/hp1")."""
+        response = await self._request("GET", f"{HEAPS_URL}/{task_group}/{project}")
+        response.raise_for_status()
+        return response.json()
+
+    async def delete_heap(self, task_group: str, project: str) -> dict[str, Any]:
+        response = await self._request("DELETE", f"{HEAPS_URL}/{task_group}/{project}")
+        response.raise_for_status()
+        return response.json()
+
+    async def list_heap_groups(self) -> dict[str, Any]:
+        response = await self._request("GET", HEAP_GROUPS_URL)
+        response.raise_for_status()
+        return response.json()
+
+    async def delete_heap_group(self, task_group: str) -> dict[str, Any]:
+        response = await self._request("DELETE", f"{HEAP_GROUPS_URL}/{task_group}")
         response.raise_for_status()
         return response.json()
 
@@ -460,6 +523,44 @@ class IsabelleGymAsyncClient:
         goal lists are empty unless show_states is on (default true)."""
         response = await self._request(
             "GET", f"{BASE_URL}/{session_id}/goals?line={int(line)}",
+            headers=self._lease_headers(lease_id),
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def hover_at(
+        self, session_id: str, line: int, col: int, *, lease_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Hover info at a 1-based line/col (UTF-16 columns):
+        ``{found, range, contents}``. Snapshot + Rendering; no evaluation."""
+        response = await self._request(
+            "GET", f"{BASE_URL}/{session_id}/hover?line={int(line)}&col={int(col)}",
+            headers=self._lease_headers(lease_id),
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def definition_at(
+        self, session_id: str, line: int, col: int, *, lease_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Go-to-definition at a 1-based line/col: ``{found, targets}`` — file
+        targets for heap/source entities, node targets for entry-document ones."""
+        response = await self._request(
+            "GET", f"{BASE_URL}/{session_id}/definition?line={int(line)}&col={int(col)}",
+            headers=self._lease_headers(lease_id),
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def sledgehammer_at(
+        self, session_id: str, line: int, *, subgoal: int = 1, timeout_s: int = 30,
+        lease_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Position-explicit sledgehammer (overlay; no text edits):
+        ``{found, results}`` or ``{found: False, error}``."""
+        response = await self._request(
+            "POST", f"{BASE_URL}/{session_id}/sledgehammer_at",
+            json_body={"line": int(line), "subgoal": int(subgoal), "timeout_s": int(timeout_s)},
             headers=self._lease_headers(lease_id),
         )
         response.raise_for_status()

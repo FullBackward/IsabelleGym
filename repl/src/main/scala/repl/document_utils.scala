@@ -428,6 +428,226 @@ object Document_Utils {
         Json_Reports.line_query_not_found(s"no command at line $line")
     }
 
+  // -----------------------------------------------------------------------
+  // Hover / go-to-definition (fresh stable snapshot + Rendering; NO evaluation,
+  // NO overlays). Consumed via GET .../hover and GET .../definition by the
+  // LSP-like file-sync mode. Positions are 1-based line/col, UTF-16 columns
+  // (LSP conventions, same as the Stage-2.1 chunk-report ranges).
+  // -----------------------------------------------------------------------
+
+  private def offset_at(line_doc: Line.Document, line: Int, col: Int): Option[Text.Offset] =
+    if (line < 1 || col < 1) None
+    else line_doc.offset(Line.Position(line = line - 1, column = col - 1))
+
+  private def range_fields(r: Line.Range): JSON.Object.T =
+    JSON.Object(
+      "start" -> JSON.Object("line" -> r.start.line1, "col" -> r.start.column1),
+      "end" -> JSON.Object("line" -> r.stop.line1, "col" -> r.stop.column1))
+
+  /** Expand a leading `~~/` (Isabelle system prefix) to $ISABELLE_HOME so clients
+   *  get an openable absolute path. */
+  private def expand_isabelle_home(name: String): String =
+    if (name.startsWith("~~/")) Isabelle_System.getenv("ISABELLE_HOME") + name.stripPrefix("~~")
+    else name
+
+  /** Hover info at a 1-based line/col: {found, range, contents: [str]}; the contents
+   *  are the tooltip entries (entity kinds, types, documentation) as pretty text. */
+  def hover_at_json(
+      session: Headless.Session,
+      node_name: Document.Node.Name,
+      line: Int,
+      col: Int
+  ): String = {
+    val snapshot = stable_node_snapshot(session, node_name)
+    val line_doc = Line.Document(snapshot.node.source)
+    offset_at(line_doc, line, col) match {
+      case None => Json_Reports.line_query_not_found(s"no position at line $line col $col")
+      case Some(off) =>
+        val rendering = new Rendering(snapshot, session.resources.options, session)
+        rendering.tooltips(Rendering.tooltip_elements, Text.Range(off, off + 1)) match {
+          case Some(info) =>
+            JSON.Format(JSON.Object(
+              "found" -> true,
+              "range" -> range_fields(line_doc.range(info.range)),
+              "contents" -> info.info.map(e => Pretty.string_of(List(e)))))
+          case None =>
+            Json_Reports.line_query_not_found(s"no hover info at line $line col $col")
+        }
+    }
+  }
+
+  private val hyperlink_elements: Markup.Elements =
+    Markup.Elements(Markup.ENTITY, Markup.PATH, Markup.POSITION)
+
+  /** A file target's position as 1-based line/col: when the entity carries a
+   *  symbol range, decode it against the target file's text (jEdit's approach);
+   *  otherwise fall back to the entity's 1-based line. */
+  private def file_target_json(name: String, line: Int, range: Symbol.Range): JSON.T = {
+    val file = expand_isabelle_home(name)
+    val base: JSON.Object.T = JSON.Object("kind" -> "file", "file" -> file)
+    if (range.start > 0) {
+      try {
+        val text = File.read(Path.explode(file))
+        val r = Line.Document(text).range(Symbol.Text_Chunk(text).decode(range))
+        base ++ JSON.Object("line" -> r.start.line1, "col" -> r.start.column1,
+          "end_line" -> r.stop.line1, "end_col" -> r.stop.column1)
+      } catch { case _: Exception => base + ("line" -> line) }
+    } else base + ("line" -> line)
+  }
+
+  /** Resolve a command-id target to its node's line range. */
+  private def id_target_json(snapshot: Document.Snapshot, id: Long, range: Symbol.Range): JSON.T =
+    (for {
+      start <- snapshot.find_command_position(id, range.start)
+      stop <- snapshot.find_command_position(id, range.stop)
+    } yield JSON.Object(
+      "kind" -> "node",
+      "node" -> start.name,
+      "start_line" -> start.pos.line1,
+      "end_line" -> stop.pos.line1): JSON.T)
+      .getOrElse(JSON.Object("kind" -> "command_id", "id" -> id.toString))
+
+  /** Go-to-definition at a 1-based line/col: {found, targets: [...]}. Heap/source
+   *  entities resolve to {kind:"file", file, line, col, end_line, end_col}; entities
+   *  defined in the DRAFT entry node itself resolve to {kind:"node", node,
+   *  start_line, end_line} (the client maps node lines back to its buffer). */
+  def definition_at_json(
+      session: Headless.Session,
+      node_name: Document.Node.Name,
+      line: Int,
+      col: Int
+  ): String = {
+    val snapshot = stable_node_snapshot(session, node_name)
+    val line_doc = Line.Document(snapshot.node.source)
+    offset_at(line_doc, line, col) match {
+      case None => Json_Reports.line_query_not_found(s"no position at line $line col $col")
+      case Some(off) =>
+        val links = snapshot.cumulate[List[JSON.T]](
+          Text.Range(off, off + 1), Nil, hyperlink_elements, _ =>
+            {
+              case (acc, Text.Info(_, XML.Elem(Markup.Path(name), _))) =>
+                Some(JSON.Object("kind" -> "path", "file" -> expand_isabelle_home(name)) :: acc)
+              case (acc, Text.Info(_, XML.Elem(Markup(Markup.ENTITY, props), _))) =>
+                val target: Option[JSON.T] = props match {
+                  case Position.Item_Def_File(name, l, range) =>
+                    Some(file_target_json(name, l, range))
+                  case Position.Item_Def_Id(id, range) =>
+                    Some(id_target_json(snapshot, id, range))
+                  case _ => None
+                }
+                target.map(_ :: acc)
+              case (acc, Text.Info(_, XML.Elem(Markup(Markup.POSITION, props), _))) =>
+                val target: Option[JSON.T] = props match {
+                  case Position.Item_File(name, l, range) =>
+                    Some(file_target_json(name, l, range))
+                  case Position.Item_Id(id, range) =>
+                    Some(id_target_json(snapshot, id, range))
+                  case _ => None
+                }
+                target.map(_ :: acc)
+              case _ => None
+            })
+        val targets = links match {
+          case Text.Info(_, l) :: _ => l.reverse
+          case _                    => Nil
+        }
+        if (targets.isEmpty)
+          Json_Reports.line_query_not_found(s"no definition at line $line col $col")
+        else JSON.Format(JSON.Object("found" -> true, "targets" -> targets))
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // Overlay query machinery (style-4): attach a registered print function to an
+  // EXISTING host command, poll for the instance's finished status marker,
+  // collect instance-tagged results, remove the overlay. No text edits — the
+  // document, rollback chain, and history are untouched.
+  // -----------------------------------------------------------------------
+
+  /** Result of an overlay query: (finished-in-budget, content lines, error lines). */
+  def overlay_query(
+      session: Headless.Session,
+      node_name: Document.Node.Name,
+      host: Command,
+      print_fn: String,
+      args: List[String],
+      budget_ms: Long
+  ): (Boolean, List[String], List[String]) = {
+    val instance = Document_ID.make().toString
+    val overlays = Document.Node.Overlays.empty.insert(host, print_fn, instance :: args)
+    session.update(Document.Blobs.empty, List(
+      node_name -> Document.Node.Perspective[Text.Edit, Text.Perspective](
+        true, Text.Perspective.full, overlays)))
+    try {
+      val deadline = System.currentTimeMillis() + budget_ms
+      var done = false
+      while (!done && System.currentTimeMillis() < deadline) {
+        session.output_delay.sleep()
+        val snap = session.await_stable_snapshot().switch(node_name)
+        done = snap.command_results(host).iterator.toList.exists {
+          case (_, XML.Elem(Markup(Markup.RESULT, props), List(XML.Elem(m, _))))
+            if Markup.Instance.unapply(props).contains(instance) => m.name == Markup.FINISHED
+          case _ => false
+        }
+      }
+      val snap = session.await_stable_snapshot().switch(node_name)
+      var content = List.empty[String]
+      var errors = List.empty[String]
+      for ((_, XML.Elem(Markup(Markup.RESULT, props), body)) <- snap.command_results(host).iterator.toList
+           if Markup.Instance.unapply(props).contains(instance)) {
+        body match {
+          // status markers (running/finished): no content
+          case List(XML.Elem(m, _)) if m.name == Markup.RUNNING || m.name == Markup.FINISHED => ()
+          case List(XML.Elem(m, b)) if m.name == Markup.ERROR =>
+            errors = errors :+ Pretty.string_of(b)
+          case _ =>
+            val text = Pretty.string_of(body)
+            if (text.nonEmpty) content = content :+ text
+        }
+      }
+      (done, content, errors)
+    } finally {
+      // ALWAYS remove the overlay (restore the node's original empty perspective)
+      session.update(Document.Blobs.empty, List(
+        node_name -> Document.Node.Perspective[Text.Edit, Text.Perspective](
+          true, Text.Perspective.empty, Document.Node.Overlays.empty)))
+    }
+  }
+
+  /** Sledgehammer at a 1-based line via the `isabellegym_sledgehammer` overlay op
+   *  (REPL.ML). Host = the command containing the line (jEdit cursor semantics);
+   *  the op normalizes Forward-mode proof states via Proof.enter_backward, so any
+   *  in-proof position works. Clean {found:false, error} when the line has no open
+   *  goal. Consumed via POST .../sledgehammer_at by both MCPs. */
+  def sledgehammer_at_json(
+      session: Headless.Session,
+      node_name: Document.Node.Name,
+      line: Int,
+      subgoal: Int,
+      timeout_s: Int
+  ): String =
+    command_containing_line(session, node_name, line) match {
+      case None => Json_Reports.line_query_not_found(s"no command at line $line")
+      case Some((_, _, command, _)) =>
+        val (done, content, errors) = overlay_query(
+          session, node_name, command,
+          "isabellegym_sledgehammer_query",
+          List(timeout_s.toString, subgoal.toString),
+          (timeout_s + 30).toLong * 1000L)
+        if (!done)
+          JSON.Format(JSON.Object(
+            "found" -> false,
+            "error" -> s"sledgehammer timed out (budget ${timeout_s}s + grace)"))
+        else if (errors.nonEmpty)
+          JSON.Format(JSON.Object(
+            "found" -> false,
+            "error" -> (if (errors.head.contains("Unknown proof context"))
+                          s"no open goal at line $line"
+                        else errors.head)))
+        else
+          JSON.Format(JSON.Object("found" -> true, "results" -> content))
+    }
+
   def node_source(session: Headless.Session, node_name: Document.Node.Name) = stable_node_snapshot(
     session,
     node_name,

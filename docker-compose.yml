@@ -41,7 +41,10 @@ services:
       - "8000:8000"
     # Real cgroup ceiling so the memory admission gate bites at a known limit
     # and cAdvisor can report OOM events. Raise for bigger concurrent sweeps.
-    mem_limit: 24g
+    # NOTE: must stay BELOW the Docker VM's own memory (this machine: ~15.6 GiB)
+    # or the cgroup-aware gate goes blind — 24g on a 16 GB box means the VM
+    # OOMs before the gate ever fires.
+    mem_limit: 14g
     # Entrypoint re-registers Isabelle components into the isabelle_user_data
     # volume on every start (docs/ISSUES.md Bug 7), then execs bash.
     command: ./repl/Admin/container_init.sh bash

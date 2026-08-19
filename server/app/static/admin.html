@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>IsabelleGym — Heap Pool Admin</title>
+<style>
+  :root { --ok:#1a7f37; --bad:#cf222e; --warn:#9a6700; --muted:#57606a; --line:#d0d7de; }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; margin: 0; background:#f6f8fa; color:#1f2328; }
+  header { background:#0b3d62; color:#fff; padding:12px 20px; display:flex; align-items:baseline; gap:14px; }
+  header h1 { font-size:17px; margin:0; }
+  header .sub { font-size:12px; opacity:.8; }
+  main { padding:18px 20px; max-width:1200px; margin:0 auto; }
+  section { background:#fff; border:1px solid var(--line); border-radius:8px; padding:14px 16px; margin-bottom:16px; }
+  h2 { font-size:14px; margin:0 0 10px; }
+  table { border-collapse:collapse; width:100%; font-size:13px; }
+  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-weight:600; }
+  button { font-size:12px; padding:4px 10px; border:1px solid var(--line); border-radius:6px; background:#fff; cursor:pointer; }
+  button:hover { background:#f0f3f6; }
+  button.danger { color:var(--bad); border-color:#f3c2c6; }
+  button.primary { background:#0b3d62; color:#fff; border-color:#0b3d62; }
+  input { font-size:13px; padding:5px 8px; border:1px solid var(--line); border-radius:6px; width:220px; }
+  .status-ready { color:var(--ok); font-weight:600; }
+  .status-failed { color:var(--bad); font-weight:600; }
+  .status-building, .status-stale { color:var(--warn); font-weight:600; }
+  pre { background:#f6f8fa; border:1px solid var(--line); border-radius:6px; padding:8px; font-size:12px; overflow:auto; max-height:220px; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12px; }
+  .muted { color:var(--muted); }
+  .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+  #flash { font-size:13px; margin-bottom:10px; min-height:18px; }
+  #flash.err { color:var(--bad); } #flash.ok { color:var(--ok); }
+</style>
+</head>
+<body>
+<header>
+  <h1>IsabelleGym Heap Pool</h1>
+  <span class="sub">task-group tenancy · verified heaps · no auth — internal use only</span>
+</header>
+<main>
+  <div id="flash"></div>
+
+  <section>
+    <h2>Build / rebuild heap</h2>
+    <div class="row">
+      <input id="b-group" placeholder="task_group (e.g. alpha)">
+      <input id="b-project" placeholder="project dir (e.g. /data/proj)" style="width:300px">
+      <input id="b-session" placeholder="session name (optional)">
+      <button class="primary" onclick="buildHeap()">Build</button>
+      <span class="muted">build passing = the verification gate; 409 while building</span>
+    </div>
+  </section>
+
+  <section>
+    <h2>Task groups <button onclick="loadAll()" style="float:right">Refresh</button></h2>
+    <table id="groups"><thead><tr><th>group</th><th>heaps</th><th>ready</th><th></th></tr></thead><tbody></tbody></table>
+  </section>
+
+  <section>
+    <h2>Sessions <span class="muted">(pool contents; force-close uses the listed lease)</span></h2>
+    <table id="sessions"><thead><tr>
+      <th>session</th><th>group</th><th>label</th><th>theories</th><th>cmds</th><th>status</th><th>in use</th><th>idle</th><th></th>
+    </tr></thead><tbody></tbody></table>
+  </section>
+
+  <section>
+    <h2>Heaps <span id="heaps-filter" class="muted"></span></h2>
+    <table id="heaps"><thead><tr>
+      <th>group</th><th>session</th><th>project</th><th>status</th><th>built at</th><th>fingerprint</th><th>actions</th>
+    </tr></thead><tbody></tbody></table>
+  </section>
+
+  <section id="manifest-sec" style="display:none">
+    <h2>Manifest <span id="m-title" class="mono"></span>
+      <button onclick="closeManifest()" title="Close" style="float:right;font-weight:700;padding:2px 9px">✕</button></h2>
+    <div id="m-body"></div>
+  </section>
+</main>
+
+<script>
+const api = (p, o) => fetch(p, o).then(async r => {
+  const t = await r.text();
+  let d; try { d = JSON.parse(t); } catch { d = t; }
+  if (!r.ok) throw new Error((d && d.detail) ? (typeof d.detail === "string" ? d.detail : JSON.stringify(d.detail)) : r.statusText);
+  return d;
+});
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const enc = encodeURIComponent;
+
+function flash(msg, isErr) {
+  const f = document.getElementById("flash");
+  f.textContent = msg; f.className = isErr ? "err" : "ok";
+  if (msg) setTimeout(() => { f.textContent = ""; }, 8000);
+}
+
+async function loadGroups() {
+  const d = await api("/api/v1/heap_groups");
+  const tb = document.querySelector("#groups tbody");
+  tb.innerHTML = "";
+  for (const g of d.groups) {
+    tb.insertAdjacentHTML("beforeend", `<tr>
+      <td class="mono">${esc(g.task_group)}</td><td>${g.heap_count}</td><td>${g.ready}</td>
+      <td><button onclick="loadHeaps('${esc(g.task_group)}')">heaps</button>
+          <button class="danger" onclick="delGroup('${esc(g.task_group)}')">delete group</button></td>
+    </tr>`);
+  }
+  if (!d.groups.length) tb.innerHTML = '<tr><td colspan="4" class="muted">no task groups</td></tr>';
+}
+
+async function loadHeaps(group) {
+  document.getElementById("heaps-filter").textContent = group ? `(group: ${group})` : "(all groups)";
+  const d = await api("/api/v1/heaps" + (group ? "?task_group=" + enc(group) : ""));
+  const tb = document.querySelector("#heaps tbody");
+  tb.innerHTML = "";
+  for (const h of d.heaps) {
+    const built = h.built_at ? new Date(h.built_at * 1000).toLocaleString() : "—";
+    tb.insertAdjacentHTML("beforeend", `<tr>
+      <td class="mono">${esc(h.task_group)}</td><td class="mono">${esc(h.session_name)}</td>
+      <td class="mono">${esc(h.project)}</td>
+      <td class="status-${esc(h.status)}">${esc(h.status)}</td>
+      <td>${built}</td><td class="mono">${esc((h.fingerprint || "").slice(0, 12))}</td>
+      <td><button onclick="showManifest('${esc(h.task_group)}','${esc(h.project)}')">manifest</button>
+          <button onclick="rebuild('${esc(h.task_group)}','${esc(h.project)}')">rebuild</button>
+          <button class="danger" onclick="delHeap('${esc(h.task_group)}','${esc(h.project)}')">delete</button></td>
+    </tr>`);
+  }
+  if (!d.heaps.length) tb.innerHTML = '<tr><td colspan="7" class="muted">no heaps</td></tr>';
+}
+
+async function showManifest(group, project) {
+  const d = await api(`/api/v1/heaps/${enc(group)}/${project}`);
+  document.getElementById("manifest-sec").style.display = "block";
+  document.getElementById("m-title").textContent = `${group} · ${project}`;
+  let files = (d.theory_files || []).map(f =>
+    `<tr><td class="mono">${esc(f.path)}</td><td class="mono">${esc((f.sha256 || "").slice(0, 16))}…</td>
+     <td>${f.mtime ? new Date(f.mtime * 1000).toLocaleString() : "—"}</td></tr>`).join("");
+  document.getElementById("m-body").innerHTML = `
+    <div class="row muted" style="margin-bottom:8px">
+      <span>status: <b class="status-${esc(d.status)}">${esc(d.status)}</b></span>
+      <span>session: <span class="mono">${esc(d.session_name)}</span></span>
+      <span>fingerprint: <span class="mono">${esc(d.fingerprint)}</span></span>
+      <span>built by: ${esc(d.built_by || "—")}</span>
+    </div>
+    <h2>Theory files (${(d.theory_files || []).length})</h2>
+    <table><thead><tr><th>path</th><th>sha256</th><th>mtime</th></tr></thead><tbody>${files}</tbody></table>
+    <h2 style="margin-top:10px">ROOT</h2><pre>${esc(d.root_text || "")}</pre>
+    <h2>Build log tail</h2><pre>${esc(d.build_log_tail || "(empty)")}</pre>`;
+  document.getElementById("manifest-sec").scrollIntoView({behavior: "smooth"});
+}
+
+async function buildHeap() {
+  const g = document.getElementById("b-group").value.trim();
+  const p = document.getElementById("b-project").value.trim();
+  const s = document.getElementById("b-session").value.trim();
+  if (!g || !p) return flash("task_group and project are required", true);
+  flash("building… (large projects take a while)");
+  try {
+    const d = await api("/api/v1/heaps/build", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({task_group: g, project: p, session_name: s || null})});
+    flash(`build ${d.status}: ${d.session_name}`);
+    loadAll();
+  } catch (e) { flash(e.message, true); loadAll(); }
+}
+const rebuild = (g, p) => {
+  flash("rebuilding…");
+  api("/api/v1/heaps/build", {method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({task_group: g, project: p})})
+    .then(d => flash(`rebuild ${d.status}: ${d.session_name}`))
+    .catch(e => flash(e.message, true))
+    .finally(loadAll);
+};
+const delHeap = (g, p) => {
+  if (!confirm(`Delete heap ${g}:${p}?\n(manifest + scratch ROOT removed; heap image GC'd if unreferenced; live sessions unaffected)`)) return;
+  api(`/api/v1/heaps/${enc(g)}/${p}`, {method: "DELETE"})
+    .then(() => flash("heap deleted")).catch(e => flash(e.message, true)).finally(loadAll);
+};
+const delGroup = g => {
+  if (!confirm(`Delete ALL heap records of group ${g}?\n(live sessions keep their loaded heaps)`)) return;
+  api(`/api/v1/heap_groups/${enc(g)}`, {method: "DELETE"})
+    .then(d => flash(`deleted ${d.deleted} heap(s) of ${g}`)).catch(e => flash(e.message, true)).finally(loadAll);
+};
+
+function closeManifest() {
+  document.getElementById("manifest-sec").style.display = "none";
+}
+
+// ---- sessions panel ----
+const age = ts => {
+  const s = Math.max(0, Date.now() / 1000 - ts);
+  if (s < 60) return `${s.toFixed(0)}s`;
+  if (s < 3600) return `${(s / 60).toFixed(0)}m`;
+  return `${(s / 3600).toFixed(1)}h`;
+};
+
+async function loadSessions() {
+  const d = await api("/api/v1/sessions");
+  const tb = document.querySelector("#sessions tbody");
+  tb.innerHTML = "";
+  for (const s of d.sessions) {
+    tb.insertAdjacentHTML("beforeend", `<tr>
+      <td class="mono" title="${esc(s.session_id)}">${esc(s.session_id.slice(0, 8))}…</td>
+      <td class="mono">${esc(s.task_group || "—")}</td>
+      <td class="mono">${esc(s.label || "")}</td>
+      <td class="mono">${esc((s.theories || []).join(", ").slice(0, 40))}</td>
+      <td>${s.commands_executed}</td>
+      <td>${esc(s.status)}${s.leased ? " (leased)" : ""}</td>
+      <td>${s.in_use ? "yes" : ""}</td>
+      <td>${age(s.last_activity)}</td>
+      <td><button class="danger" onclick="closeSession('${esc(s.session_id)}','${esc(s.lease_id || "")}')">close</button></td>
+    </tr>`);
+  }
+  if (!d.sessions.length) tb.innerHTML = '<tr><td colspan="9" class="muted">no sessions in pool</td></tr>';
+}
+
+const closeSession = (sid, lease) => {
+  if (!confirm(`Force-close session ${sid.slice(0, 8)}…?`)) return;
+  api(`/api/v1/sessions/${sid}`, {method: "DELETE", headers: {"X-Lease-Id": lease}})
+    .then(() => flash("session closed")).catch(e => flash(e.message, true)).finally(loadAll);
+};
+
+async function loadAll() {
+  try { await loadGroups(); await loadHeaps(currentGroup); await loadSessions(); }
+  catch (e) { flash(e.message, true); }
+}
+let currentGroup = null;
+const _origLoadHeaps = loadHeaps;
+loadHeaps = g => { currentGroup = g ?? null; return _origLoadHeaps(g ?? null); };
+document.querySelector("#groups button").onclick = () => loadAll();
+loadAll();
+setInterval(loadAll, 15000);
+</script>
+</body>
+</html>

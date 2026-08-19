@@ -40,6 +40,15 @@ mcp_servers:
       PYTHONPATH: .
       ISABELLE_MCP_GYM_URL: http://localhost:8000
 
+  isabellegym_lsp:
+    # The LSP-like file-sync MCP (mcp_lsp_server); read-only MCP tools — the
+    # runner adds local read_file/write_file tools over a per-attempt workdir.
+    command: [python, -m, mcp_lsp_server.app]
+    env:
+      PYTHONPATH: .
+      ISABELLE_MCP_LSP_GYM_URL: http://localhost:8000
+      ISABELLE_MCP_LSP_TRANSPORT: stdio
+
   isabelle_mcp:
     # Two ways to run:
     # (a) Native: patched Isabelle + isabelle-mcp on host PATH

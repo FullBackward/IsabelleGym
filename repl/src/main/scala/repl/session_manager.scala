@@ -207,7 +207,7 @@ class Session_Manager(show_states: Boolean, enable_cache: Boolean = false, max_c
   private val session_threads_opt: String =
     sys.env.getOrElse("ISABELLE_SESSION_THREADS", "4")
 
-  private def create_new_session_internal(initial_thys: List[String], field: String = "HOL"): Session_Data = {
+  private def create_new_session_internal(initial_thys: List[String], field: String = "HOL", dirs: List[String] = Nil): Session_Data = {
     val session_delay_options_to_minimise =
       List("headless_consolidate_delay", "headless_check_delay", "headless_nodes_status_delay")
     val min_delay = "0.1"
@@ -217,7 +217,7 @@ class Session_Manager(show_states: Boolean, enable_cache: Boolean = false, max_c
         ("threads", session_threads_opt) ::
         session_delay_options_to_minimise.map(option_name => (option_name, min_delay))
     val session_options = session_option_pairs.map { case (name, value) => s"${name}=${value}" }
-    val session_id = Server_Utils.start_session(server_info, server, session_options, field)
+    val session_id = Server_Utils.start_session(server_info, server, session_options, field, dirs)
     running_sessions.change(_ += session_id)
     val session = server.the_session(session_id)
     if (initial_thys.nonEmpty) {
@@ -228,11 +228,13 @@ class Session_Manager(show_states: Boolean, enable_cache: Boolean = false, max_c
     Session_Data(session_id, session)
   }
   
-  def get_new_session(initial_thys: List[String], field: String = "HOL"): Session_Data = {
-    if (enable_cache) {
+  def get_new_session(initial_thys: List[String], field: String = "HOL", dirs: List[String] = Nil): Session_Data = {
+    // dirs (heap sessions) bypass the cache: the cache key is theories-only,
+    // and heap sessions are identified by their field+dirs (heap name + ROOT dir).
+    if (enable_cache && dirs.isEmpty) {
       get_session_with_cache(initial_thys, field)
     } else {
-      create_new_session_internal(initial_thys, field)
+      create_new_session_internal(initial_thys, field, dirs)
     }
   }
 

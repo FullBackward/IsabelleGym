@@ -79,6 +79,9 @@ class ReplBackend(Protocol):
     def step_chunk_report(self, isar_string: str, wall_budget_ms: int, probe_state: bool) -> str: ...
     def command_at_line(self, line: int) -> str: ...
     def goals_at_line(self, line: int) -> str: ...
+    def hover_at(self, line: int, col: int) -> str: ...
+    def definition_at(self, line: int, col: int) -> str: ...
+    def sledgehammer_at(self, line: int, subgoal: int, timeout_s: int) -> str: ...
 
 
 class ReplBackendGatewayProcess:
@@ -202,14 +205,20 @@ class ReplBackendGatewayProcess:
         max_cache_size: int,
         initial_thys: "py4j.java_collections.JavaList[str]",
         field: str = "HOL",
+        session_dirs: "py4j.java_collections.JavaList[str] | None" = None,
     ) -> ReplBackend:
         # Scala: get_repl_backend_with_initial_theories(
         #     show_states, enable_cache, max_cache_size,
-        #     initial_thys: java.util.List[String], field: String = "HOL")
+        #     initial_thys: java.util.List[String], field: String = "HOL",
+        #     session_dirs: java.util.List[String] = List.of())
+        # session_dirs: session ROOT directories for starting on a user heap
+        # (heap pool, Stage 3) — like `isabelle build -d`.
         return self._poll_gateway(
             "get_repl_backend_with_initial_theories",
             show_states, enable_cache, max_cache_size,
             initial_thys, field,
+            session_dirs if session_dirs is not None else
+            self.gateway.jvm.java.util.List.of(),
         )
 
     def get_repl_backend_with_shared_cache(

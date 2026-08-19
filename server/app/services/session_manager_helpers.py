@@ -115,10 +115,14 @@ class SessionManagerHelpersMixin:
                 cleaned.append(value)
         return sorted(set(cleaned))
 
-    def build_dependency_key(self, theories: Optional[List[str]], field: Optional[str]) -> str:
+    def build_dependency_key(self, theories: Optional[List[str]], field: Optional[str], extra: Optional[str] = None) -> str:
         normalized_field = self._normalize_field(field)
         normalized_theories = self._normalize_theories(theories)
+        # extra: tenancy/heap versioning (task_group + heap fingerprint, Stage 3) —
+        # pooling stays per group AND per heap-version. None keeps the legacy key.
         base = f"{normalized_field}::{'|'.join(normalized_theories)}"
+        if extra:
+            base += f"::{extra}"
         return hashlib.sha256(base.encode("utf-8")).hexdigest()
 
     def _build_wrapper_theory_name(self, theories: Optional[List[str]], field: Optional[str]) -> str:
@@ -189,6 +193,7 @@ class SessionManagerHelpersMixin:
                     "leased": session.leased,
                     "lease_id": session.lease_id,
                     "label": session.label,
+                    "task_group": session.task_group,
                 }
                 for sid, session in self._lru.items()
             ]

@@ -121,7 +121,7 @@ def test_chunk_verify_request_rejects_empty_chunk():
 
 
 def test_mcp_pool_conn_key_is_weak_and_not_recyclable():
-    from mcp_server.pool import Current, SessionPool
+    from mcp_stepwise_server.pool import Current, SessionPool
 
     pool = SessionPool()
 
@@ -146,7 +146,7 @@ def test_mcp_pool_conn_key_is_weak_and_not_recyclable():
 
 
 def test_mcp_pool_falls_back_to_stable_sentinel():
-    from mcp_server.pool import SessionPool
+    from mcp_stepwise_server.pool import SessionPool
 
     pool = SessionPool()
 
@@ -162,7 +162,7 @@ def test_mcp_pool_falls_back_to_stable_sentinel():
 
 
 def test_render_chunk_pending_qed_note():
-    from mcp_server.app import _render_chunk
+    from mcp_stepwise_server.app import _render_chunk
 
     report = {
         "success": True, "proof_open": True, "pending_qed": True,
@@ -177,7 +177,7 @@ def test_render_chunk_pending_qed_note():
 
 
 def test_render_chunk_open_without_pending_qed_keeps_open_note():
-    from mcp_server.app import _render_chunk
+    from mcp_stepwise_server.app import _render_chunk
 
     report = {
         "success": True, "proof_open": True, "pending_qed": False,

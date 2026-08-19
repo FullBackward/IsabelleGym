@@ -4,9 +4,10 @@ import isabelle._
 
 /** Low-level Isabelle server lifecycle: start/stop the `isabelle server`
  *  process and start/stop individual headless sessions on it (via
- *  Server_Commands, with reflective access to Server.Context). Shared
- *  infrastructure used only by [[Session_Manager]]; neither MCP workflow
- *  touches it directly. */
+ *  Server_Commands, with reflective access to Server.Context). `start_session`'s
+ *  `dirs` adds session ROOT directories (like `isabelle build -d`) so a session
+ *  can start on a USER HEAP (heap-pool model — Stage 3). Shared infrastructure
+ *  used only by [[Session_Manager]]; neither MCP workflow touches it directly. */
 object Server_Utils {
   private def withServerContext(
       server_info: Server.Info,
@@ -48,7 +49,7 @@ object Server_Utils {
       case false => error(s"Failed to stop server ${server_info.name}.")
     }
 
-  def start_session(server_info: Server.Info, server: Server, options: List[String], field: String = "HOL"): UUID.T = {
+  def start_session(server_info: Server.Info, server: Server, options: List[String], field: String = "HOL", dirs: List[String] = Nil): UUID.T = {
 
      val session_start_json = withServerContext(server_info, server) { context =>
 
@@ -58,7 +59,7 @@ object Server_Utils {
     Isabelle_Thread.fork(name = "session_start") {
       try {
         val args = Server_Commands.Session_Start.Args(
-          build = Server_Commands.Session_Build.Args(session = field, options = options)
+          build = Server_Commands.Session_Build.Args(session = field, options = options, dirs = dirs)
         )
         val (res, entry) =
           Server_Commands.Session_Start.command(

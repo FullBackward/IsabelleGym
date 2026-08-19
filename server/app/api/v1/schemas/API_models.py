@@ -14,6 +14,48 @@ class SessionCreateRequest(BaseModel):
                     "file-synced client is mirroring). Echoed in session info; "
                     "no pooling behavior change.",
     )
+    task_group: str | None = Field(
+        default=None,
+        description="Task group for heap-pool tenancy (default: 'default'). Sessions "
+                    "may only use heaps of their own group.",
+    )
+    heap_session: str | None = Field(
+        default=None,
+        description="Name of a ready heap-pool session to start on (resolves within "
+                    "task_group). The wrapper then states the heap's theories.",
+    )
+    project: str | None = Field(
+        default=None,
+        description="Project dir of a heap-pool entry (alternative to heap_session).",
+    )
+
+
+class SessionAcquireRequest(BaseModel):
+    theories: List[str] = Field(default_factory=list)
+    field: str | None = None
+    reuse_dirty: bool = Field(
+        default=True,
+        description="If True, reuse sessions that already have commands executed. "
+                    "If False, only match sessions with an empty command history.",
+    )
+    task_group: str | None = Field(
+        default=None,
+        description="Task group for heap-pool tenancy (default: 'default').",
+    )
+    heap_session: str | None = Field(
+        default=None,
+        description="Name of a ready heap-pool session to start on (within task_group).",
+    )
+    project: str | None = Field(
+        default=None,
+        description="Project dir of a heap-pool entry (alternative to heap_session).",
+    )
+    label: str | None = Field(
+        default=None,
+        description="Human-readable label shown in the admin console; applied on "
+                    "EVERY acquire (fresh or reused) so it follows the current "
+                    "holder rather than the original creator.",
+    )
 
 
 class SessionResponse(BaseModel):
@@ -23,6 +65,7 @@ class SessionResponse(BaseModel):
     status: str
     lease_id: str = Field(description="Exclusive lease identifier required for session-specific endpoints.")
     label: str | None = None
+    task_group: str | None = None
 
 
 class CommandRequest(BaseModel):
@@ -123,16 +166,6 @@ class ProofStatusResponse(BaseModel):
     result: Optional[Dict[str, Any]] = None
 
 
-class SessionAcquireRequest(BaseModel):
-    theories: List[str] = Field(default_factory=list)
-    field: str | None = None
-    reuse_dirty: bool = Field(
-        default=True,
-        description="If True, reuse sessions that already have commands executed. "
-                    "If False, only match sessions with an empty command history.",
-    )
-
-
 class SessionAcquireResponse(BaseModel):
     session_id: str
     created_at: float
@@ -140,6 +173,7 @@ class SessionAcquireResponse(BaseModel):
     status: str
     reused: bool = Field(description="True if an existing session was returned, False if a new one was created.")
     lease_id: str = Field(description="Exclusive lease identifier. Pass to /release to return the session to the pool.")
+    task_group: str | None = None
 
 
 class BigStepTheoryRequest(BaseModel):
@@ -256,6 +290,51 @@ class GoalsResponse(BaseModel):
     error: Optional[str] = None
 
 
+class HoverResponse(BaseModel):
+    """Hover info at a 1-based line/col (UTF-16 columns). Snapshot + Rendering —
+    no evaluation. `contents` are the tooltip entries (entity kind, type, docs)."""
+    found: bool
+    range: Optional[CommandRange] = None
+    contents: List[str] = Field(default_factory=list)
+    error: Optional[str] = None
+
+
+class DefinitionTarget(BaseModel):
+    """One go-to-definition target. kind=file → file/line/col(/end_*); kind=node →
+    node + start_line/end_line (entity defined in the entry document itself);
+    kind=path → file only (loaded-file references); kind=command_id → unresolved."""
+    kind: str
+    file: Optional[str] = None
+    line: Optional[int] = None
+    col: Optional[int] = None
+    end_line: Optional[int] = None
+    end_col: Optional[int] = None
+    node: Optional[str] = None
+    start_line: Optional[int] = None
+    id: Optional[str] = None
+
+
+class DefinitionResponse(BaseModel):
+    found: bool
+    targets: List[DefinitionTarget] = Field(default_factory=list)
+    error: Optional[str] = None
+
+
+class SledgehammerAtRequest(BaseModel):
+    line: int = Field(ge=1, description="1-based line whose open goal to attack "
+                                        "(jEdit cursor semantics: the command containing the line).")
+    subgoal: int = Field(default=1, ge=1, description="1-based subgoal index.")
+    timeout_s: int = Field(default=30, ge=1, le=300,
+                           description="Isabelle sledgehammer timeout in seconds (1–300).")
+
+
+class SledgehammerAtResponse(BaseModel):
+    found: bool
+    results: List[str] = Field(default_factory=list)
+    error: Optional[str] = None
+    execution_time: float = 0.0
+
+
 class ChunkVerifyRequest(BaseModel):
     chunk: str = Field(description="A whole proof chunk (one or more Isar commands).")
     timeout: float = Field(
@@ -313,3 +392,55 @@ class ChunkVerifyResponse(BaseModel):
         description="Backend-level error when nothing could be checked (e.g. "
                     "'theory not begun'). None when commands were processed.",
     )
+
+# ---------------------------------------------------------------------------
+# Heap pool (Stage 3): verified per-project heaps + task-group tenancy
+# ---------------------------------------------------------------------------
+
+
+class HeapBuildRequest(BaseModel):
+    task_group: str = Field(description="Owning task group (required; namespace isolation).")
+    project: str = Field(description="Absolute path of the project dir (theories = top-level .thy files).")
+    session_name: Optional[str] = Field(
+        default=None,
+        description="Isabelle session name for the heap. Default: parsed from a "
+                    "user-provided ROOT, else derived from the project dir name.",
+    )
+
+
+class HeapTheoryFile(BaseModel):
+    path: str
+    sha256: str
+    mtime: float
+
+
+class HeapEntryResponse(BaseModel):
+    task_group: str
+    project: str
+    session_name: str
+    root_dir: str
+    fingerprint: str
+    status: str = Field(description="One of: building | ready | stale | failed.")
+    built_at: Optional[float] = None
+    built_by: Optional[str] = None
+    build_log_tail: str = ""
+
+
+class HeapListResponse(BaseModel):
+    heaps: List[HeapEntryResponse]
+
+
+class HeapManifestResponse(HeapEntryResponse):
+    """The full inspection record: what the heap was built from."""
+    root_text: str
+    theory_files: List[HeapTheoryFile]
+
+
+class HeapGroupInfo(BaseModel):
+    task_group: str
+    heap_count: int
+    ready: int
+
+
+class HeapGroupsResponse(BaseModel):
+    groups: List[HeapGroupInfo]

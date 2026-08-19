@@ -26,6 +26,16 @@ class Server:
     SHOW_STATES: Final = os.getenv("ISABELLE_SHOW_STATES", "true").lower() in {
         "1", "true", "yes", "on",
     }
+    # Rendered-output normalisation: the PIDE layer decodes \<...> escapes into
+    # Unicode codepoints (the jEdit display convention), so goal/state/query
+    # output arrives as UTF symbols while document source stays as-written.
+    # normalise_for_isabelle maps rendered output back to \<name> ASCII notation
+    # using Isabelle's OWN symbol table ($ISABELLE_HOME/etc/symbols), so the
+    # mapping always matches the installed Isabelle version. Display-only —
+    # document text is never touched. Set false to receive raw Unicode.
+    ASCII_OUTPUT: Final = os.getenv("ISABELLE_ASCII_OUTPUT", "true").lower() in {
+        "1", "true", "yes", "on",
+    }
     DEFAULT_FIELD: Final = os.getenv("ISABELLE_DEFAULT_FIELD", "HOL")
     HOST: Final = os.getenv("ISABELLE_SERVER_HOST", "0.0.0.0")
     PORT: Final = int(os.getenv("ISABELLE_SERVER_PORT", "8000"))
@@ -37,6 +47,20 @@ class Server:
     MAX_CONCURRENT_SLEDGEHAMMER: Final = int(
         os.getenv("ISABELLE_MAX_CONCURRENT_SLEDGEHAMMER", str(max(1, min(8, (os.cpu_count() or 4) // 8))))
     )
+
+
+class Heap:
+    # Heap pool (Stage 3): verified per-project heaps built with
+    # `isabelle build -b`, shareable by every session of the owning task group.
+    # State dir lives in the isabelle_user_data volume (/root/.isabelle) so
+    # manifests survive container restarts.
+    STATE_DIR: Final = os.getenv("ISABELLE_HEAP_POOL_DIR", "/root/.isabelle/heap_pool")
+    MAX_CONCURRENT_BUILDS: Final = int(os.getenv("ISABELLE_MAX_CONCURRENT_BUILDS", "1"))
+    BUILD_TIMEOUT_S: Final = float(os.getenv("ISABELLE_HEAP_BUILD_TIMEOUT_S", "3600"))
+    DEFAULT_TASK_GROUP: Final = "default"
+    # Remove the on-disk heap image + build logs when a heap record is deleted
+    # and no other pool entry references the same session name.
+    GC_IMAGES: Final = os.getenv("ISABELLE_HEAP_GC_IMAGES", "true").lower() == "true"
 
 class Repl:
     SUBGOALS_TIMEOUT_S: Final       = int(os.getenv("ISABELLE_REPL_SUBGOALS_TIMEOUT", "20"))

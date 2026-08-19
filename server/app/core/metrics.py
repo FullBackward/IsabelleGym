@@ -53,6 +53,12 @@ sledgehammer_seconds = Histogram(
 sledgehammer_inflight = Gauge(
     "isabellegym_sledgehammer_inflight", "Sledgehammer calls currently executing"
 )
+heap_build_seconds = Histogram(
+    "isabellegym_heap_build_seconds",
+    "Heap build wall-clock duration",
+    ["task_group"],
+    buckets=(5, 15, 30, 60, 120, 300, 600, 1800, 3600),
+)
 
 
 # --- current-state gauges (produced per scrape) --------------------------
@@ -107,4 +113,42 @@ def register_pool_collector(get_info: Callable[[], Dict[str, Any]]) -> None:
         return
     REGISTRY.register(SessionPoolCollector(get_info))
     _pool_collector_registered = True
+
+
+class HeapPoolCollector(Collector):
+    """Yield heap-pool gauges from the pool's entry list on each scrape."""
+
+    def __init__(self, list_entries: Callable[[], list]):
+        self._list_entries = list_entries
+
+    def collect(self) -> Iterable[GaugeMetricFamily]:
+        try:
+            entries = self._list_entries()
+        except Exception:  # never let a scrape break the endpoint
+            logger.exception("HeapPoolCollector failed to read heap pool")
+            return
+        fam = GaugeMetricFamily(
+            "isabellegym_heap_pool_heaps",
+            "Heap-pool entries by task group and status",
+            labels=["task_group", "status"],
+        )
+        counts: Dict[tuple, int] = {}
+        for e in entries:
+            key = (e.get("task_group", "?"), e.get("status", "unknown"))
+            counts[key] = counts.get(key, 0) + 1
+        for (group, status), n in sorted(counts.items()):
+            fam.add_metric([group, status], float(n))
+        yield fam
+
+
+_heap_collector_registered = False
+
+
+def register_heap_collector(list_entries: Callable[[], list]) -> None:
+    """Register the heap-pool collector once (idempotent)."""
+    global _heap_collector_registered
+    if _heap_collector_registered:
+        return
+    REGISTRY.register(HeapPoolCollector(list_entries))
+    _heap_collector_registered = True
     logger.info("registered SessionPoolCollector for /metrics")

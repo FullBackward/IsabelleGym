@@ -1,4 +1,5 @@
-(* REPL.ML — the Isabelle/ML side of the transient read-only probes.
+(* REPL.ML — the Isabelle/ML side of the transient read-only probes AND the
+   overlay query operations.
 
    Loaded into every session via the generated wrapper theories (repl/thys/,
    see thy_init.py). Consumed by the probes in Backend_Probes
@@ -6,7 +7,9 @@
    commands; the functions here extract subgoals/facts/proof-status from the
    toplevel state and push the results back to Scala through the tagged
    channel callbacks in Repl_ML_Communication (repl_ml_communication.scala).
-   Serves BOTH MCP workflows, since both use the probes. *)
+   Also registers the "isabellegym_sledgehammer" overlay query operation used
+   by Backend_File_Ops.sledgehammer_at (bottom of file). Serves BOTH MCP
+   workflows, since both use the probes. *)
 
 signature REPL =
 sig
@@ -224,3 +227,35 @@ val send_local_facts_tagged = Repl.send_local_facts_tagged;
 val send_global_facts_tagged = Repl.send_global_facts_tagged;
 val send_sledgehammer_tagged = Repl.send_sledgehammer_tagged;
 val send_in_proof_tagged = Repl.send_in_proof_tagged;
+
+(* === Overlay query operation: position-explicit sledgehammer ===
+
+   Registered when this file is loaded (the wrapper's ML_file), so every
+   session — draft-wrapper and (Stage 3) heap-backed alike — has the
+   "isabellegym_sledgehammer_query" print function. Args: [timeout_s, subgoal_i].
+   Proof.enter_backward normalizes Forward ("state")-mode proof states (the
+   state after an initial `proof (method)`), which run_sledgehammer rejects
+   (Proof.assert_backward in sledgehammer.ML) — safe here because the query is
+   read-only. Consumed via overlay by Backend_File_Ops.sledgehammer_at. *)
+val _ =
+  Query_Operation.register {name = "isabellegym_sledgehammer", pri = 0}
+    (fn {state = st, args, writelns_result, ...} =>
+      (case try Toplevel.proof_of st of
+        SOME proof_state =>
+          let
+            val timeout_s = the_default 30 (Int.fromString (nth args 0));
+            val i = the_default 1 (Int.fromString (nth args 1));
+            val bwd_state = Proof.enter_backward proof_state;
+            val ctxt = Proof.context_of bwd_state;
+            val thy = Proof_Context.theory_of ctxt;
+            val params = Sledgehammer_Commands.default_params thy
+              [("timeout", string_of_int timeout_s)];
+            val collected = Unsynchronized.ref ([] : string list);
+            fun clean s = XML.content_of (YXML.parse_body s);
+            fun on_output s = collected := ! collected @ [clean s];
+            val (_, (_, message)) =
+              Sledgehammer.run_sledgehammer params Sledgehammer_Prover.Normal
+                (SOME on_output) i Sledgehammer_Fact.no_fact_override bwd_state;
+            val extra = if message = "" then [] else [clean message];
+          in writelns_result (! collected @ extra) end
+      | NONE => error "Unknown proof context"));

@@ -154,6 +154,9 @@ class SessionManager(SessionManagerHelpersMixin):
         initial_thys: Optional[List[str]] = None,
         field: str = Server.DEFAULT_FIELD,
         lease_id: Optional[str] = None,
+        session_dirs: Optional[List[str]] = None,
+        task_group: Optional[str] = None,
+        dependency_extra: Optional[str] = None,
     ) -> _Isabelle_Session:
         where = self._where("_create_session")
         # Off the event loop: may spawn the gateway JVM (~40s) and holds a
@@ -164,7 +167,7 @@ class SessionManager(SessionManagerHelpersMixin):
 
         normalized_field = self._normalize_field(field)
         dependency_theories = self._normalize_theories(initial_thys)
-        dependency_key = self.build_dependency_key(dependency_theories, normalized_field)
+        dependency_key = self.build_dependency_key(dependency_theories, normalized_field, extra=dependency_extra)
         wrapper_theory: Optional[str] = None
 
         with logging_context(field=normalized_field):
@@ -225,12 +228,16 @@ class SessionManager(SessionManagerHelpersMixin):
                         java_list = self.gateway.gateway.jvm.java.util.ArrayList()
                         for thy in loaded_theories:
                             java_list.add(thy)
+                        java_dirs = self.gateway.gateway.jvm.java.util.ArrayList()
+                        for d in (session_dirs or []):
+                            java_dirs.add(d)
                         return self.gateway.get_repl_backend_with_initial_theories(
                             show_states=Server.SHOW_STATES,
                             enable_cache=Server.ENABLE_CACHE,
                             max_cache_size=Server.MAX_CACHE_SIZE,
                             initial_thys=java_list,
                             field=normalized_field,
+                            session_dirs=java_dirs,
                         )
 
                 raw_backend = await asyncio.to_thread(_create_backend)
@@ -253,6 +260,7 @@ class SessionManager(SessionManagerHelpersMixin):
                     wrapper_theory=wrapper_theory,
                     session_field=normalized_field,
                     backend=backend,
+                    task_group=task_group,
                 )
             except Exception as e:
                 backend.close()
@@ -357,10 +365,17 @@ class SessionManager(SessionManagerHelpersMixin):
         self,
         theories: Optional[List[str]] = None,
         field: str = Server.DEFAULT_FIELD,
+        task_group: Optional[str] = None,
+        session_dirs: Optional[List[str]] = None,
+        dependency_extra: Optional[str] = None,
     ) -> Tuple[_Isabelle_Session, str]:
         lease_id = uuid.uuid4().hex[:12]
         try:
-            session = await self._create_session(theories, field, lease_id=lease_id)
+            session = await self._create_session(
+                theories, field, lease_id=lease_id,
+                session_dirs=session_dirs, task_group=task_group,
+                dependency_extra=dependency_extra,
+            )
             return session, lease_id
         except PoolExhausted:
             raise  # preserve 503 mapping (pool full / memory pressure)
@@ -375,9 +390,10 @@ class SessionManager(SessionManagerHelpersMixin):
         theories: Optional[List[str]] = None,
         field: Optional[str] = None,
         reuse_dirty: bool = True,
+        dependency_extra: Optional[str] = None,
     ) -> Optional[_Isabelle_Session]:
         """Find a matching session and atomically attach the lease while holding the manager lock."""
-        target_key = self.build_dependency_key(theories, field)
+        target_key = self.build_dependency_key(theories, field, extra=dependency_extra)
         for sid, session in reversed(self._lru.items()):
             if session.status != SessionStatus.ACTIVE:
                 continue
@@ -431,6 +447,9 @@ class SessionManager(SessionManagerHelpersMixin):
         theories: Optional[List[str]] = None,
         field: Optional[str] = None,
         reuse_dirty: bool = True,
+        task_group: Optional[str] = None,
+        session_dirs: Optional[List[str]] = None,
+        dependency_extra: Optional[str] = None,
     ) -> Tuple[_Isabelle_Session, bool, str]:
         lease_id = uuid.uuid4().hex[:12]
 
@@ -440,6 +459,7 @@ class SessionManager(SessionManagerHelpersMixin):
                 theories=theories,
                 field=field,
                 reuse_dirty=reuse_dirty,
+                dependency_extra=dependency_extra,
             )
         if existing is not None:
             logger.info(
@@ -448,7 +468,11 @@ class SessionManager(SessionManagerHelpersMixin):
             )
             return existing, True, lease_id
 
-        new_session = await self._create_session(initial_thys=theories, field=field, lease_id=lease_id)
+        new_session = await self._create_session(
+            initial_thys=theories, field=field, lease_id=lease_id,
+            session_dirs=session_dirs, task_group=task_group,
+            dependency_extra=dependency_extra,
+        )
         logger.info(
             "session leased (new) session_id=%s lease_id=%s",
             new_session.session_id, lease_id,

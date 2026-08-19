@@ -20,8 +20,8 @@ object ReplBackendGateway {
   def get_repl_backend_with_memory_management(show_states: Boolean, enable_cache: Boolean, max_cache_size: Int, field: String = "HOL"): ReplBackend =
     new ReplBackend(show_states, enable_cache, max_cache_size, field = field)
 
-  def get_repl_backend_with_initial_theories(show_states: Boolean, enable_cache: Boolean, max_cache_size: Int, initial_thys: java.util.List[String], field: String = "HOL"): ReplBackend =
-    new ReplBackend(show_states, enable_cache, max_cache_size, initial_thys.asScala.toList, field = field)
+  def get_repl_backend_with_initial_theories(show_states: Boolean, enable_cache: Boolean, max_cache_size: Int, initial_thys: java.util.List[String], field: String = "HOL", session_dirs: java.util.List[String] = java.util.List.of()): ReplBackend =
+    new ReplBackend(show_states, enable_cache, max_cache_size, initial_thys.asScala.toList, field = field, session_dirs = session_dirs.asScala.toList)
 
   private var shared_session_manager: Option[Session_Manager] = None
 

@@ -6,6 +6,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
+from pathlib import Path as _Path
 
 from .schemas.API_models import (
     BigStepTheoryRequest,
@@ -17,6 +18,8 @@ from .schemas.API_models import (
     CommandRequest,
     CommandResponse,
     CommandStatus,
+    DefinitionResponse,
+    DefinitionTarget,
     DiagnosticRequest,
     DiagnosticResponse,
     DocumentLoadRequest,
@@ -24,6 +27,14 @@ from .schemas.API_models import (
     EnterTheoryRequest,
     FactsResponse,
     GoalsResponse,
+    HeapBuildRequest,
+    HeapEntryResponse,
+    HeapGroupInfo,
+    HeapGroupsResponse,
+    HeapListResponse,
+    HeapManifestResponse,
+    HeapTheoryFile,
+    HoverResponse,
     LocatedCommand,
     Position,
     ProofStateResponse,
@@ -31,16 +42,19 @@ from .schemas.API_models import (
     SessionAcquireResponse,
     SessionCreateRequest,
     SessionResponse,
+    SledgehammerAtRequest,
+    SledgehammerAtResponse,
     StateCheckpoint,
     SledgehammerRequest,
     SledgehammerResponse,
 )
-from server.app.core.config import API, Logging
+from server.app.core.config import API, Heap, Logging, Server
 from server.app.core.logging import get_logger, logging_context
 from server.app.core import metrics
-from server.app.dependencies import get_session_manager
+from server.app.dependencies import get_heap_pool, get_session_manager
 from server.app.errors import SessionLeaseError
 from server.app.services.internal_models import SessionExecutionError
+from server.app.services.unicode_normaliser import normalise_for_isabelle
 
 router = APIRouter()
 logger = get_logger(__name__)
@@ -59,6 +73,23 @@ def _preview(text: str | None, limit: int) -> str:
     if len(compact) <= limit:
         return compact
     return compact[: max(0, limit - 3)] + "..."
+
+
+def _ascii(text):
+    """Normalise RENDERED output (goals, state, query/sledgehammer results, hover
+    contents) back to Isabelle's \<name> ASCII notation. The PIDE layer decodes
+    escapes to Unicode for display; agents are told to write \<...> — so read
+    output should speak the same notation. Uses Isabelle's own symbol table via
+    normalise_for_isabelle; gated by Server.ASCII_OUTPUT. Raw document source
+    (command_at_line.source, GET .../source) must NOT pass through here."""
+    if text is None or not Server.ASCII_OUTPUT:
+        return text
+    try:
+        return normalise_for_isabelle(str(text))
+    except FileNotFoundError:
+        # Host-side dev without an Isabelle install: degrade to raw output.
+        logger.warning("Isabelle symbol table not found — returning raw (Unicode) output")
+        return str(text)
 
 
 def _parse_command_range(raw) -> CommandRange | None:
@@ -130,6 +161,7 @@ async def readyz(request: Request):
 async def create_session(
     request: SessionCreateRequest | None = None,
     session_manager=Depends(get_session_manager),
+    heap_pool=Depends(get_heap_pool),
 ):
     if request is None:
         request = SessionCreateRequest()
@@ -139,12 +171,24 @@ async def create_session(
     if field is None or str(field).strip() == "" or str(field).lower() in {"null", "none", "default"}:
         field = None
 
+    task_group = request.task_group or Heap.DEFAULT_TASK_GROUP
+    session_dirs = None
+    dependency_extra = None
+    if request.heap_session or request.project:
+        heap_theories, field, session_dirs, dependency_extra = _resolve_heap_for_session(
+            heap_pool, task_group, request.heap_session, request.project
+        )
+        theories = sorted(set((theories or []) + heap_theories))
+
     with logging_context(field=field or "default"):
-        logger.info("creating session theories=%s", theories or [])
-        session, lease_id = await session_manager.create_leased_session(theories=theories, field=field)
+        logger.info("creating session theories=%s task_group=%s", theories or [], task_group)
+        session, lease_id = await session_manager.create_leased_session(
+            theories=theories, field=field, task_group=task_group,
+            session_dirs=session_dirs, dependency_extra=dependency_extra,
+        )
         session.label = request.label
 
-        logger.info("session created session_id=%s lease_id=%s label=%s", session.session_id, lease_id, request.label)
+        logger.info("session created session_id=%s lease_id=%s label=%s task_group=%s", session.session_id, lease_id, request.label, task_group)
         return SessionResponse(
             session_id=str(session.session_id),
             created_at=session.created_at,
@@ -152,6 +196,7 @@ async def create_session(
             status=session.status.value if hasattr(session.status, "value") else str(session.status),
             lease_id=lease_id,
             label=session.label,
+            task_group=task_group,
         )
 
 
@@ -166,24 +211,41 @@ async def list_sessions(session_manager=Depends(get_session_manager)):
 async def acquire_session(
     request: SessionAcquireRequest,
     session_manager=Depends(get_session_manager),
+    heap_pool=Depends(get_heap_pool),
 ):
     theories = request.theories if request.theories else None
     field = request.field
     if field is None or str(field).strip() == "" or str(field).lower() in {"null", "none", "default"}:
         field = None
 
+    task_group = request.task_group or Heap.DEFAULT_TASK_GROUP
+    session_dirs = None
+    dependency_extra = None
+    if request.heap_session or request.project:
+        heap_theories, field, session_dirs, dependency_extra = _resolve_heap_for_session(
+            heap_pool, task_group, request.heap_session, request.project
+        )
+        theories = sorted(set((theories or []) + heap_theories))
+
     with logging_context(field=field or "default"):
         logger.info(
-            "acquire_session requested theories=%s reuse_dirty=%s",
+            "acquire_session requested theories=%s reuse_dirty=%s task_group=%s",
             theories or [],
             request.reuse_dirty,
+            task_group,
         )
 
         session, reused, lease_id = await session_manager.acquire_session(
             theories=theories,
             field=field,
             reuse_dirty=request.reuse_dirty,
+            task_group=task_group,
+            session_dirs=session_dirs,
+            dependency_extra=dependency_extra,
         )
+        # Label follows the CURRENT holder: applied on every acquire, fresh or
+        # reused, so the admin console never shows a stale creator's label.
+        session.label = request.label
 
         logger.info(
             "acquire_session result session_id=%s reused=%s lease_id=%s",
@@ -198,6 +260,7 @@ async def acquire_session(
             status=session.status.value if hasattr(session.status, "value") else str(session.status),
             reused=reused,
             lease_id=lease_id,
+            task_group=task_group,
         )
 
 
@@ -234,6 +297,7 @@ async def get_session_info(session_id: str, x_lease_id: str | None = Header(None
             "in_use": session.in_use,
             "active_requests": session.active_request_count,
             "label": session.label,
+            "task_group": session.task_group,
         }
 
 
@@ -390,7 +454,7 @@ async def run_diagnostic(session_id: str, request: DiagnosticRequest, x_lease_id
         )
         return DiagnosticResponse(
             success=getattr(result, "success", False),
-            output=getattr(result, "output", None),
+            output=_ascii(getattr(result, "output", None)),
             error=getattr(result, "error", None),
             execution_time=float(getattr(result, "execution_time", 0.0) or 0.0),
         )
@@ -410,7 +474,7 @@ async def get_proof_state(session_id: str, x_lease_id: str | None = Header(None,
                 content={"error": state.error, "execution_time": state.execution_time},
             )
         return ProofStateResponse(
-            subgoals=state.subgoals or [],
+            subgoals=[_ascii(s) for s in (state.subgoals or [])],
             proof_finished=state.proof_finished,
             pending_qed=state.pending_qed,
             current_theory=state.current_theory,
@@ -429,7 +493,7 @@ async def get_subgoals(session_id: str, x_lease_id: str | None = Header(None, al
                 status_code=500,
                 content={"error": state.error, "execution_time": state.execution_time},
             )
-        subgoals = state.subgoals or []
+        subgoals = [_ascii(s) for s in (state.subgoals or [])]
         logger.debug("returning %s subgoals", len(subgoals))
         return {
             "subgoals": subgoals,
@@ -445,7 +509,7 @@ async def get_local_facts(session_id: str, x_lease_id: str | None = Header(None,
     with logging_context(session_id=session_id):
         lease_id = _require_lease_id(x_lease_id)
         session = session_manager.get_session(session_id, lease_id=lease_id, require_lease=True)
-        facts = await asyncio.to_thread(session.local_facts)
+        facts = [_ascii(f) for f in await asyncio.to_thread(session.local_facts)]
         logger.debug("returning %s local facts", len(facts))
         return FactsResponse(facts=facts, count=len(facts))
 
@@ -457,7 +521,7 @@ async def get_global_facts(session_id: str, limit: int = Query(100, ge=1, le=100
     with logging_context(session_id=session_id):
         lease_id = _require_lease_id(x_lease_id)
         session = session_manager.get_session(session_id, lease_id=lease_id, require_lease=True)
-        facts = await asyncio.to_thread(session.global_facts, limit)
+        facts = [_ascii(f) for f in await asyncio.to_thread(session.global_facts, limit)]
         logger.debug("returning %s global facts (limit=%s)", len(facts), limit)
         return FactsResponse(facts=facts, count=len(facts))
 
@@ -475,6 +539,42 @@ def _parse_located_command(raw) -> LocatedCommand | None:
         )
     except (TypeError, ValueError, AttributeError):
         return None
+
+
+# ---------------------------------------------------------------------------
+# Heap pool (Stage 3)
+# ---------------------------------------------------------------------------
+
+
+def _heap_entry_response(entry) -> HeapEntryResponse:
+    return HeapEntryResponse(
+        task_group=entry["task_group"],
+        project=entry["project"],
+        session_name=entry["session_name"],
+        root_dir=entry["root_dir"],
+        fingerprint=entry["fingerprint"],
+        status=entry["status"],
+        built_at=entry.get("built_at"),
+        built_by=entry.get("built_by"),
+        build_log_tail=entry.get("build_log_tail", ""),
+    )
+
+
+def _resolve_heap_for_session(heap_pool, task_group: str, heap_session: str | None, project: str | None):
+    """Resolve + gate a heap for session creation (staleness included).
+
+    Returns (theories, field, session_dirs, dependency_extra): the wrapper states
+    the QUALIFIED heap theory names (load-bearing — the document's visible context
+    comes from the wrapper), the session starts on field=<heap session name> with
+    dirs=[root_dir]. HeapPoolError subclasses carry their HTTP status (mapped in
+    main.py)."""
+    entry = heap_pool.resolve_for_session(task_group, heap_session, project)
+    theories = [
+        f"{entry['session_name']}.{_Path(f['path']).stem}"
+        for f in entry.get("theory_files", [])
+    ]
+    dependency_extra = f"{task_group}:{entry['fingerprint']}"
+    return theories, entry["session_name"], [entry["root_dir"]], dependency_extra
 
 
 @router.get("/api/v1/sessions/{session_id}/command_at_line", response_model=CommandAtLineResponse)
@@ -508,9 +608,77 @@ async def goals_at_line(session_id: str, line: int = Query(..., ge=1), x_lease_i
         return GoalsResponse(
             found=bool(result.get("found", False)),
             command=_parse_located_command(result.get("command")),
-            goals_before=[str(g) for g in (result.get("goals_before") or [])],
-            goals_after=[str(g) for g in (result.get("goals_after") or [])],
+            goals_before=[_ascii(str(g)) for g in (result.get("goals_before") or [])],
+            goals_after=[_ascii(str(g)) for g in (result.get("goals_after") or [])],
             error=result.get("error"),
+        )
+
+
+@router.get("/api/v1/sessions/{session_id}/hover", response_model=HoverResponse)
+async def hover_at(session_id: str, line: int = Query(..., ge=1), col: int = Query(..., ge=1), x_lease_id: str | None = Header(None, alias="X-Lease-Id"), session_manager=Depends(get_session_manager)):
+    """Hover info at a 1-based line/col (UTF-16 columns). Snapshot + Rendering —
+    no evaluation, no edits; works at any document position."""
+    with logging_context(session_id=session_id):
+        lease_id = _require_lease_id(x_lease_id)
+        session = session_manager.get_session(session_id, lease_id=lease_id, require_lease=True)
+        result = await asyncio.to_thread(session.hover_at, line, col)
+        return HoverResponse(
+            found=bool(result.get("found", False)),
+            range=_parse_command_range(result.get("range")),
+            contents=[_ascii(str(c)) for c in (result.get("contents") or [])],
+            error=result.get("error"),
+        )
+
+
+@router.get("/api/v1/sessions/{session_id}/definition", response_model=DefinitionResponse)
+async def definition_at(session_id: str, line: int = Query(..., ge=1), col: int = Query(..., ge=1), x_lease_id: str | None = Header(None, alias="X-Lease-Id"), session_manager=Depends(get_session_manager)):
+    """Go-to-definition at a 1-based line/col. Heap/source entities resolve to
+    file positions; entry-document entities to in-node line ranges."""
+    with logging_context(session_id=session_id):
+        lease_id = _require_lease_id(x_lease_id)
+        session = session_manager.get_session(session_id, lease_id=lease_id, require_lease=True)
+        result = await asyncio.to_thread(session.definition_at, line, col)
+        targets = [
+            DefinitionTarget(**{k: v for k, v in t.items() if k in DefinitionTarget.model_fields})
+            for t in (result.get("targets") or [])
+            if isinstance(t, dict)
+        ]
+        return DefinitionResponse(
+            found=bool(result.get("found", False)),
+            targets=targets,
+            error=result.get("error"),
+        )
+
+
+@router.post("/api/v1/sessions/{session_id}/sledgehammer_at", response_model=SledgehammerAtResponse)
+async def sledgehammer_at(session_id: str, request: SledgehammerAtRequest, x_lease_id: str | None = Header(None, alias="X-Lease-Id"), session_manager=Depends(get_session_manager)):
+    """Position-explicit sledgehammer (overlay print op; no text edits). Shares
+    the server-wide sledgehammer semaphore with the tip-based endpoint."""
+    with logging_context(session_id=session_id):
+        lease_id = _require_lease_id(x_lease_id)
+        session = session_manager.get_session(session_id, lease_id=lease_id, require_lease=True)
+        start = time.time()
+        # Bound concurrent sledgehammers so a burst cannot OOM-kill the gateway.
+        sem = getattr(session_manager, "sledgehammer_sem", None)
+
+        async def _run() -> dict:
+            return await asyncio.to_thread(
+                session.sledgehammer_at, request.line, request.subgoal, request.timeout_s)
+
+        metrics.sledgehammer_inflight.inc()
+        try:
+            if sem is not None:
+                async with sem:
+                    result = await _run()
+            else:
+                result = await _run()
+        finally:
+            metrics.sledgehammer_inflight.dec()
+        return SledgehammerAtResponse(
+            found=bool(result.get("found", False)),
+            results=[_ascii(str(r)) for r in (result.get("results") or [])],
+            error=result.get("error"),
+            execution_time=time.time() - start,
         )
 
 
@@ -617,8 +785,8 @@ async def sledgehammer(
         )
         return SledgehammerResponse(
             success=found,
-            suggestions=suggestions,
-            raw_output="\n".join(suggestions),
+            suggestions=[_ascii(str(s)) for s in suggestions],
+            raw_output="\n".join(_ascii(str(s)) for s in suggestions),
             execution_time=elapsed,
         )
 
@@ -687,3 +855,83 @@ async def get_session_stats(session_id: str, x_lease_id: str | None = Header(Non
             "success_rate": (successful / len(session.command_history)) if session.command_history else 0,
             "checkpoints_saved": len(session.checkpoints),
         }
+
+
+# ---------------------------------------------------------------------------
+# Heap pool (Stage 3): verified per-project heaps + task-group tenancy.
+# NOTE: no auth — task groups are namespace isolation / accident-proofing, NOT
+# a security boundary (same model as the rest of the API).
+# Project paths contain slashes, so manifest/delete use a `:path` converter:
+# GET /api/v1/heaps/alpha//tmp/hp1 (note the doubled slash).
+# ---------------------------------------------------------------------------
+
+
+@router.post("/api/v1/heaps/build", response_model=HeapEntryResponse)
+async def build_heap(request: HeapBuildRequest, heap_pool=Depends(get_heap_pool)):
+    """Build or rebuild the heap for (task_group, project). 409 while a build
+    for that key is in progress; build passing IS the verification gate."""
+    with logging_context():
+        logger.info("heap build requested group=%s project=%s", request.task_group, request.project)
+        entry = await heap_pool.build(
+            request.task_group, request.project, request.session_name,
+            built_by=request.task_group,
+        )
+        return _heap_entry_response(entry)
+
+
+@router.get("/api/v1/heaps", response_model=HeapListResponse)
+async def list_heaps(task_group: str | None = Query(None), heap_pool=Depends(get_heap_pool)):
+    """Pool listing; omit task_group to list all groups (admin)."""
+    with logging_context():
+        return HeapListResponse(
+            heaps=[_heap_entry_response(e) for e in heap_pool.list(task_group)]
+        )
+
+
+@router.get("/api/v1/heaps/{task_group}/{project:path}", response_model=HeapManifestResponse)
+async def get_heap_manifest(task_group: str, project: str, heap_pool=Depends(get_heap_pool)):
+    """Full manifest: theory files with sha256/mtime, ROOT text, fingerprint,
+    status, log tail. The project path follows the group segment verbatim
+    (`:path` converter) — e.g. /api/v1/heaps/alpha//tmp/hp1."""
+    with logging_context():
+        entry = heap_pool.get(task_group, project)
+        if entry is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"no heap for group {task_group!r} project {project!r}",
+            )
+        return HeapManifestResponse(
+            **_heap_entry_response(entry).model_dump(),
+            root_text=entry.get("root_text", ""),
+            theory_files=[HeapTheoryFile(**f) for f in entry.get("theory_files", [])],
+        )
+
+
+@router.delete("/api/v1/heaps/{task_group}/{project:path}")
+async def delete_heap(task_group: str, project: str, heap_pool=Depends(get_heap_pool)):
+    """Admin: remove the heap record (manifest + scratch ROOT). The heap image
+    under ~/.isabelle/heaps is left on disk; live sessions are unaffected."""
+    with logging_context():
+        if not heap_pool.delete(task_group, project):
+            raise HTTPException(
+                status_code=404,
+                detail=f"no heap for group {task_group!r} project {project!r}",
+            )
+        return {"deleted": True, "task_group": task_group, "project": project}
+
+
+@router.get("/api/v1/heap_groups", response_model=HeapGroupsResponse)
+async def list_heap_groups(heap_pool=Depends(get_heap_pool)):
+    with logging_context():
+        return HeapGroupsResponse(
+            groups=[HeapGroupInfo(**g) for g in heap_pool.groups()]
+        )
+
+
+@router.delete("/api/v1/heap_groups/{group}")
+async def delete_heap_group(group: str, heap_pool=Depends(get_heap_pool)):
+    """Admin: delete all of a group's heap records. Does NOT kill live sessions
+    (they keep their loaded heaps); blocks new session creation against it."""
+    with logging_context():
+        removed = heap_pool.delete_group(group)
+        return {"deleted": removed, "task_group": group}

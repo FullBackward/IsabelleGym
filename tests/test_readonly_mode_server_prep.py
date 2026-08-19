@@ -18,15 +18,20 @@ import uuid
 import pytest
 from pydantic import ValidationError
 
-from server.app.api.v1.router import _parse_command_range
+from server.app.api.v1.router import _ascii, _parse_command_range
+from server.app.core.config import Server
 from server.app.api.v1.schemas.API_models import (
     CommandAtLineResponse,
     CommandRange,
     CommandStatus,
+    DefinitionResponse,
+    DefinitionTarget,
     DocumentLoadRequest,
     GoalsResponse,
+    HoverResponse,
     LocatedCommand,
     Position,
+    SledgehammerAtRequest,
 )
 from server.app.errors import SessionError
 from server.app.services.session import _Isabelle_Session
@@ -79,6 +84,27 @@ class _FakeRaw:
             '{"found": true, "command": {"kind": "apply", "source": "apply simp", '
             '"range": {"start": {"line": 3, "col": 1}, "end": {"line": 3, "col": 11}}}, '
             '"goals_before": ["A \u2227 B"], "goals_after": ["B \u2227 A"]}'
+        )
+
+    def hover_at(self, line, col):
+        return (
+            '{"found": true, '
+            '"range": {"start": {"line": 2, "col": 15}, "end": {"line": 2, "col": 17}}, '
+            '"contents": ["constant \\"List.list.hd\\"", ":: nat list \u21d2 nat"]}'
+        )
+
+    def definition_at(self, line, col):
+        return (
+            '{"found": true, "targets": ['
+            '{"kind": "file", "file": "/opt/isabelle/src/HOL/List.thy", "line": 13, '
+            '"col": 1, "end_line": 13, "end_col": 3}, '
+            '{"kind": "node", "node": "Draft.HoverU", "start_line": 2, "end_line": 2}]}'
+        )
+
+    def sledgehammer_at(self, line, subgoal, timeout_s):
+        return (
+            '{"found": true, "results": ["simp found a proof...", '
+            '"simp: Try this: by simp (1 ms)"]}'
         )
 
 
@@ -304,3 +330,84 @@ def test_line_query_response_schemas():
     goals_miss = GoalsResponse(found=False, error="no theory entered")
     assert goals_miss.command is None
     assert goals_miss.goals_before == [] and goals_miss.goals_after == []
+
+
+# ------------------------------------------------------- hover / definition / sledgehammer_at
+
+
+def test_hover_at_parses_and_passes_through():
+    session = _make_session()
+    result = session.hover_at(2, 15)
+    assert result["found"] is True
+    assert result["range"]["start"] == {"line": 2, "col": 15}
+    assert result["contents"][0] == 'constant "List.list.hd"'
+
+
+def test_definition_at_parses_and_passes_through():
+    session = _make_session()
+    result = session.definition_at(2, 15)
+    assert result["found"] is True
+    kinds = [t["kind"] for t in result["targets"]]
+    assert kinds == ["file", "node"]
+    assert result["targets"][0]["file"].endswith("List.thy")
+    assert result["targets"][1]["start_line"] == 2
+
+
+def test_sledgehammer_at_parses_and_passes_through():
+    session = _make_session()
+    result = session.sledgehammer_at(3, subgoal=1, timeout_s=10)
+    assert result["found"] is True
+    assert any("Try this" in r for r in result["results"])
+
+
+def test_position_queries_tolerate_junk_backend_reply():
+    session = _make_session()
+    session.backend.raw.hover_at = lambda line, col: "not json"
+    session.backend.raw.sledgehammer_at = lambda line, subgoal, timeout_s: None
+    assert session.hover_at(2, 15)["found"] is False
+    assert "error" in session.hover_at(2, 15)
+    assert session.sledgehammer_at(3)["found"] is False
+
+
+def test_position_query_schemas():
+    h = HoverResponse(found=True, contents=['constant "List.list.hd"'])
+    assert h.range is None and h.error is None
+    t = DefinitionTarget(kind="file", file="/opt/isabelle/src/HOL/List.thy", line=13)
+    d = DefinitionResponse(found=True, targets=[t])
+    assert d.targets[0].col is None
+    with pytest.raises(ValidationError):
+        SledgehammerAtRequest(line=0)
+    with pytest.raises(ValidationError):
+        SledgehammerAtRequest(line=3, subgoal=0)
+    ok = SledgehammerAtRequest(line=3)
+    assert ok.subgoal == 1 and ok.timeout_s == 30
+
+
+# --- _ascii: rendered-output normalisation (ISABELLE_ASCII_OUTPUT) -----------
+
+
+def test_ascii_passthrough_when_disabled(monkeypatch):
+    monkeypatch.setattr(Server, "ASCII_OUTPUT", False)
+    raw = "1. A ⟹ B ⟹ A ∧ B"
+    assert _ascii(raw) == raw
+
+
+def test_ascii_converts_when_enabled(monkeypatch):
+    monkeypatch.setattr(Server, "ASCII_OUTPUT", True)
+    monkeypatch.setattr(
+        "server.app.api.v1.router.normalise_for_isabelle",
+        lambda t: t.replace("⟹", "\\<Longrightarrow>").replace("∧", "\\<and>"),
+    )
+    assert _ascii("1. A ⟹ B ⟹ A ∧ B") == "1. A \\<Longrightarrow> B \\<Longrightarrow> A \\<and> B"
+    assert _ascii(None) is None
+
+
+def test_ascii_falls_back_to_raw_without_symbol_table(monkeypatch):
+    monkeypatch.setattr(Server, "ASCII_OUTPUT", True)
+
+    def _no_table(text):
+        raise FileNotFoundError("no symbols file")
+
+    monkeypatch.setattr("server.app.api.v1.router.normalise_for_isabelle", _no_table)
+    raw = "1. A ⟹ B"
+    assert _ascii(raw) == raw

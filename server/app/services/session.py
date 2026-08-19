@@ -44,6 +44,7 @@ class _Isabelle_Session(BigStepMixin):
         loaded_theories: Optional[List[str]] = None,
         dependency_key: Optional[str] = None,
         wrapper_theory: Optional[str] = None,
+        task_group: Optional[str] = None,
     ):
         self.session_id = session_id
         self.theories = list(session_theories)
@@ -65,6 +66,9 @@ class _Isabelle_Session(BigStepMixin):
         # Free-form observability label (e.g. the file path a file-synced
         # client is mirroring). Set at creation; no pooling behavior change.
         self.label: Optional[str] = None
+        # Task group (heap-pool tenancy, Stage 3): sessions may only use heaps
+        # of their own group. Echoed in session info/listings.
+        self.task_group: Optional[str] = task_group
 
         self._closed = False
         self.entered_thy = ""
@@ -227,6 +231,55 @@ class _Isabelle_Session(BigStepMixin):
             return json.loads(result) if result else {"found": False, "error": "empty backend reply"}
         except (ValueError, TypeError):
             return {"found": False, "error": "unparseable backend reply"}
+
+    def hover_at(self, line: int, col: int, timeout: Optional[float] = None) -> Dict[str, Any]:
+        """Hover info at a 1-based line/col (snapshot + Rendering; no evaluation).
+        Passes the backend's JSON through as a dict, tolerating junk."""
+        result = self._call_backend(
+            lambda: self.backend.raw.hover_at(line, col), timeout=timeout)
+        try:
+            return json.loads(result) if result else {"found": False, "error": "empty backend reply"}
+        except (ValueError, TypeError):
+            return {"found": False, "error": "unparseable backend reply"}
+
+    def definition_at(self, line: int, col: int, timeout: Optional[float] = None) -> Dict[str, Any]:
+        """Go-to-definition at a 1-based line/col (snapshot markup; no evaluation).
+        Passes the backend's JSON through as a dict, tolerating junk."""
+        result = self._call_backend(
+            lambda: self.backend.raw.definition_at(line, col), timeout=timeout)
+        try:
+            return json.loads(result) if result else {"found": False, "error": "empty backend reply"}
+        except (ValueError, TypeError):
+            return {"found": False, "error": "unparseable backend reply"}
+
+    def sledgehammer_at(
+        self,
+        line: int,
+        subgoal: int = 1,
+        timeout_s: int = 30,
+        http_timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Sledgehammer on the open goal at a 1-based line (overlay print op; no
+        text edits). Returns the backend's JSON as a dict: {found, results} or
+        {found: False, error}. Same busy/activity accounting as sledgehammer."""
+        self.update_activity()
+        self._acquire_request()
+        try:
+            logger.info(
+                "running sledgehammer_at line=%s subgoal=%s timeout_s=%s",
+                line, subgoal, timeout_s,
+            )
+            effective_http_timeout = http_timeout or (timeout_s + 40.0)
+            result = self._call_backend(
+                lambda: self.backend.raw.sledgehammer_at(line, subgoal, timeout_s),
+                timeout=effective_http_timeout,
+            )
+            try:
+                return json.loads(result) if result else {"found": False, "error": "empty backend reply"}
+            except (ValueError, TypeError):
+                return {"found": False, "error": "unparseable backend reply"}
+        finally:
+            self._release_request()
 
     @property
     def current_thy(self) -> str:

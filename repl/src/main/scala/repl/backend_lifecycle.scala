@@ -32,18 +32,21 @@ trait Backend_Lifecycle { this: ReplBackend =>
   }
 
   /** Tear down the current Isabelle session and start a fresh one (through the
-   *  cache when enabled). Used by the whole-document replace primitive
-   *  (PUT .../document) and by session recovery. */
+   *  cache when enabled), PRESERVING this backend's initial theories, field, and
+   *  session dirs — load_document resets before every whole-document replace, so
+   *  a heap-backed session must keep its heap (field + dirs) across resets.
+   *  Used by the whole-document replace primitive (PUT .../document) and by
+   *  session recovery. */
   def reset(): Repl_Result = build_result {
 
     if (session_manager_instance.get_cache_status().contains("Enabled: true")) {
       // with cache
       repl_session.stop_with_cache()
-      repl_session = new Repl_Session(session_manager_instance)
+      repl_session = new Repl_Session(session_manager_instance, initial_thys, field, session_dirs)
     } else {
       // cache disabled
       repl_session.stop()
-      repl_session = new Repl_Session(session_manager_instance)
+      repl_session = new Repl_Session(session_manager_instance, initial_thys, field, session_dirs)
     }
   }
 
@@ -67,12 +70,12 @@ trait Backend_Lifecycle { this: ReplBackend =>
     }
   }
 
-  /** Recreate the Isabelle session (same initial theories) if `is_session_valid`
-   *  is false — the gateway crash-recovery path. */
+  /** Recreate the Isabelle session (same initial theories, field, dirs) if
+   *  `is_session_valid` is false — the gateway crash-recovery path. */
   def recreate_session_if_needed(): Unit = {
     if (!is_session_valid()) {
       println("Invalid session found, recreating...")
-      repl_session = new Repl_Session(session_manager_instance, initial_thys)
+      repl_session = new Repl_Session(session_manager_instance, initial_thys, field, session_dirs)
     }
   }
 }

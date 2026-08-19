@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from common.metrics import load_results
 
-SYSTEMS = ["isabellegym", "isabelle_mcp", "autocorrode"]
+SYSTEMS = ["isabellegym", "isabelle_mcp", "autocorrode", "isabellegym_lsp"]
 
 # How a sledgehammer invocation is detected in each system's session log.
 # NOTE: these count tool-level invocations, not rounds-with-sledgehammer —
@@ -34,6 +34,7 @@ _SH_PATTERNS = {
     "isabellegym": re.compile(r"TOOL_CALL \S+: sledgehammer\b"),
     "autocorrode": re.compile(r'"query": "sledgehammer"'),
     "isabelle_mcp": re.compile(r"\\n\s*sledgehammer\s*\\n"),
+    "isabellegym_lsp": re.compile(r"TOOL_CALL \S+: isabelle_sledgehammer\b"),
 }
 
 
