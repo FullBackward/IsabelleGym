@@ -448,14 +448,21 @@ async def isabelle_build_heap(
 
 @mcp.tool()
 async def isabelle_heap_status(task_group: Optional[str] = None, project: Optional[str] = None) -> str:
-    """Heap-pool status. With project (+task_group): the full manifest (theory
+    """Heap status. With project (+task_group): the full manifest (theory
     files with sha256/mtime, ROOT text, fingerprint, status, build log tail).
-    Otherwise the pool listing (one group, or all groups when task_group is
-    omitted)."""
+    Otherwise: the pool listing (one group, or all groups) PLUS
+    `available_heaps` — every base session image on disk (HOL-Analysis,
+    distribution heaps, pool-built), so you can see what sessions can start
+    from before naming heap_session/field anywhere."""
     c = await pool.client()
     if project is not None and task_group is not None:
         return _j(await c.get_heap(task_group, project))
-    return _j(await c.list_heaps(task_group))
+    listing = await c.list_heaps(task_group)
+    try:
+        listing["available_heaps"] = (await c.list_available_heaps()).get("heaps", [])
+    except Exception:  # noqa: BLE001 -- pool listing alone is still useful
+        listing["available_heaps"] = None
+    return _j(listing)
 
 
 def main() -> None:

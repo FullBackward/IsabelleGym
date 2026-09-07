@@ -113,6 +113,7 @@ class HeapPool:
         self._locks: Dict[Tuple[str, str], asyncio.Lock] = {}
         self._build_semaphore = asyncio.Semaphore(Heap.MAX_CONCURRENT_BUILDS)
         self._home_user: Optional[Any] = None  # None = unresolved; False = unavailable
+        self._home: Optional[Any] = None  # same, for ISABELLE_HOME
         self._load_manifests()
 
     # ---------------------------------------------------------- persistence
@@ -407,6 +408,48 @@ class HeapPool:
             )
         return entry
 
+    # ----------------------------------------------------- available images
+
+    def delete_heap_image(self, session: str, platform: Optional[str] = None) -> Dict[str, Any]:
+        """Delete a base heap image from the USER heaps dir (admin action).
+
+        Hard boundary: only ISABELLE_HOME_USER is ever touched — distribution
+        images (/opt/isabelle, e.g. HOL/Pure) can never be deleted through
+        this path. Matching build logs are removed too. Live sessions that
+        already loaded the image are unaffected (their heap is in memory).
+
+        Returns {"deleted", "platform", "freed_mb"}; raises HeapNotFound.
+        """
+        home = self._isabelle_home_user()
+        if home is None:
+            raise HeapNotFound("ISABELLE_HOME_USER unavailable")
+        heaps = home / "heaps"
+        patterns = [f"{platform}/{session}"] if platform else [f"*/{session}"]
+        freed = 0
+        hit_platform: Optional[str] = None
+        for pattern in patterns:
+            for img in heaps.glob(pattern):
+                if not (img.is_file() or img.is_dir()):
+                    continue
+                hit_platform = img.parent.name
+                if img.is_dir():
+                    freed += sum(f.stat().st_size for f in img.rglob("*") if f.is_file())
+                    shutil.rmtree(img, ignore_errors=True)
+                else:
+                    freed += img.stat().st_size
+                    img.unlink(missing_ok=True)
+                for logf in heaps.glob(f"{img.parent.name}/log/{session}.*"):
+                    logf.unlink(missing_ok=True)
+        if hit_platform is None:
+            raise HeapNotFound(f"no user heap image for session {session!r}")
+        logger.info("deleted user heap image %s (%s), freed %.1f MB",
+                    session, hit_platform, freed / (1024 * 1024))
+        return {
+            "deleted": session,
+            "platform": hit_platform,
+            "freed_mb": round(freed / (1024 * 1024), 1),
+        }
+
     # ---------------------------------------------------------- deletion
 
     def _isabelle_home_user(self) -> Optional[Path]:
@@ -424,6 +467,73 @@ class HeapPool:
                 logger.exception("failed to resolve ISABELLE_HOME_USER; heap image GC disabled")
                 self._home_user = False
         return self._home_user or None
+
+    def _isabelle_home(self) -> Optional[Path]:
+        """ISABELLE_HOME (the distribution root), same lazy resolution."""
+        if self._home is None:
+            try:
+                out = subprocess.run(
+                    [self.isabelle, "getenv", "-b", "ISABELLE_HOME"],
+                    capture_output=True, text=True, timeout=30,
+                )
+                value = out.stdout.strip()
+                self._home = Path(value) if value else False
+            except Exception:
+                logger.exception("failed to resolve ISABELLE_HOME; distribution heaps hidden")
+                self._home = False
+        return self._home or None
+
+    # ----------------------------------------------------- available images
+
+    def list_available_heaps(self) -> List[Dict[str, Any]]:
+        """Every heap image on disk, for the admin surface.
+
+        Base session images (user-built, e.g. HOL-Analysis, and distribution
+        ones) live as single files at ``<home>/heaps/<platform>/<session>``;
+        pool-built images live in the same layout and are tagged ``pool`` via
+        the registry so the admin can tell them apart. A session present in
+        both homes is listed per location (Isabelle's resolution order is
+        user home first).
+        """
+        pool_sessions = {e.get("session_name") for e in self._entries.values()}
+        found: List[Dict[str, Any]] = []
+        for home, origin in (
+            (self._isabelle_home_user(), "user"),
+            (self._isabelle_home(), "distribution"),
+        ):
+            if home is None:
+                continue
+            heaps = home / "heaps"
+            if not heaps.is_dir():
+                continue
+            for platform_dir in sorted(heaps.iterdir()):
+                if not platform_dir.is_dir() or platform_dir.name == "log":
+                    continue
+                for img in sorted(platform_dir.iterdir()):
+                    if img.name == "log":
+                        continue
+                    if img.is_file():
+                        size = img.stat().st_size
+                    elif img.is_dir():
+                        size = sum(
+                            f.stat().st_size for f in img.rglob("*") if f.is_file()
+                        )
+                    else:
+                        continue
+                    session = img.name
+                    found.append(
+                        {
+                            "session": session,
+                            "platform": platform_dir.name,
+                            "size_mb": round(size / (1024 * 1024), 1),
+                            "modified": time.strftime(
+                                "%Y-%m-%dT%H:%M:%SZ", time.gmtime(img.stat().st_mtime)
+                            ),
+                            "origin": "pool" if session in pool_sessions else origin,
+                            "path": str(img),
+                        }
+                    )
+        return found
 
     def _gc_heap_image(self, session_name: str) -> None:
         """Remove the on-disk heap image + build logs for session_name, but only

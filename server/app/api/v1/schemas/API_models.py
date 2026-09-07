@@ -442,5 +442,19 @@ class HeapGroupInfo(BaseModel):
     ready: int
 
 
+class AvailableHeap(BaseModel):
+    """One heap image on disk (base session image or pool-built)."""
+    session: str
+    platform: str
+    size_mb: float
+    modified: str
+    origin: str = Field(description="One of: pool | user | distribution.")
+    path: str
+
+
+class AvailableHeapsResponse(BaseModel):
+    heaps: List[AvailableHeap]
+
+
 class HeapGroupsResponse(BaseModel):
     groups: List[HeapGroupInfo]

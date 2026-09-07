@@ -6,10 +6,13 @@ changed since the last sync, pushes it via ``load_document(text, report=true)``
 (the lean-lsp-mcp reload_from_disk analog). A server-side 404 (session evicted)
 rebinds transparently.
 
-Bindings ACQUIRE (not create) their session: a session released by another
-binding with the same dependency key (task_group + heap / empty-deps, default
-field) is reused warm — every sync reloads via load_document, which resets the
-backend, so dirty reuse is safe.
+Bindings ACQUIRE (not create) their session, passing the file's own header
+imports as the acquire `theories`: a session released by another binding with
+the same dependency key (task_group + heap / same imports, default field) is
+reused warm — every sync reloads via load_document, which resets the backend,
+so dirty reuse is safe. Theories-keyed acquire is also what lets non-`Main`
+parents resolve at all: sessions only see theories from their own
+heap-ancestor chain plus what they were acquired with.
 
 Scratch sessions (for multi_attempt / run_code) are leased sessions keyed by
 context (task_group, heap_session, imports, field), kept warm and reused — each
@@ -98,14 +101,30 @@ class LspPool:
     ) -> FileBinding:
         c = await self.client()
         group = task_group or Config.DEFAULT_TASK_GROUP
+        # The session must be acquired WITH the file's own imports: gym REPL
+        # sessions only see theories from their own heap-ancestor chain, and
+        # only a theories-keyed acquire pulls extra parents (Complex_Main,
+        # "HOL-Analysis.Derivative", …) into the session's dependency context.
+        # Without this, every LSP tool call on a non-Main file ran against a
+        # session that could not resolve the file's imports ("Undefined type
+        # name" after a ~130 s doomed parent-resolution attempt).
+        # The file may not exist yet (sync() reports FileNotFoundError later);
+        # an unreadable file falls back to the empty-deps key, as before.
+        imports: Optional[List[str]] = None
+        try:
+            with open(canon, encoding="utf-8") as f:
+                imports = header_imports(f.read()) or None
+        except OSError:
+            imports = None
         # Acquire (not create): sessions released by other bindings with the
-        # same dependency key (task_group + heap / empty-deps, default field)
+        # same dependency key (task_group + heap / imports, default field)
         # are reused WARM instead of building a fresh session per file. Safe
         # because every sync reloads via load_document, which resets the
         # backend. The label is re-applied on every acquire server-side, so a
         # reused session shows THIS file in the admin console, not its
         # previous holder.
         resp = await c.acquire_session(
+            theories=imports,
             task_group=group, heap_session=heap_session, label=label or canon,
         )
         binding = FileBinding(

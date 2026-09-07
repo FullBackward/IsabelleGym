@@ -249,3 +249,64 @@ def test_header_imports_parsing():
     text = 'theory T imports Main "HOL-Library.Multiset" Sub/Dir begin\nlemma a: True by simp'
     assert header_imports(text) == ["Main", "HOL-Library.Multiset", "Sub/Dir"]
     assert header_imports("lemma a: True by simp") == []
+
+
+# ------------------------------------------- theories-at-acquire (issue fix)
+
+
+def test_binding_passes_file_imports_at_acquire(tmp_path):
+    """Regression: a file importing beyond Main must be acquired WITH its
+    imports, or the session cannot resolve them (Undefined type name …)."""
+    f = tmp_path / "P.thy"
+    f.write_text(
+        'theory P imports Complex_Main "HOL-Analysis.Derivative" begin\n'
+        'lemma p: "(x::real) + 0 = x" by simp\nend\n'
+    )
+    pool = _pool_with_fake()
+    asyncio.run(pool.get_binding(str(f)))
+    acquired = pool._client.acquired[0]
+    assert acquired["theories"] == ["Complex_Main", "HOL-Analysis.Derivative"]
+
+
+def test_binding_main_only_file_passes_main(tmp_path):
+    """A Main-only file acquires with theories=["Main"] (one code path)."""
+    f = tmp_path / "T.thy"
+    f.write_text("theory T imports Main begin\nlemma t: True by simp\nend\n")
+    pool = _pool_with_fake()
+    asyncio.run(pool.get_binding(str(f)))
+    assert pool._client.acquired[0]["theories"] == ["Main"]
+
+
+def test_binding_missing_file_falls_back_to_no_theories(tmp_path):
+    """A file that does not exist yet must not break binding creation; it
+    falls back to the empty-deps acquire (sync reports the missing file)."""
+    pool = _pool_with_fake()
+
+    async def run():
+        binding = await pool.get_binding(str(tmp_path / "Nope.thy"))
+        await pool.sync(binding)
+
+    with pytest.raises(FileNotFoundError):
+        asyncio.run(run())
+    assert pool._client.acquired[0]["theories"] is None
+
+
+def test_rebind_on_404_reparses_current_imports(tmp_path):
+    """The 404-rebind path re-reads the file, so an imports change made while
+    the session was evicted is picked up by the fresh acquire."""
+    f = tmp_path / "T.thy"
+    f.write_text("theory T imports Main begin\nlemma t: True by simp\nend\n")
+    pool = _pool_with_fake()
+
+    async def run():
+        binding = await pool.get_binding(str(f))
+        await pool.sync(binding)
+        pool._client.fail_next_load_404 = True
+        f.write_text(
+            "theory T imports Complex_Main begin\nlemma t2: True by simp\nend\n"
+        )
+        await pool.sync(binding)
+        return binding
+
+    asyncio.run(run())
+    assert pool._client.acquired[-1]["theories"] == ["Complex_Main"]

@@ -62,6 +62,89 @@ def _pool(tmp_path, monkeypatch, **fake_kwargs):
     return HeapPool(state_dir=str(tmp_path / "heap_state"))
 
 
+# ------------------------------------------- list_available_heaps (admin)
+
+
+def _fake_homes(tmp_path):
+    """A user home with a HOL-Analysis image and a distribution home with HOL."""
+    user_heaps = tmp_path / "user" / "heaps" / "polyml_x86_64"
+    user_heaps.mkdir(parents=True)
+    (user_heaps / "HOL-Analysis").write_bytes(b"\x00" * 1024)
+    (user_heaps / "log").mkdir()  # log dir must be skipped
+    dist_heaps = tmp_path / "dist" / "heaps" / "polyml_x86_64"
+    dist_heaps.mkdir(parents=True)
+    (dist_heaps / "HOL").write_bytes(b"\x00" * (2 * 1024 * 1024))
+    return tmp_path / "user", tmp_path / "dist"
+
+
+def test_available_heaps_lists_base_images(tmp_path, monkeypatch):
+    pool = _pool(tmp_path, monkeypatch)
+    user, dist = _fake_homes(tmp_path)
+    pool._home_user, pool._home = user, dist
+    found = pool.list_available_heaps()
+    by_session = {h["session"]: h for h in found}
+    assert set(by_session) == {"HOL-Analysis", "HOL"}
+    assert by_session["HOL-Analysis"]["origin"] == "user"
+    assert by_session["HOL"]["origin"] == "distribution"
+    assert by_session["HOL"]["size_mb"] > 0
+    assert all(h["platform"] == "polyml_x86_64" for h in found)
+
+
+def test_available_heaps_tags_pool_images(tmp_path, monkeypatch):
+    pool = _pool(tmp_path, monkeypatch)
+    proj = _project(tmp_path)
+    asyncio.run(pool.build("alpha", str(proj), session_name="Hp1"))
+    user, dist = _fake_homes(tmp_path)
+    (user / "heaps" / "polyml_x86_64" / "Hp1").write_bytes(b"\x00" * 512)
+    pool._home_user, pool._home = user, dist
+    by_session = {h["session"]: h for h in pool.list_available_heaps()}
+    assert by_session["Hp1"]["origin"] == "pool"
+    assert by_session["HOL-Analysis"]["origin"] == "user"
+
+
+def test_available_heaps_missing_homes(tmp_path, monkeypatch):
+    pool = _pool(tmp_path, monkeypatch)
+    pool._home_user, pool._home = False, False  # getenv failed
+    assert pool.list_available_heaps() == []
+
+
+# ------------------------------------------------- delete_heap_image (admin)
+
+
+def test_delete_heap_image_removes_file_and_logs(tmp_path, monkeypatch):
+    pool = _pool(tmp_path, monkeypatch)
+    user, dist = _fake_homes(tmp_path)
+    logdir = user / "heaps" / "polyml_x86_64" / "log"
+    (logdir / "HOL-Analysis.gz").write_bytes(b"log")
+    pool._home_user, pool._home = user, dist
+    out = pool.delete_heap_image("HOL-Analysis")
+    assert out["deleted"] == "HOL-Analysis"
+    assert out["platform"] == "polyml_x86_64"
+    assert out["freed_mb"] >= 0
+    assert not (user / "heaps" / "polyml_x86_64" / "HOL-Analysis").exists()
+    assert not (logdir / "HOL-Analysis.gz").exists()
+    # distribution image untouched
+    assert (dist / "heaps" / "polyml_x86_64" / "HOL").exists()
+
+
+def test_delete_heap_image_never_touches_distribution(tmp_path, monkeypatch):
+    pool = _pool(tmp_path, monkeypatch)
+    user, dist = _fake_homes(tmp_path)
+    pool._home_user, pool._home = user, dist
+    # HOL exists only in the distribution home: not deletable through this path
+    with pytest.raises(HeapNotFound):
+        pool.delete_heap_image("HOL")
+    assert (dist / "heaps" / "polyml_x86_64" / "HOL").exists()
+
+
+def test_delete_heap_image_missing_raises(tmp_path, monkeypatch):
+    pool = _pool(tmp_path, monkeypatch)
+    user, dist = _fake_homes(tmp_path)
+    pool._home_user, pool._home = user, dist
+    with pytest.raises(HeapNotFound):
+        pool.delete_heap_image("NoSuchSession")
+
+
 def test_build_ready_and_manifest_roundtrip(tmp_path, monkeypatch):
     pool = _pool(tmp_path, monkeypatch)
     proj = _project(tmp_path)
@@ -80,7 +163,7 @@ def test_build_ready_and_manifest_roundtrip(tmp_path, monkeypatch):
     assert loaded is not None
     assert loaded["status"] == "ready"
     assert loaded["fingerprint"] == entry["fingerprint"]
-    files = {f["path"].split("/")[-1]: f for f in loaded["theory_files"]}
+    files = {f["path"].replace("\\", "/").split("/")[-1]: f for f in loaded["theory_files"]}
     assert set(files) == {"Bar.thy", "Baz.thy"}
     assert all(len(f["sha256"]) == 64 and f["mtime"] > 0 for f in files.values())
 

@@ -134,6 +134,13 @@ class IsabelleGymAsyncClient:
         response.raise_for_status()
         return response.json()
 
+    async def list_available_heaps(self) -> dict[str, Any]:
+        """Every heap image on disk: base session images (e.g. HOL-Analysis)
+        and distribution heaps, plus pool-built ones (origin-tagged)."""
+        response = await self._request("GET", f"{HEAPS_URL}/available")
+        response.raise_for_status()
+        return response.json()
+
     async def get_heap(self, task_group: str, project: str) -> dict[str, Any]:
         """Full manifest. The project path follows the group segment verbatim
         (server uses a :path converter): get_heap("alpha", "/tmp/hp1")."""

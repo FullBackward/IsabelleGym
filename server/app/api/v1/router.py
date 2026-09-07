@@ -34,6 +34,7 @@ from .schemas.API_models import (
     HeapListResponse,
     HeapManifestResponse,
     HeapTheoryFile,
+    AvailableHeapsResponse,
     HoverResponse,
     LocatedCommand,
     Position,
@@ -53,6 +54,7 @@ from server.app.core.logging import get_logger, logging_context
 from server.app.core import metrics
 from server.app.dependencies import get_heap_pool, get_session_manager
 from server.app.errors import SessionLeaseError
+from server.app.services.heap_pool import HeapNotFound
 from server.app.services.internal_models import SessionExecutionError
 from server.app.services.unicode_normaliser import normalise_for_isabelle
 
@@ -888,6 +890,16 @@ async def list_heaps(task_group: str | None = Query(None), heap_pool=Depends(get
         )
 
 
+@router.get("/api/v1/heaps/available", response_model=AvailableHeapsResponse)
+async def list_available_heaps(heap_pool=Depends(get_heap_pool)):
+    """Admin: every heap image on disk — base session images (user-built, e.g.
+    HOL-Analysis, and distribution ones, origin user/distribution) plus
+    pool-built images (origin pool). The pool listing above only covers
+    pool-built heaps; this is the full "what can sessions start from" view."""
+    with logging_context():
+        return AvailableHeapsResponse(heaps=heap_pool.list_available_heaps())
+
+
 @router.get("/api/v1/heaps/{task_group}/{project:path}", response_model=HeapManifestResponse)
 async def get_heap_manifest(task_group: str, project: str, heap_pool=Depends(get_heap_pool)):
     """Full manifest: theory files with sha256/mtime, ROOT text, fingerprint,
@@ -905,6 +917,18 @@ async def get_heap_manifest(task_group: str, project: str, heap_pool=Depends(get
             root_text=entry.get("root_text", ""),
             theory_files=[HeapTheoryFile(**f) for f in entry.get("theory_files", [])],
         )
+
+
+@router.delete("/api/v1/heaps/images/{session}")
+async def delete_heap_image(session: str, platform: str | None = Query(None), heap_pool=Depends(get_heap_pool)):
+    """Admin: delete a base heap image from the USER heaps dir (frees disk).
+    Distribution images can never be deleted through this path. Declared
+    before the generic {task_group}/{project} DELETE so `images` wins."""
+    with logging_context():
+        try:
+            return heap_pool.delete_heap_image(session, platform)
+        except HeapNotFound as e:
+            raise HTTPException(status_code=404, detail=str(e))
 
 
 @router.delete("/api/v1/heaps/{task_group}/{project:path}")

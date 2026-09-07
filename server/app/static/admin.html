@@ -70,6 +70,14 @@
     </tr></thead><tbody></tbody></table>
   </section>
 
+  <section>
+    <h2>Base heap images <span class="muted">(on disk: base session images + pool images; distribution images are read-only here)</span>
+      <button onclick="loadAvailable()" style="float:right">Refresh</button></h2>
+    <table id="available"><thead><tr>
+      <th>session</th><th>platform</th><th>size</th><th>modified</th><th>origin</th><th>path</th><th>actions</th>
+    </tr></thead><tbody></tbody></table>
+  </section>
+
   <section id="manifest-sec" style="display:none">
     <h2>Manifest <span id="m-title" class="mono"></span>
       <button onclick="closeManifest()" title="Close" style="float:right;font-weight:700;padding:2px 9px">✕</button></h2>
@@ -218,8 +226,38 @@ const closeSession = (sid, lease) => {
     .then(() => flash("session closed")).catch(e => flash(e.message, true)).finally(loadAll);
 };
 
+// ---- base heap images panel ----
+async function loadAvailable() {
+  const d = await api("/api/v1/heaps/available");
+  const tb = document.querySelector("#available tbody");
+  tb.innerHTML = "";
+  for (const h of d.heaps) {
+    const deletable = h.origin !== "distribution";
+    tb.insertAdjacentHTML("beforeend", `<tr>
+      <td class="mono"><b>${esc(h.session)}</b></td>
+      <td class="mono">${esc(h.platform)}</td>
+      <td>${h.size_mb} MB</td>
+      <td>${esc(h.modified)}</td>
+      <td><span class="status-${h.origin === "pool" ? "ready" : "building"}">${esc(h.origin)}</span></td>
+      <td class="mono muted" title="${esc(h.path)}">${esc(h.path)}</td>
+      <td>${deletable
+        ? `<button class="danger" onclick="delImage('${esc(h.session)}','${esc(h.platform)}')">delete</button>`
+        : '<span class="muted">locked</span>'}</td>
+    </tr>`);
+  }
+  if (!d.heaps.length) tb.innerHTML = '<tr><td colspan="7" class="muted">no heap images on disk</td></tr>';
+}
+
+const delImage = (session, platform) => {
+  if (!confirm(`Delete heap image ${session} (${platform}) from the user heaps dir?\nLive sessions that already loaded it are unaffected; the next session on it pays a full rebuild.`)) return;
+  api(`/api/v1/heaps/images/${enc(session)}?platform=${enc(platform)}`, {method: "DELETE"})
+    .then(d => flash(`deleted ${d.deleted} (${d.freed_mb} MB freed)`))
+    .catch(e => flash(e.message, true))
+    .finally(() => { loadAvailable(); loadSessions(); });
+};
+
 async function loadAll() {
-  try { await loadGroups(); await loadHeaps(currentGroup); await loadSessions(); }
+  try { await loadGroups(); await loadHeaps(currentGroup); await loadSessions(); await loadAvailable(); }
   catch (e) { flash(e.message, true); }
 }
 let currentGroup = null;
