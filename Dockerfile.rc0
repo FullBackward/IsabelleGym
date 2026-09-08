@@ -1,0 +1,58 @@
+# Runtime image: Isabelle2026-RC0 (built from Mercurial in the stage-1
+# interactive run — see isabelle-humanize/.m0/rc0-migration/ for the recipe)
+# + the IsabelleGym server. The build context is a staging dir containing:
+#   isabelle/       the prebuilt RC0 tree (~/isabelle2026-build/isabelle)
+#   isabelle_user/  the installed components (~/isabelle2026-build/isabelle_user)
+#   app/            the repo content (git archive of the 2026-RC0 branch)
+#
+#   docker build -f Dockerfile.rc0 -t isabellegym-isabelle-gym:2026rc0 <ctx>
+#
+# Base is the LOCAL 2025-2 gym image (already has python3.12, openjdk-21,
+# curl/git/tar, and the app Python deps incl. the prometheus patch) — NOT
+# python:3.12-slim, which cannot be pulled here (dead registry mirror).
+#
+# NOTE: the image that actually validated was assembled interactively
+# (docker cp + Admin/init + gradlew build + docker commit) — this Dockerfile
+# documents the equivalent declarative path; the BuildKit environment
+# (HOME/USER) quirk that blocked it is worked around via ENV below.
+
+FROM isabellegym-isabelle-gym:latest
+
+WORKDIR /app
+
+# The prebuilt RC0 Isabelle tree and its component home (replace 2025-2's).
+COPY isabelle /opt/isabelle
+COPY isabelle_user /root/.isabelle
+
+ENV ISABELLE_HOME=/opt/isabelle
+ENV PATH=$ISABELLE_HOME/bin:$PATH
+
+# The 2025-2 base image exports JAVA_HOME=<system jdk-21>, which breaks
+# Isabelle 2026's own JDK resolution ("Unknown JAVA_HOME -- Java unavailable").
+# Point it at Isabelle's bundled JDK component instead; the Gradle step below
+# re-scopes JAVA_HOME to the system JDK for itself.
+ENV JAVA_HOME=/root/.isabelle/contrib/jdk-25.0.4/x86_64-linux
+
+# Docker Desktop's BuildKit runs steps with the *host* user's HOME
+# (/home/winst), which makes Isabelle resolve ISABELLE_HOME_USER to an empty
+# home — settings/jdk resolution then fails with "Unknown JAVA_HOME".
+# Pin HOME so the build (and the runtime) see /root/.isabelle.
+ENV HOME=/root
+
+# mcp<2: required by the unit suite's stepwise-MCP imports (Phase-0 gap;
+# mcp 2.0 removed mcp.server.fastmcp). PyPI is reachable; the Docker
+# registry mirror is not needed for pip.
+RUN python -m pip install "mcp<2"
+
+COPY app /app/
+RUN find repl -type f \( -name "*.sh" -o -name "init" -o -name "gradlew" \) -exec sed -i 's/\r$//' {} \; \
+ && chmod +x repl/Admin/init repl/gradlew \
+ && ./repl/Admin/init
+
+WORKDIR /app/repl
+# gradle gets a JDK via JAVA_HOME scoped to this step only; Isabelle's own
+# scala compile resolves the bundled component JDK.
+RUN chmod +x gradlew && JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 ./gradlew build
+WORKDIR /app
+
+CMD ["bash"]
