@@ -37,10 +37,13 @@ class SessionManagerHelpersMixin:
         try:
             with _gateway_lock:
                 # If the gateway JVM died (e.g. OOM-killed under a sledgehammer
-                # burst), its sessions are all invalid. Purge them and rebuild
-                # instead of leaving the server bricked with 500s.
-                if self.gateway is not None and self.gateway.has_terminated():
-                    logger.error("REPL gateway has terminated (likely OOM-killed); recovering")
+                # burst) or is wedged alive (Bug 9: Event_Timer cancelled), its
+                # sessions are all invalid. Purge them and rebuild instead of
+                # leaving the server bricked with 500s.
+                if self.gateway is not None and not self.gateway.is_alive():
+                    logger.error(
+                        "REPL gateway is dead or wedged (probe failed); recovering"
+                    )
                     self._recover_gateway_locked()
                 if self.gateway is None:
                     logger.info("starting REPL gateway")
@@ -50,14 +53,23 @@ class SessionManagerHelpersMixin:
             logger.exception("failed to start REPL gateway")
             raise GatewayUnavailable(f"{where}: failed to start REPL gateway: {e}") from e
 
+    #: Seconds a functional liveness result is cached, so health probes don't
+    #: pay a Py4J round-trip per request.
+    _ALIVE_PROBE_CACHE_S: float = 5.0
+
     def gateway_alive(self) -> bool:
         gw = self.gateway
         if gw is None:
             return False
+        now = time.monotonic()
+        if now - getattr(self, "_alive_probe_ts", 0.0) < self._ALIVE_PROBE_CACHE_S:
+            return getattr(self, "_alive_probe", False)
         try:
-            return not gw.has_terminated()
+            alive = gw.is_alive()
         except Exception:
-            return False
+            alive = False
+        self._alive_probe, self._alive_probe_ts = alive, now
+        return alive
 
     def _recover_gateway_locked(self) -> None:
         """Tear down a dead gateway and its now-invalid sessions so the next
