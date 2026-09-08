@@ -463,7 +463,11 @@ object Document_Utils {
     offset_at(line_doc, line, col) match {
       case None => Json_Reports.line_query_not_found(s"no position at line $line col $col")
       case Some(off) =>
-        val rendering = new Rendering(snapshot, session.resources.options, session)
+        // Isabelle 2026: Rendering is abstract; instantiate an anonymous
+        // subclass with the upstream-default gui_style (as Find_Facts does).
+        val rendering = new Rendering(snapshot, session.resources.options, session) {
+          override def gui_style: GUI.Style = GUI.Style_Symbol_Decoded
+        }
         rendering.tooltips(Rendering.tooltip_elements, Text.Range(off, off + 1)) match {
           case Some(info) =>
             JSON.Format(JSON.Object(

@@ -58,7 +58,13 @@ object Edit_Utils {
     if (illegal_imports.nonEmpty) None
     else {
       val node_header =
-        Document.Node.Header(imports, thy_header.keywords, thy_header.abbrevs)
+        // Isabelle 2026: Header carries an `options` field between imports and
+        // keywords — pass named args so the fields land correctly.
+        Document.Node.Header(
+          imports = imports,
+          keywords = thy_header.keywords,
+          abbrevs = thy_header.abbrevs,
+        )
       Some(Document.Node.Deps(node_header))
     }
   }

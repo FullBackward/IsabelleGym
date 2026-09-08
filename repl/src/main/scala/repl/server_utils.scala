@@ -1,5 +1,7 @@
 package repl
 
+import scala.language.unsafeNulls
+
 import isabelle._
 
 /** Low-level Isabelle server lifecycle: start/stop the `isabelle server`
@@ -16,7 +18,7 @@ object Server_Utils {
     using(server_info.connection()) { connection =>
 
       val ctxClass = Class.forName("isabelle.Server$Context")
-      val ctor = ctxClass.getDeclaredConstructors.head
+      val ctor = ctxClass.nn.getDeclaredConstructors.head
       ctor.setAccessible(true)
       val ctx =
         ctor.newInstance(server, connection).asInstanceOf[Server.Context]
@@ -26,7 +28,8 @@ object Server_Utils {
   def start_server(): (Server.Info, Server) = {
     def attempt_start_server(): Option[(Server.Info, Server)] = {
       val server_name = UUID.random_string()
-      val (server_info, server_opt) = Server.init(name = server_name)
+      // Isabelle 2026: Server.init takes a mandatory Logger as its first arg.
+      val (server_info, server_opt) = Server.init(new Console_Logger(), name = server_name)
       server_opt.map(server => (server_info, server))
     }
 

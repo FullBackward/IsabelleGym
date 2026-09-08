@@ -1,5 +1,7 @@
 package repl
 
+import scala.language.unsafeNulls
+
 import isabelle._
 
 import io.bullet.spliff.Diff
@@ -90,14 +92,14 @@ case class Thy_Status(
         case Diff.Op.Insert(baseIx, targetIx, count) =>
           val edit = Text.Edit.insert(
             base_offset + baseIx,
-            insertions_target.substring(targetIx, targetIx + count)
+            insertions_target.nn.substring(targetIx, targetIx + count)
           )
           base_offset += count
           edit
         case Diff.Op.Delete(baseIx, count) =>
           val edit = Text.Edit.remove(
             base_offset + baseIx,
-            insertions_base.substring(baseIx, baseIx + count)
+            insertions_base.nn.substring(baseIx, baseIx + count)
           )
           base_offset -= count
           edit

@@ -28,7 +28,7 @@ class ReplBackend(show_states: Boolean, enable_cache: Boolean = false, max_cache
   /** Unique channel ID for this backend instance, used to isolate ML
    *  communication (subgoals, local facts, global facts) from other
    *  concurrent backends sharing the same JVM process. */
-  val channel_id: String = java.util.UUID.randomUUID().toString.replace("-", "").take(16)
+  val channel_id: String = java.util.UUID.randomUUID().toString.nn.replace("-", "").nn.take(16)
 
   /** Reset the per-thread result buffer, run `command_logic`, and return the
    *  accumulated Repl_Result. The standard wrapper for output-producing methods. */

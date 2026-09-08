@@ -1,5 +1,7 @@
 package repl
 
+import scala.language.unsafeNulls
+
 import isabelle._
 
 /** Per-session document state and execution engine beneath [[ReplBackend]]:
@@ -253,7 +255,7 @@ class Repl_Session(session_manager: Session_Manager, initial_thys: List[String] 
     }
 
   def current_source: String =
-    if (entered_some_thy) Document_Utils.node_source(session, current_thy_node_name).strip()
+    if (entered_some_thy) Document_Utils.node_source(session, current_thy_node_name).nn.strip()
     else ""
 
   def rollback_last_text_edit(): Unit =

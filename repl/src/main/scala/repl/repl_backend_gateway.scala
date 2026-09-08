@@ -10,6 +10,15 @@ import scala.jdk.CollectionConverters._
  *  [[ReplBackend]] instances — one per HTTP-server session, all in this ONE
  *  JVM. Shared infrastructure serving both MCP workflows. */
 object ReplBackendGateway {
+  /** Functional liveness probe for the "Timer already cancelled" wedge
+   *  (docs/ISSUES.md Bug 9): schedule a no-op on the JVM-global Event_Timer.
+   *  A wedged timer throws IllegalStateException at schedule time, so this
+   *  answers false instead of 500ing — letting the Python side distinguish
+   *  a wedged-but-alive JVM from a healthy one and trigger crash recovery. */
+  def alive(): Boolean =
+    try { Event_Timer.request(new Console_Logger(), isabelle.Time.now()) { () }; true }
+    catch { case _: IllegalStateException => false }
+
   def get_repl_backend(show_states: Boolean): ReplBackend = new ReplBackend(show_states)
   def get_repl_backend_with_cache(show_states: Boolean, enable_cache: Boolean): ReplBackend = 
     new ReplBackend(show_states, enable_cache)
@@ -20,7 +29,7 @@ object ReplBackendGateway {
   def get_repl_backend_with_memory_management(show_states: Boolean, enable_cache: Boolean, max_cache_size: Int, field: String = "HOL"): ReplBackend =
     new ReplBackend(show_states, enable_cache, max_cache_size, field = field)
 
-  def get_repl_backend_with_initial_theories(show_states: Boolean, enable_cache: Boolean, max_cache_size: Int, initial_thys: java.util.List[String], field: String = "HOL", session_dirs: java.util.List[String] = java.util.List.of()): ReplBackend =
+  def get_repl_backend_with_initial_theories(show_states: Boolean, enable_cache: Boolean, max_cache_size: Int, initial_thys: java.util.List[String], field: String = "HOL", session_dirs: java.util.List[String] = java.util.List.of[String]().nn): ReplBackend =
     new ReplBackend(show_states, enable_cache, max_cache_size, initial_thys.asScala.toList, field = field, session_dirs = session_dirs.asScala.toList)
 
   private var shared_session_manager: Option[Session_Manager] = None

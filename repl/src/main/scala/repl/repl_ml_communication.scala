@@ -1,5 +1,7 @@
 package repl
 
+import scala.language.unsafeNulls
+
 import isabelle.*
 import java.util.concurrent.{ConcurrentHashMap, LinkedBlockingQueue, TimeUnit}
 
@@ -60,7 +62,7 @@ object Repl_ML_Communication {
     map: ConcurrentHashMap[String, LinkedBlockingQueue[List[String]]],
     channel: String
   ): LinkedBlockingQueue[List[String]] =
-    map.computeIfAbsent(channel, _ => new LinkedBlockingQueue[List[String]](1))
+    map.computeIfAbsent(channel, _ => new LinkedBlockingQueue[List[String]](1).nn)
 
   /** Remove the channel's queue so stale data cannot leak across reuses. */
   def clear_channel(channel: String): Unit = {
