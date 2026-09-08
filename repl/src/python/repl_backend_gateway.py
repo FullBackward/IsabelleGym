@@ -1,5 +1,6 @@
 """Utilities associated with the process that runs the Scala REPL gateway."""
 
+import concurrent.futures
 import os
 import signal
 import subprocess
@@ -119,6 +120,31 @@ class ReplBackendGatewayProcess:
     def has_terminated(self) -> bool:
         """Check if the Scala REPL gateway process has terminated."""
         return self.process.poll() is not None
+
+    #: Seconds the wedge probe may take before the gateway counts as dead.
+    PROBE_TIMEOUT: float = 5.0
+
+    def is_alive(self) -> bool:
+        """Functional liveness: process up AND the gateway answers the wedge
+        probe (docs/ISSUES.md Bug 9 — a JVM can be alive with its Event_Timer
+        dead, which process liveness alone cannot see).
+
+        The probe is bounded: a JVM that never answers counts as dead. Any
+        error (including an older gateway lacking the ``alive`` method) reads
+        as not-alive, so recovery replaces the gateway with one that has it.
+        """
+        if self.has_terminated():
+            return False
+        pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        try:
+            future = pool.submit(
+                self.gateway.jvm.repl.ReplBackendGateway.alive
+            )
+            return bool(future.result(timeout=self.PROBE_TIMEOUT))
+        except Exception:
+            return False
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
 
     # ------------------------------------------------------------------
     # Generic polling helper — all get_repl_backend_* variants delegate
