@@ -22,31 +22,29 @@ from __future__ import annotations
 
 import asyncio
 import os
-import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
 from client.async_client import IsabelleGymAsyncClient
+from server.app.services.theory_parsing import parse_theory_header
 
 from .config import Config
-
-# Header import extraction for scratch contexts (mirrors the server's regexes).
-_IMPORT_RE = re.compile(r"(?ms)\bimports\b(?P<imports>.*?)\bbegin\b")
-_IMPORT_TOKEN_RE = re.compile(r'"[^"]+"|[A-Za-z_][A-Za-z0-9_./-]*')
-
 
 def canonical_path(file_path: str) -> str:
     return os.path.realpath(os.path.expanduser(file_path))
 
 
 def header_imports(text: str) -> List[str]:
-    """Import names from a full .thy source's header (quotes stripped)."""
-    m = _IMPORT_RE.search(text)
-    if not m:
-        return []
-    return [tok.strip('"') for tok in _IMPORT_TOKEN_RE.findall(m.group("imports"))]
+    """Import names from a full .thy source's header (quotes stripped).
+
+    Delegates to the canonical parser (server.app.services.theory_parsing):
+    comments (nested) are stripped first, so a leading `(* TASK: ... *)`
+    comment can never pollute the imports — see
+    isabellegym-header-imports-issue.md."""
+    _, imports = parse_theory_header(text)
+    return imports
 
 
 def attempt_prefix(text: str, line: int) -> str:
