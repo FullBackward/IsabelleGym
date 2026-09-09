@@ -22,6 +22,13 @@ class Config:
     # reused across calls — each use is a load_document reset.
     SCRATCH_POOL_SIZE: int = int(os.environ.get("ISABELLE_MCP_LSP_SCRATCH_POOL_SIZE", "4"))
 
+    # When true, isabelle_close destroys the session (immediate teardown,
+    # freeing memory) instead of the default warm release back to the pool.
+    # The per-call `destroy` argument on isabelle_close overrides this.
+    CLOSE_DESTROYS: bool = os.environ.get(
+        "ISABELLE_MCP_LSP_CLOSE_DESTROYS", "false"
+    ).lower() in {"1", "true", "yes", "on"}
+
     # Transport: "stdio" (local) or "streamable-http" (remote).
     TRANSPORT: str = os.environ.get("ISABELLE_MCP_LSP_TRANSPORT", "stdio")
     HOST: str = os.environ.get("ISABELLE_MCP_LSP_HOST", "127.0.0.1")

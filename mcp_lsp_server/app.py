@@ -75,10 +75,14 @@ async def isabelle_open(
 
 
 @mcp.tool()
-async def isabelle_close(file_path: str) -> str:
-    """Release the file's session back to the server pool and unbind it."""
-    closed = await pool.close_binding(file_path)
-    return _j({"closed": closed, "file": file_path})
+async def isabelle_close(file_path: str, destroy: bool = False) -> str:
+    """Release the file's session and unbind. With destroy=true (or the
+    ISABELLE_MCP_LSP_CLOSE_DESTROYS env), the session is torn down immediately
+    instead of released warm back to the pool — the sanctioned way to free a
+    multi-GB session. Reopening the file afterwards rebinds transparently."""
+    destroyed = destroy or Config.CLOSE_DESTROYS
+    closed = await pool.close_binding(file_path, destroy=destroyed)
+    return _j({"closed": closed, "destroyed": destroyed, "file": file_path})
 
 
 @mcp.tool()

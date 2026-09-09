@@ -185,10 +185,18 @@ class SessionManagerHelpersMixin:
         return snap
 
     # ----- read-only info / reporting + idle cleanup loop -----------------
-    def list_sessions(self) -> List[Dict[str, Any]]:
+    def list_sessions(self, *, include_lease: bool = False) -> List[Dict[str, Any]]:
+        """Pool listing for the sessions endpoint.
+
+        ``lease_id`` is an ownership proof for mutation endpoints, so it is
+        NEVER included in the public listing (any caller can read it and then
+        delete the session it belongs to — the lease leak). Only the
+        token-gated admin endpoint passes ``include_lease=True``.
+        """
         with self._lock:
-            return [
-                {
+            entries = []
+            for sid, session in self._lru.items():
+                entry = {
                     "session_id": str(sid),
                     "created_at": session.created_at,
                     "last_activity": session.last_activity,
@@ -203,12 +211,13 @@ class SessionManagerHelpersMixin:
                     "in_use": session.in_use,
                     "active_requests": session.active_request_count,
                     "leased": session.leased,
-                    "lease_id": session.lease_id,
                     "label": session.label,
                     "task_group": session.task_group,
                 }
-                for sid, session in self._lru.items()
-            ]
+                if include_lease:
+                    entry["lease_id"] = session.lease_id
+                entries.append(entry)
+        return entries
 
     async def cleanup_idle_sessions(self) -> None:
         max_lease_age = self.max_lease_age

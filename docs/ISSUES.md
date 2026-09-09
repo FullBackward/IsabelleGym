@@ -420,6 +420,50 @@ Root cause not yet isolated. Simple close→create and reset→create cycles wer
 check should exercise a real round-trip (e.g. a cheap `use_theories` probe or a JVM-level
 "timer alive" check) so this class of wedge triggers crash recovery instead of 500-forever.
 
+### Bug 10: `GET /api/v1/sessions` Leaks `lease_id`s — Destroy Authorization Bypassable — RESOLVED
+
+**Files:** `server/app/services/session_manager_helpers.py` (`list_sessions`),
+`server/app/api/v1/router.py`, `server/app/main.py`, `server/app/static/admin.html`,
+`mcp_lsp_server/{app,pool,config}.py`
+**Severity:** High (any client could destroy any tenant's session)
+**Found:** 2026-09-09, handoff `isabellegym-lease-leak-issue.md` (agents in the
+Putnam runs hand-rolled DELETEs after reading the listing)
+**Status:** ✅ Resolved 2026-09-09.
+
+#### Root cause
+
+The `X-Lease-Id` token is the only ownership proof on mutation paths
+(`DELETE`, release), but the pool listing returned `"lease_id"` for **every**
+session with no lease required. Three curls — list, steal, delete — killed any
+session (JVM + poly torn down), bypassing the lease check entirely. The
+absence of a sanctioned destroy path (release frees nothing) is what pushed
+agents to improvise it.
+
+#### Fix (four parts)
+
+1. `list_sessions` never includes `lease_id`; the full listing moved behind
+   `GET /api/v1/admin/sessions`, gated by `X-Admin-Token` against
+   `ISABELLE_ADMIN_TOKEN` (empty = disabled). The admin console gets the token
+   injected at serve time; without it, force-close buttons render `locked`.
+2. Audit: every DELETE logs a `warning` (session id, lease prefix, request id)
+   and increments `isabellegym_sessions_force_closed_total` (alertable).
+3. Sanctioned destroy in the LSP MCP: `isabelle_close(file_path, destroy?)` +
+   `ISABELLE_MCP_LSP_CLOSE_DESTROYS` — teardown via the binding's own lease,
+   rebind-on-404 recovers afterwards (tested: recovery happens in
+   `pool.call`'s 404 wrapper; `sync` short-circuits on unchanged text).
+4. Tests: `tests/test_lease_security.py` (listing split, admin gate, destroy
+   paths, rebind-after-destroy). Rejected as non-solutions, documented:
+   task-group scoping without credentials (theater), rotating leases (breaks
+   long-lived flows).
+
+#### Verification
+
+Live on the RC0 track: public listing clean with a live session; admin
+endpoint 403/403/200 (no/wrong/correct token); bogus-lease DELETE → 403;
+owner-lease DELETE → 200 and the session is gone; 8/8 in-container tests.
+
+---
+
 ### [To-do]Issue 1: How Isabelle do parallel
 When have parallel "have x" statements, can we do this in step. And how do we retrive information when one line is stucked in loop. That is, we need error retrieval for a proof chunk, the server should not just return a timeout error, it should tell, when we build the MCP server, the agent what part of that proof chunk just went wrong.
 

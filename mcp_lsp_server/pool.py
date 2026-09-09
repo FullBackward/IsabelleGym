@@ -204,19 +204,32 @@ class LspPool:
         await self.sync(binding)
         return await fn(c, binding.session_id, *args, **kwargs)
 
-    async def close_binding(self, file_path: str) -> bool:
+    async def close_binding(self, file_path: str, destroy: bool = False) -> bool:
         canon = canonical_path(file_path)
         async with self._bindings_lock:
             binding = self._bindings.pop(canon, None)
         if binding is None:
             return False
-        await self._safe_release(binding)
+        if destroy:
+            await self._safe_destroy(binding)
+        else:
+            await self._safe_release(binding)
         return True
 
     async def _safe_release(self, binding: FileBinding) -> None:
         try:
             c = await self.client()
             await c.release_session(binding.session_id, lease_id=binding.lease_id)
+        except Exception:
+            pass
+
+    async def _safe_destroy(self, binding: FileBinding) -> None:
+        """Sanctioned immediate teardown: DELETE the binding's own session
+        (authorized by the binding's own lease). The rebind-on-404 path
+        recovers transparently if the file is opened again afterwards."""
+        try:
+            c = await self.client()
+            await c.close_session(binding.session_id, lease_id=binding.lease_id)
         except Exception:
             pass
 

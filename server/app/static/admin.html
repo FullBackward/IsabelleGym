@@ -193,6 +193,10 @@ function closeManifest() {
 }
 
 // ---- sessions panel ----
+// Injected at serve time by main.py when ISABELLE_ADMIN_TOKEN is configured;
+// empty string means force-close is disabled (the public listing has no
+// lease ids since the lease-leak fix).
+const ADMIN_TOKEN = "__ADMIN_TOKEN__";
 const age = ts => {
   const s = Math.max(0, Date.now() / 1000 - ts);
   if (s < 60) return `${s.toFixed(0)}s`;
@@ -201,7 +205,9 @@ const age = ts => {
 };
 
 async function loadSessions() {
-  const d = await api("/api/v1/sessions");
+  const d = ADMIN_TOKEN
+    ? await api("/api/v1/admin/sessions", {headers: {"X-Admin-Token": ADMIN_TOKEN}})
+    : await api("/api/v1/sessions");
   const tb = document.querySelector("#sessions tbody");
   tb.innerHTML = "";
   for (const s of d.sessions) {
@@ -214,7 +220,9 @@ async function loadSessions() {
       <td>${esc(s.status)}${s.leased ? " (leased)" : ""}</td>
       <td>${s.in_use ? "yes" : ""}</td>
       <td>${age(s.last_activity)}</td>
-      <td><button class="danger" onclick="closeSession('${esc(s.session_id)}','${esc(s.lease_id || "")}')">close</button></td>
+      <td>${ADMIN_TOKEN
+        ? `<button class="danger" onclick="closeSession('${esc(s.session_id)}','${esc(s.lease_id || "")}')">close</button>`
+        : '<span class="muted" title="set ISABELLE_ADMIN_TOKEN to enable">locked</span>'}</td>
     </tr>`);
   }
   if (!d.sessions.length) tb.innerHTML = '<tr><td colspan="9" class="muted">no sessions in pool</td></tr>';
@@ -222,7 +230,10 @@ async function loadSessions() {
 
 const closeSession = (sid, lease) => {
   if (!confirm(`Force-close session ${sid.slice(0, 8)}…?`)) return;
-  api(`/api/v1/sessions/${sid}`, {method: "DELETE", headers: {"X-Lease-Id": lease}})
+  // Unleased (released/pool) sessions have no lease to present: use the
+  // admin-token path instead (server accepts X-Admin-Token for those).
+  const headers = lease ? {"X-Lease-Id": lease} : {"X-Admin-Token": ADMIN_TOKEN};
+  api(`/api/v1/sessions/${sid}`, {method: "DELETE", headers})
     .then(() => flash("session closed")).catch(e => flash(e.message, true)).finally(loadAll);
 };
 

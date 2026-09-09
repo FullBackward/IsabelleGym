@@ -28,8 +28,8 @@ firewall or SSH tunnel, never expose the port publicly.
 Lifecycle:
 | Tool | What it does |
 |---|---|
-| `isabelle_open(file_path, task_group?, heap_session?, label?)` | Bind a file to a session (auto-acquired on first use with defaults if not called; released same-dependency-key sessions are reused warm — every sync resets via load_document, so dirty reuse is safe); heap context chosen here |
-| `isabelle_close(file_path)` | Release the session and unbind |
+| `isabelle_open(file_path, task_group?, heap_session?, label?)` | Bind a file to a session (auto-acquired on first use with defaults if not called; released same-dependency-key sessions are reused warm — every sync resets via load_document, so dirty reuse is safe); heap context chosen here. The acquire passes the file's own header imports as `theories`, so imports beyond `Main` (Complex_Main, `"HOL-Analysis.Derivative"`, …) resolve — see the theories-at-acquire fix |
+| `isabelle_close(file_path, destroy?)` | Release the session and unbind. With `destroy=true` (or `ISABELLE_MCP_LSP_CLOSE_DESTROYS=true`) the session is torn down immediately instead of released warm — the sanctioned way to free a multi-GB session; reopening the file rebinds transparently |
 | `isabelle_sync(file_path)` | Force a disk→session sync check (normally implicit) |
 
 Read-only (each syncs first):
@@ -59,7 +59,14 @@ Heap pool:
 | Tool | What it does |
 |---|---|
 | `isabelle_build_heap(task_group, project, session_name?)` | `isabelle build -b` the project's top-level .thy files into a verified heap (long-running) |
-| `isabelle_heap_status(task_group?, project?)` | Pool listing or full manifest (file hashes, ROOT text, fingerprint, log tail) |
+| `isabelle_heap_status(task_group?, project?)` | With both args: the full manifest (file hashes, ROOT text, fingerprint, log tail). Otherwise: pool listing **plus `available_heaps`** — every base session image on disk (HOL-Analysis, distribution heaps, pool-built), so you can see what sessions can start from before naming `heap_session`/`field` anywhere |
+
+Server endpoints the agent may also want (REST, same server the MCP wraps):
+`GET /api/v1/heaps/available` (the raw `available_heaps` listing) and
+`POST /api/v1/parse_theory_header {text}` → `{theory_name, imports,
+suggested_field}` — the server's canonical header parse (comment-stripped,
+header-anchored); use it instead of a local regex so all consumers share one
+parser (client wrapper: `async_client.parse_theory_header`).
 
 ## Configuration (`ISABELLE_MCP_LSP_*` env vars)
 
@@ -72,6 +79,7 @@ Heap pool:
 | `..._ATTEMPT_TIMEOUT` | 180 | per-candidate/run_code budget (s) |
 | `..._MAX_PARALLEL` | 4 | multi_attempt fan-out cap |
 | `..._SCRATCH_POOL_SIZE` | 4 | warm scratch sessions per context |
+| `..._CLOSE_DESTROYS` | false | `isabelle_close` destroys (teardown) instead of warm-releasing |
 | `..._TRANSPORT` | `stdio` | `stdio` or `streamable-http` |
 | `..._HOST` / `..._PORT` | `127.0.0.1` / `8849` | streamable-http bind |
 
