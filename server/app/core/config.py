@@ -37,6 +37,11 @@ class Server:
         "1", "true", "yes", "on",
     }
     DEFAULT_FIELD: Final = os.getenv("ISABELLE_DEFAULT_FIELD", "HOL")
+    # Optional admin credential (off when empty): required as X-Admin-Token on
+    # /api/v1/admin/* endpoints (full session listing incl. lease ids, used by
+    # the admin console's force-close). The first and only credential on an
+    # otherwise unauthenticated server — opt-in per the lease-leak fix.
+    ADMIN_TOKEN: Final = os.getenv("ISABELLE_ADMIN_TOKEN", "")
     HOST: Final = os.getenv("ISABELLE_SERVER_HOST", "0.0.0.0")
     PORT: Final = int(os.getenv("ISABELLE_SERVER_PORT", "8000"))
     MAX_LEASE_AGE: Final = int(os.getenv("ISABELLE_MAX_LEASE_AGE", "7200")) # 2 hours

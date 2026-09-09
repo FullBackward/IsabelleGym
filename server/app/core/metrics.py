@@ -37,6 +37,10 @@ pool_exhausted = Counter(
     "Session creations refused with 503",
     ["reason"],  # memory | all_busy
 )
+sessions_force_closed = Counter(
+    "isabellegym_sessions_force_closed_total",
+    "Sessions destroyed via DELETE (audit counter for the alarm path)",
+)
 gateway_restarts = Counter(
     "isabellegym_gateway_restarts_total", "Dead REPL gateway recoveries"
 )

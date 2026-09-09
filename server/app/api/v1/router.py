@@ -207,8 +207,26 @@ async def create_session(
 
 @router.get("/api/v1/sessions")
 async def list_sessions(session_manager=Depends(get_session_manager)):
+    """Public pool listing. Never carries lease ids: a lease token is an
+    ownership proof for mutation endpoints, so publishing it would let any
+    caller destroy any session (the lease leak). The full listing lives
+    behind the token-gated admin endpoint below."""
     sessions = session_manager.list_sessions()
     logger.debug("listed %s sessions", len(sessions))
+    return {"sessions": sessions} if sessions else {"sessions": []}
+
+
+@router.get("/api/v1/admin/sessions")
+async def list_sessions_admin(
+    x_admin_token: str | None = Header(None, alias="X-Admin-Token"),
+    session_manager=Depends(get_session_manager),
+):
+    """Admin pool listing WITH lease ids (for the admin console's force-close).
+    Requires ISABELLE_ADMIN_TOKEN configured server-side and a matching
+    X-Admin-Token header; 403 when unset or mismatched."""
+    if not Server.ADMIN_TOKEN or x_admin_token != Server.ADMIN_TOKEN:
+        raise HTTPException(status_code=403, detail="admin token required")
+    sessions = session_manager.list_sessions(include_lease=True)
     return {"sessions": sessions} if sessions else {"sessions": []}
 
 
@@ -307,12 +325,30 @@ async def get_session_info(session_id: str, x_lease_id: str | None = Header(None
 
 
 @router.delete("/api/v1/sessions/{session_id}")
-async def close_session(session_id: str, x_lease_id: str | None = Header(None, alias="X-Lease-Id"), session_manager=Depends(get_session_manager)):
+async def close_session(session_id: str, x_lease_id: str | None = Header(None, alias="X-Lease-Id"), x_admin_token: str | None = Header(None, alias="X-Admin-Token"), session_manager=Depends(get_session_manager)):
     with logging_context(session_id=session_id):
-        lease_id = _require_lease_id(x_lease_id)
-        logger.info("closing session")
-        await asyncio.to_thread(session_manager.close_session, session_id, lease_id=lease_id)
-        logger.info("session closed")
+        lease_id = x_lease_id
+        if not lease_id:
+            # A session released back to the pool carries NO lease to present,
+            # so it is uncloseable by lease check alone (the force-close gap
+            # that made zombie sessions immortal). Closing one is an admin
+            # action instead: X-Admin-Token against ISABELLE_ADMIN_TOKEN.
+            if not (Server.ADMIN_TOKEN and x_admin_token == Server.ADMIN_TOKEN):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Missing X-Lease-Id header (or X-Admin-Token for unleased sessions)",
+                )
+            logger.info("force-closing unleased session via admin token")
+            await asyncio.to_thread(session_manager.close_session, session_id, require_lease=False)
+        else:
+            logger.info("closing session")
+            await asyncio.to_thread(session_manager.close_session, session_id, lease_id=lease_id)
+        # Destroy is unrecoverable for in-flight work: audit every one.
+        metrics.sessions_force_closed.inc()
+        logger.warning(
+            "session force-closed via DELETE session_id=%s lease_prefix=%s",
+            session_id, (lease_id or "admin")[:6],
+        )
         return {"success": True}
 
 

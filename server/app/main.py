@@ -7,7 +7,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from prometheus_fastapi_instrumentator import Instrumentator
 
@@ -67,8 +67,14 @@ _STATIC_DIR = Path(__file__).parent / "static"
 @app.get("/admin", include_in_schema=False)
 async def admin_console():
     """Heap-pool admin console (static page; same no-auth model as the API —
-    keep behind the firewall/SSH tunnel like everything else)."""
-    return FileResponse(_STATIC_DIR / "admin.html")
+    keep behind the firewall/SSH tunnel like everything else).
+
+    When ISABELLE_ADMIN_TOKEN is configured it is injected into the page so
+    the console's force-close can call the token-gated admin listing; without
+    a token the close buttons disable themselves client-side."""
+    html = (_STATIC_DIR / "admin.html").read_text(encoding="utf-8")
+    html = html.replace("__ADMIN_TOKEN__", Server.ADMIN_TOKEN)
+    return HTMLResponse(html)
 
 
 @app.middleware("http")
