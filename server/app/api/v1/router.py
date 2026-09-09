@@ -35,6 +35,8 @@ from .schemas.API_models import (
     HeapManifestResponse,
     HeapTheoryFile,
     AvailableHeapsResponse,
+    ParseTheoryHeaderRequest,
+    ParseTheoryHeaderResponse,
     HoverResponse,
     LocatedCommand,
     Position,
@@ -56,6 +58,7 @@ from server.app.dependencies import get_heap_pool, get_session_manager
 from server.app.errors import SessionLeaseError
 from server.app.services.heap_pool import HeapNotFound
 from server.app.services.internal_models import SessionExecutionError
+from server.app.services.theory_parsing import parse_theory_header, suggested_field
 from server.app.services.unicode_normaliser import normalise_for_isabelle
 
 router = APIRouter()
@@ -898,6 +901,23 @@ async def list_available_heaps(heap_pool=Depends(get_heap_pool)):
     pool-built heaps; this is the full "what can sessions start from" view."""
     with logging_context():
         return AvailableHeapsResponse(heaps=heap_pool.list_available_heaps())
+
+
+@router.post("/api/v1/parse_theory_header", response_model=ParseTheoryHeaderResponse)
+async def parse_theory_header_endpoint(request: ParseTheoryHeaderRequest):
+    """Stateless canonical theory-header parse (no session, no lease).
+
+    The one parser every consumer should use: comments (nested) are stripped
+    first, then the `theory <name> imports <...> begin` header is anchored —
+    so a leading `(* TASK: ... *)`-style comment can never pollute the import
+    list (isabellegym-header-imports-issue.md)."""
+    with logging_context():
+        name, imports = parse_theory_header(request.text)
+        return ParseTheoryHeaderResponse(
+            theory_name=name,
+            imports=imports,
+            suggested_field=suggested_field(imports),
+        )
 
 
 @router.get("/api/v1/heaps/{task_group}/{project:path}", response_model=HeapManifestResponse)

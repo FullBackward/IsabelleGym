@@ -456,5 +456,19 @@ class AvailableHeapsResponse(BaseModel):
     heaps: List[AvailableHeap]
 
 
+class ParseTheoryHeaderRequest(BaseModel):
+    text: str
+
+
+class ParseTheoryHeaderResponse(BaseModel):
+    """The canonical theory-header parse (comment-stripped, header-anchored)."""
+    theory_name: Optional[str]
+    imports: List[str]
+    suggested_field: Optional[str] = Field(
+        description="Session field implied by the first dotted import, if any "
+        "(e.g. HOL-Analysis.Derivative -> HOL-Analysis)."
+    )
+
+
 class HeapGroupsResponse(BaseModel):
     groups: List[HeapGroupInfo]

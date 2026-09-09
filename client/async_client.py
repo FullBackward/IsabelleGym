@@ -141,6 +141,16 @@ class IsabelleGymAsyncClient:
         response.raise_for_status()
         return response.json()
 
+    async def parse_theory_header(self, text: str) -> dict[str, Any]:
+        """The server's canonical theory-header parse (comment-stripped,
+        header-anchored) — use this instead of a local regex so all consumers
+        share one parser."""
+        response = await self._request(
+            "POST", f"{BASE_URL}/parse_theory_header", json_body={"text": text}
+        )
+        response.raise_for_status()
+        return response.json()
+
     async def get_heap(self, task_group: str, project: str) -> dict[str, Any]:
         """Full manifest. The project path follows the group segment verbatim
         (server uses a :path converter): get_heap("alpha", "/tmp/hp1")."""

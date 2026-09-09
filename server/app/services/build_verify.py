@@ -17,7 +17,7 @@ try:
 except ImportError:
     normalise_for_isabelle = None
 
-from server.app.services.theory_parsing import extract_theory_name
+from server.app.services.theory_parsing import extract_theory_name, parse_theory_header
 
 logger = get_logger(__name__)
 
@@ -149,16 +149,10 @@ class BuildVerifier:
             return result
 
     def extract_imports(self, text: str) -> list[str]:
-        m = RegularExp.IMPORT_RE.search(text)
-        if not m:
-            return ["Main"]
-        raw = m.group("imports")
-        out: list[str] = []
-        for token in RegularExp.IMPORT_TOKEN_RE.findall(raw):
-            token = token.strip().strip('"')
-            if token and token not in {"imports", "begin", "theory", "keywords"}:
-                out.append(token)
-        return sorted(set(out)) or ["Main"]
+        # Canonical parse (theory_parsing): comment-stripped and header-anchored,
+        # so (* TASK: ... *)-style leading comments cannot pollute the imports.
+        _, imports = parse_theory_header(text)
+        return sorted(set(imports)) or ["Main"]
 
     async def _run_build(
         self,

@@ -100,7 +100,7 @@ class ThreadedBackend:
 
 ---
 
-### Bug 3: Leased Sessions Never Idle-Evicted — OPEN
+### Bug 3: Leased Sessions Never Idle-Evicted — RESOLVED
 
 **File:** `server/app/services/session_manager.py`, `cleanup_idle_sessions()`
 **Severity:** Medium
@@ -214,7 +214,7 @@ Once `pop()` succeeds, no new `get_session()` can return this session, so no new
 
 ---
 
-### Bug 5: Isabelle Processes Persist After Close — OPEN
+### Bug 5: Isabelle Processes Persist After Close — RESOLVED (not reproducible)
 
 **Files:** `repl/src/main/scala/repl/session_manager.scala` (`shutdown`, `remove_session_async`), `repl/src/main/scala/repl/server_utils.scala` (`stop_server`, `stop_session`)
 **Severity:** High (operational — causes OOM over time)
@@ -372,12 +372,29 @@ Even when delivered, `exit()` has historically blocked >60 s (`TimeoutError` at
 force-kill fallback" hardening item still applies and is tracked in the Phase-3 plan
 (`claude-work/2026-7-15(2)-research-server-code-audit/FINDINGS.md`).
 
-### Bug 9: Gateway JVM `Event_Timer` Cancelled — Server Wedges, Recovery Blind — OPEN
+### Bug 9: Gateway JVM `Event_Timer` Cancelled — Server Wedges, Recovery Blind — RESOLVED
 
 **Files:** gateway JVM lifecycle (`repl/src/python/repl_backend_gateway.py`,
 `server/app/services/session_manager*.py`)
 **Severity:** High (once hit, every session create/reset 500s until container restart)
 **Found:** 2026-08-15, during the `mcp_lsp_server` smoke (Stage 4 work-log entry)
+**Status:** ✅ **Resolved 2026-09-08, two independent layers.**
+
+1. **Root cause fixed upstream (Isabelle2026-RC0).** In 2025-2, `Event_Timer.request`
+   schedules a bare `TimerTask`; one throwing task kills the JVM-global
+   `java.util.Timer` thread, and every later `schedule()` throws
+   `IllegalStateException("Timer already cancelled")`. Commit `88acf2619921`
+   (isabelle-release, 2026-05-17) wraps every task in try/catch, so the wedge
+   class is impossible. Verified on RC0 (`isabellegym-isabelle-gym:2026rc0`,
+   port 8001): 12/12 churn rounds + concurrent HOL-Analysis build with
+   `gateway_alive=true`, zero `Timer already cancelled` in the server log;
+   load degrades to graceful memory-gate 503s instead of 500-forever.
+2. **Detection + recovery hardened server-side** (works on 2025-2 too):
+   `ReplBackendGateway.alive()` (Scala) schedules a no-op on `Event_Timer` and
+   returns false on `IllegalStateException`; `ReplBackendGatewayProcess.is_alive()`
+   (Python, 5 s-bounded) probes it; `SessionManager._ensure_gateway` recovers on
+   *any* failed probe (dead **or** wedged), and `gateway_alive()` is a functional
+   probe with a 5 s cache. Tests: `tests/test_gateway_wedge.py`.
 
 #### Symptom
 
