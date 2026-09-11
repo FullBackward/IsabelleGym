@@ -211,11 +211,12 @@ async function loadSessions() {
   const tb = document.querySelector("#sessions tbody");
   tb.innerHTML = "";
   for (const s of d.sessions) {
+    const theories = (s.theories || []).join(", ");
     tb.insertAdjacentHTML("beforeend", `<tr>
       <td class="mono" title="${esc(s.session_id)}">${esc(s.session_id.slice(0, 8))}…</td>
       <td class="mono">${esc(s.task_group || "—")}</td>
-      <td class="mono">${esc(s.label || "")}</td>
-      <td class="mono">${esc((s.theories || []).join(", ").slice(0, 40))}</td>
+      <td class="mono" title="${esc(s.label || "")}">${esc(s.label || "")}</td>
+      <td class="mono" title="${esc(theories)}">${esc(theories.length > 40 ? theories.slice(0, 40) + "…" : theories)}</td>
       <td>${s.commands_executed}</td>
       <td>${esc(s.status)}${s.leased ? " (leased)" : ""}</td>
       <td>${s.in_use ? "yes" : ""}</td>
