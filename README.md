@@ -134,7 +134,18 @@ docker compose exec isabelle-gym isabelle build -b HOL-Computational_Algebra
 
 ### 5. Operating notes
 
-- **Logs:** `logs/server.log` in the repo (the repo is volume-mounted at `/app`).
+- **Logs:** `logs/server.log` in the repo (the repo is volume-mounted at `/app`), rotated at
+  10 MB × 5. Watch the live server log with:
+
+  ```bash
+  tail -f logs/server.log                                   # from the host (repo is mounted)
+  docker compose exec isabelle-gym tail -f logs/server.log  # from inside the container
+  ```
+
+  If the API was started detached with output redirected (e.g.
+  `docker compose exec -d isabelle-gym bash -c "python -m server.app.main > /app/logs/server.out 2>&1"`),
+  tail that file instead: `docker compose exec isabelle-gym tail -f /app/logs/server.out`.
+  Container-level logs: `docker compose logs -f isabelle-gym`.
 - **Metrics:** Prometheus metrics at `/metrics`; a full Prometheus+Grafana+cAdvisor stack
   is included — `docker compose up -d` starts everything, Grafana on `:3000`.
 - **Memory limit:** `mem_limit: 24g` in `docker-compose.yml`. On smaller machines lower it
