@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+#
+# DESCRIPTION: container entrypoint for the IsabelleGym server. Performs all
+# one-time setup that must survive volume/image drift, then execs the API
+# server in the FOREGROUND (so `docker logs`/`docker compose logs` work and
+# the container's lifetime equals the server's lifetime):
+#
+#   1. Component registration into the (possibly stale) isabelle_user_data
+#      volume — docs/ISSUES.md Bug 7 (delegated to container_init.sh).
+#   2. ML heap cap: ensure the user settings file sets ML_OPTIONS with
+#      --maxheap, so no single poly process (REPL session or `isabelle build`
+#      child) can grow until the cgroup OOM-killer fires. This MUST live in
+#      the user settings file: the polyml component's etc/settings forces
+#      ML_OPTIONS="", clobbering any container-env/.env value, and a
+#      non-empty ML_OPTIONS then wins over ML_OPTIONS32/64
+#      (src/Pure/ML/ml_settings.scala). The override is a full replacement,
+#      so the platform defaults are restated explicitly.
+#
+# The cap value is configurable via ISABELLE_ML_MAXHEAP_MB (default 9216).
+# Idempotent: if any --maxheap is already present in the settings file, it is
+# left untouched (manual operator tuning wins).
+
+set -euo pipefail
+
+cd /app
+
+# 1. Component registration (no-op when already registered). container_init
+#    execs its arguments, so `true` makes it a plain subroutine call here.
+./repl/Admin/container_init.sh true
+
+# 2. ML heap cap in the user settings file.
+MAXHEAP_MB="${ISABELLE_ML_MAXHEAP_MB:-9216}"
+ISABELLE="${ISABELLE_HOME:-/opt/isabelle}/bin/isabelle"
+ISABELLE_HOME_USER="$("$ISABELLE" getenv -b ISABELLE_HOME_USER 2>/dev/null || echo "${HOME}/.isabelle")"
+SETTINGS="${ISABELLE_HOME_USER}/etc/settings"
+
+if [[ -f "$SETTINGS" ]] && grep -q -- "--maxheap" "$SETTINGS"; then
+  echo "container_entrypoint: ML heap cap already present in $SETTINGS, leaving it"
+else
+  mkdir -p "$(dirname "$SETTINGS")"
+  cat >> "$SETTINGS" <<EOF
+
+# IsabelleGym container_entrypoint: hard per-process ML heap cap. One
+# pathological theory must fail gracefully (ML exception -> Build FAILED)
+# instead of OOM-killing the container. Full replacement of the platform
+# default, so --minheap/--enablegcsharing are restated explicitly.
+ML_OPTIONS="--minheap 500 --enablegcsharing --maxheap ${MAXHEAP_MB}"
+EOF
+  echo "container_entrypoint: wrote ML heap cap (--maxheap ${MAXHEAP_MB}) to $SETTINGS"
+fi
+
+# 3. Start the API server in the foreground.
+echo "container_entrypoint: starting IsabelleGym API server"
+exec python -m server.app.main
