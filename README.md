@@ -31,8 +31,19 @@ the living bug log is [ISSUES.md](docs/ISSUES.md).
 
 Works on x86-64 and ARM64 Ubuntu (20.04+). The Docker build auto-selects the matching
 Isabelle distribution for your CPU architecture. Budget ~30 GB disk for the image + heaps
-and ideally 16 GB+ RAM (the compose file caps the container at 24 GB; adjust for smaller
+and ideally 16 GB+ RAM (the compose file caps the container at 14 GB; adjust for smaller
 machines — see step 5).
+
+The fastest path is the setup script, which does configuration, build, start, and a
+health check in one go:
+
+```bash
+git clone https://github.com/FullBackward/IsabelleGym.git
+cd IsabelleGym
+./setup.sh            # add --verify for a smoke test, --build-heaps "HOL-Library" to prebuild heaps
+```
+
+The manual equivalent is documented below (the script does exactly these steps).
 
 ### 1. Prerequisites
 
@@ -87,13 +98,17 @@ cd IsabelleGym
 ```
 
 Runtime configuration lives in `.env` at the repo root (loaded into the container via
-`env_file`). The defaults are sensible; the knobs you most likely want to review:
+`env_file`). `./setup.sh` creates it from the annotated **`.env.example`** (which
+documents every knob) and generates a random `ISABELLE_ADMIN_TOKEN` for the admin
+console. To do it by hand: `cp .env.example .env` and review. The knobs you most
+likely want to check:
 
 ```bash
-ISABELLE_POOL_SIZE=4              # max concurrent Isabelle sessions (each ~1.5-2.5 GB)
+ISABELLE_POOL_SIZE=3              # max concurrent Isabelle sessions (each ~1.5-4 GB)
 ISABELLE_INITIAL_SESSIONS=0       # sessions pre-warmed at startup (0 = fast startup)
-ISABELLE_SESSION_THREADS=8        # ML threads per session (lower if many concurrent sessions)
-ISABELLE_MEMORY_PRESSURE_THRESHOLD=85.0
+ISABELLE_MEMORY_PRESSURE_THRESHOLD=80.0   # refuse new sessions above this used-%
+ISABELLE_ML_MAXHEAP_MB=9216       # hard per-process ML heap cap (Poly/ML --maxheap)
+ISABELLE_ADMIN_TOKEN=...          # admin console / admin endpoints credential
 ```
 
 ### 3. Build the image
@@ -107,26 +122,23 @@ This downloads the Isabelle 2025-2 distribution (~1.2 GB). The official server
 mirrors (Clarkson → Cambridge → Proofcraft). The build takes 10–30 minutes (Isabelle
 download + Scala backend build).
 
-### 4. Start the container and the API
+### 4. Start the server
 
-The compose setup does **not** auto-start the API — start it explicitly:
+The container entrypoint registers the Isabelle components, writes the ML heap cap
+into the user settings, and **starts the API server automatically**:
 
 ```bash
 docker compose up -d isabelle-gym
-docker compose exec -d isabelle-gym python -m server.app.main
 
-# wait for it, then check:
+# wait a minute or two (gateway JVM spawn), then check:
 curl http://localhost:8000/healthz     # {"status":"alive"}
 curl http://localhost:8000/            # full health: gateway_alive, pool, memory
 ```
 
-First startup takes a minute or two (gateway JVM spawn). With
-`ISABELLE_INITIAL_SESSIONS=0`, the first session request pays the session-creation cost
-(~1 min) instead.
-
-Optional but recommended if your workload imports heavy sessions (e.g.
+With `ISABELLE_INITIAL_SESSIONS=0`, the first session request pays the session-creation
+cost (~1 min). Optional but recommended if your workload imports heavy sessions (e.g.
 `HOL-Computational_Algebra`): prebuild their heaps once so session creation and big-step
-verification start from a cached image:
+verification start from a cached image (`./setup.sh --build-heaps "..."` wraps this):
 
 ```bash
 docker compose exec isabelle-gym isabelle build -b HOL-Computational_Algebra
@@ -134,32 +146,45 @@ docker compose exec isabelle-gym isabelle build -b HOL-Computational_Algebra
 
 ### 5. Operating notes
 
-- **Logs:** `logs/server.log` in the repo (the repo is volume-mounted at `/app`), rotated at
-  10 MB × 5. Watch the live server log with:
+- **Logs:** the server runs in the container foreground, so the canonical live log is
+  `docker compose logs -f isabelle-gym`. The rotating file log (10 MB × 5) is also at
+  `logs/server.log` in the repo (the repo is volume-mounted at `/app`):
 
   ```bash
-  tail -f logs/server.log                                   # from the host (repo is mounted)
-  docker compose exec isabelle-gym tail -f logs/server.log  # from inside the container
+  docker compose logs -f isabelle-gym                        # stdout of the server
+  tail -f logs/server.log                                    # rotating file log, from the host
   ```
-
-  If the API was started detached with output redirected (e.g.
-  `docker compose exec -d isabelle-gym bash -c "python -m server.app.main > /app/logs/server.out 2>&1"`),
-  tail that file instead: `docker compose exec isabelle-gym tail -f /app/logs/server.out`.
-  Container-level logs: `docker compose logs -f isabelle-gym`.
+- **Admin console:** `http://localhost:8000/admin` — pool contents, base heap images,
+  force-close. Token-gated operations use `ISABELLE_ADMIN_TOKEN` from `.env` (injected
+  into the page automatically when set; without it, destructive actions render locked).
+- **ML heap cap:** the entrypoint writes `ML_OPTIONS="--minheap 500 --enablegcsharing
+  --maxheap $ISABELLE_ML_MAXHEAP_MB"` into the Isabelle user settings (default 9 GB).
+  Any single poly process exceeding it fails gracefully instead of OOM-killing the
+  container. It must live in the user settings file — the polyml component clobbers
+  env-var values. Tune via `ISABELLE_ML_MAXHEAP_MB` in `.env`.
 - **Metrics:** Prometheus metrics at `/metrics`; a full Prometheus+Grafana+cAdvisor stack
   is included — `docker compose up -d` starts everything, Grafana on `:3000`.
-- **Memory limit:** `mem_limit: 24g` in `docker-compose.yml`. On smaller machines lower it
+- **Memory limit:** `mem_limit: 14g` in `docker-compose.yml` — must stay BELOW the Docker
+  VM's own memory or the cgroup-aware gate goes blind. On smaller machines lower it
   AND lower `ISABELLE_POOL_SIZE`; the admission gate refuses new sessions near the limit
   instead of letting the OOM killer take the JVM.
 - **Changing `.env`:** requires recreating the container, not just restarting it:
   `docker compose up -d --force-recreate isabelle-gym`.
 - **After an image rebuild**, if the server fails with `Not found: py4j`: a pre-existing
   named volume shadows the component registration. The container entrypoint
-  (`repl/Admin/container_init.sh`) now re-registers automatically on every start; the
+  (`repl/Admin/container_entrypoint.sh`) re-registers automatically on every start; the
   manual fix is `docker compose exec isabelle-gym ./repl/Admin/init`
   (docs/ISSUES.md Bug 7).
 - **Remote access:** the API listens on `0.0.0.0:8000` with no authentication — keep it
   firewalled (`sudo ufw allow from <your-ip> to any port 8000`) or tunnel over SSH.
+
+### 6. Isabelle 2026-RC0 track
+
+`main` tracks Isabelle 2025-2. The `2026-RC0` branch carries the same server features
+plus the compatibility patch set for the Isabelle 2026 release candidate (its own
+`Dockerfile.rc0`, Scala API adjustments). Everything above applies identically — check
+out that branch and run the same commands. A pre-built turnkey image (heaps included,
+for reproducing published results) is distributed separately; see `EXPORT.md`.
 
 ---
 
