@@ -1,0 +1,30 @@
+# Turnkey export image — see EXPORT.md.
+# Clean RC0 image + prebuilt session heaps + Isabelle user settings (incl. the
+# ML heap cap). Fully self-contained: no volume, no build steps, API auto-starts.
+#
+# Build context is the staging dir (~/isabelle2026-build), which holds
+# export_isabelle_home/ (heaps/ + etc/ extracted from the live volume, pruned —
+# contribs are already in the base image layer, verified byte-identical):
+#
+#   docker build -f Dockerfile.export -t isabellegym:2026rc0-turnkey <staging>
+
+FROM isabellegym-isabelle-gym:2026rc0-clean
+
+COPY export_isabelle_home /root/.isabelle
+
+LABEL org.opencontainers.image.revision="__REVISION__"
+
+# Server defaults suited to a 14g container (all overridable with -e at run).
+ENV ISABELLE_POOL_SIZE=3 \
+    ISABELLE_INITIAL_SESSIONS=0 \
+    ISABELLE_ENABLE_MEMORY_MANAGEMENT=true \
+    ISABELLE_MEMORY_PRESSURE_THRESHOLD=80.0 \
+    ISABELLE_MEMORY_MIN_AVAILABLE_MB=512 \
+    ISABELLE_MAX_LEASE_AGE=600 \
+    ISABELLE_SERVER_ENABLE_FILE_LOGGING=true
+
+EXPOSE 8000
+
+# Invoke via bash: robust even if the executable bit was lost on a Windows
+# checkout. Entrypoint: component registration -> ML heap cap -> foreground API.
+CMD ["bash", "./repl/Admin/container_entrypoint.sh"]

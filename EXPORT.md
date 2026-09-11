@@ -54,17 +54,22 @@ Executed on the maintainer machine from the `2026-RC0` branch (after merging
 `main`):
 
 ```bash
-# 1. Clean image from the committed Dockerfile.rc0 (no docker-cp drift)
-docker build -f Dockerfile.rc0 -t isabellegym-isabelle-gym:2026rc0 .
+# 1. Clean image via build_rc0_image.sh (the validated scripted assembly —
+#    docker cp into a base container + commit; the declarative BuildKit path
+#    in Dockerfile.rc0 is currently blocked by the JAVA_HOME env quirk).
+#    app/ in the staging dir is a fresh git archive of the branch:
+./build_rc0_image.sh ~/isabelle2026-build isabellegym-isabelle-gym:2026rc0-clean
 
-# 2. Bake the volume state (heaps + user settings incl. the heap cap) in:
-#    extract from the running container's volume, then extend the image
-docker cp isabelle-gym-rc0:/root/.isabelle ./export_isabelle_home
-docker build -f Dockerfile.export -t isabellegym:2026rc0-turnkey .
-#    Dockerfile.export: FROM isabellegym-isabelle-gym:2026rc0
-#                       COPY export_isabelle_home /root/.isabelle
-#                       LABEL org.opencontainers.image.revision=<commit>
-#                       CMD ./repl/Admin/container_entrypoint.sh
+# 2. Bake the volume state in — LEAN bake: only heaps/ + etc/ (settings with
+#    the ML heap cap, component registration). The 5.6 GB contrib tree is
+#    already in the base image layer (verified byte-identical to the volume's),
+#    so baking it again would just duplicate a layer:
+docker cp isabelle-gym-rc0:/root/.isabelle ~/isabelle2026-build/export_isabelle_home
+#    prune export_isabelle_home to heaps/ + etc/ only, then:
+docker build -f Dockerfile.export -t isabellegym:2026rc0-turnkey ~/isabelle2026-build
+#    Dockerfile.export (in the repo): FROM ...:2026rc0-clean,
+#    COPY export_isabelle_home /root/.isabelle, revision LABEL,
+#    server-default ENVs, CMD ["bash", "./repl/Admin/container_entrypoint.sh"]
 
 # 3. Cold test WITHOUT the volume (this is the recipient experience)
 docker run -d --name turnkey-test -p 8002:8000 --memory 14g isabellegym:2026rc0-turnkey

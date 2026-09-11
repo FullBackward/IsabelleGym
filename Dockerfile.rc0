@@ -11,10 +11,13 @@
 # curl/git/tar, and the app Python deps incl. the prometheus patch) — NOT
 # python:3.12-slim, which cannot be pulled here (dead registry mirror).
 #
-# NOTE: the image that actually validated was assembled interactively
-# (docker cp + Admin/init + gradlew build + docker commit) — this Dockerfile
-# documents the equivalent declarative path; the BuildKit environment
-# (HOME/USER) quirk that blocked it is worked around via ENV below.
+# NOTE: the declarative BuildKit path below is currently BLOCKED by the
+# "Unknown JAVA_HOME -- Java unavailable" environment quirk in the
+# `repl/Admin/init` step (the ENV HOME/JAVA_HOME workaround is insufficient).
+# The canonical RC0 image build is the scripted assembly in
+# `build_rc0_image.sh` (docker cp into a base container + commit) — the path
+# that actually validated. This Dockerfile remains as documentation of the
+# equivalent declarative recipe.
 
 FROM isabellegym-isabelle-gym:latest
 
