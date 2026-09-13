@@ -50,7 +50,7 @@ class _FakeJavaGateway:
 
 
 def test_gateway_process_wires_logging_and_read_timeout(monkeypatch, tmp_path):
-    """Rec 1+2: JVM stderr/env are wired to durable logs; Py4J gets read_timeout."""
+    """Rec 1+2: JVM stdout/stderr are wired to a durable log; Py4J gets read_timeout."""
     popen_kwargs = {}
 
     def fake_popen(*args, **kwargs):
@@ -63,16 +63,12 @@ def test_gateway_process_wires_logging_and_read_timeout(monkeypatch, tmp_path):
     # preexec_fn=os.setsid is POSIX-only; the gateway only ever spawns in the
     # Linux container, so stub it for the Windows dev/test host.
     monkeypatch.setattr(gw_mod.os, "setsid", lambda: None, raising=False)
-    monkeypatch.delenv("ISABELLE_SCALA_JAVA_OPTIONS", raising=False)
 
     proc = gw_mod.ReplBackendGatewayProcess()
 
     # stderr is a file handle into the log dir, not sys.stderr
     stderr_target = popen_kwargs["stderr"]
     assert getattr(stderr_target, "name", "").endswith("gateway-jvm.log")
-    # JVM env carries an injected GC log flag
-    opts = popen_kwargs["env"]["ISABELLE_SCALA_JAVA_OPTIONS"]
-    assert "-Xlog:gc" in opts and "gateway-jvm-gc.log" in opts
     # Py4J read timeout is set from config
     assert proc.gateway.params.read_timeout == gw_mod.Repl.PY4J_READ_TIMEOUT
     # stdout pump copied the post-port line into the durable log
@@ -83,13 +79,6 @@ def test_gateway_process_wires_logging_and_read_timeout(monkeypatch, tmp_path):
             break
         _t.sleep(0.02)
     assert "jvm says hello" in (tmp_path / "gateway-jvm.log").read_text()
-
-
-def test_jvm_env_keeps_operator_gc_config(monkeypatch, tmp_path):
-    """An operator-provided -Xlog:gc is not overridden."""
-    monkeypatch.setenv("ISABELLE_SCALA_JAVA_OPTIONS", "-Xlog:gc:file=/custom/gc.log")
-    env = gw_mod._jvm_env(tmp_path)
-    assert env["ISABELLE_SCALA_JAVA_OPTIONS"] == "-Xlog:gc:file=/custom/gc.log"
 
 
 # ---------------------------------------------------------------- Rec 2: probe logging
