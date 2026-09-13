@@ -183,8 +183,7 @@ docker compose exec isabelle-gym isabelle build -b HOL-Computational_Algebra
 `main` tracks Isabelle 2025-2. The `2026-RC0` branch carries the same server features
 plus the compatibility patch set for the Isabelle 2026 release candidate (its own
 `Dockerfile.rc0`, Scala API adjustments). Everything above applies identically — check
-out that branch and run the same commands. A pre-built turnkey image (heaps included,
-for reproducing published results) is distributed separately; see `EXPORT.md`.
+out that branch and run the same commands.
 
 ---
 
