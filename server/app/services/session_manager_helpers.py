@@ -66,7 +66,10 @@ class SessionManagerHelpersMixin:
             return getattr(self, "_alive_probe", False)
         try:
             alive = gw.is_alive()
-        except Exception:
+        except Exception as e:
+            # Never swallow silently: a probe that ERRORS (rather than answers
+            # False) is exactly the wedge signature we need to diagnose.
+            logger.warning("gateway liveness probe raised: %s: %s", type(e).__name__, e)
             alive = False
         self._alive_probe, self._alive_probe_ts = alive, now
         return alive
