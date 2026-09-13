@@ -14,10 +14,10 @@ from types import SimpleNamespace
 
 import pytest
 
-# repo root (for common.*) and MCP-comparison (for the runner module)
+# repo root (for common.*) and evaluation/MCP-comparison (for the runner module)
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
-sys.path.insert(0, str(_REPO / "MCP-comparison"))
+sys.path.insert(0, str(_REPO / "evaluation" / "MCP-comparison"))
 
 import run_isabellegym_lsp as runner
 

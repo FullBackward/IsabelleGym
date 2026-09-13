@@ -19,8 +19,7 @@ Components:
 | `server/` | FastAPI service: session pool, leases, memory admission, metrics |
 | `client/` | Async Python HTTP client (`IsabelleGymAsyncClient`) |
 | `mcp_server/` | MCP server for LLM agents (stdio / streamable-HTTP) |
-| `MCP-comparison/` | Harness comparing this MCP against other Isabelle MCP servers |
-| `evaluation/` | Benchmark CLIs and corpora |
+| `evaluation/` | Benchmark CLIs and corpora; `evaluation/MCP-comparison/` is the harness comparing this MCP against other Isabelle MCP servers |
 
 Design rationale for the architecture lives in [DESIGN_CHOICES.md](docs/DESIGN_CHOICES.md);
 the living bug log is [ISSUES.md](docs/ISSUES.md).
@@ -184,7 +183,8 @@ docker compose exec isabelle-gym isabelle build -b HOL-Computational_Algebra
 plus the compatibility patch set for the Isabelle 2026 release candidate (its own
 `Dockerfile.rc0`, Scala API adjustments). Everything above applies identically — check
 out that branch and run the same commands. A pre-built turnkey image (heaps included,
-for reproducing published results) is distributed separately; see `EXPORT.md`.
+for reproducing published results) is distributed separately; see
+`Isabelle2026-RC0_version_docker_image_instruction.md`.
 
 ---
 
@@ -249,7 +249,7 @@ or drop a `.mcp.json` in your project:
 
 **Any other MCP client / your own agent loop:** spawn
 `python -m mcp_server.app` over stdio with those two env vars. If your agent framework
-uses the `mcp` Python SDK, `MCP-comparison/common/mcp_client.py` is a minimal working
+uses the `mcp` Python SDK, `evaluation/MCP-comparison/common/mcp_client.py` is a minimal working
 example (spawn → `initialize` → `tools/list` → `tools/call`).
 
 ### Option B — streamable-HTTP (remote server, multiple agents)
@@ -363,7 +363,7 @@ Expected: the tool list, then `success=True proof_open=False used_sorry=False ..
 - **HTTP API directly** (no MCP): see the endpoint list in `server/app/api/v1/router.py`
   and the client in `client/async_client.py`; API reference PDFs are in the repo root.
 - **MCP comparison harness** (this MCP vs Isabelle-MCP vs AutoCorrode I/Q):
-  [MCP-comparison/README.md](MCP-comparison/README.md).
+  [evaluation/MCP-comparison/README.md](evaluation/MCP-comparison/README.md).
 - **Evaluation scripts** for small-step/big-step benchmarking: `evaluation/scripts/`
   (each runs as `python -m evaluation.scripts.<name>`).
 - **Developer docs:** [CLAUDE.md](CLAUDE.md) (architecture + conventions),

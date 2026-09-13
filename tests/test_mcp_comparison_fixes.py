@@ -6,7 +6,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "MCP-comparison"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "evaluation" / "MCP-comparison"))
 
 from common.model import NUDGE_LIMIT, RoundResult, no_tool_call_action
 from common.problems import derive_session
