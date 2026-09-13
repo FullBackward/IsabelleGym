@@ -29,23 +29,6 @@ def _gateway_log_dir() -> Path:
     return d
 
 
-def _jvm_env(log_dir: Path) -> "dict[str, str]":
-    """Process env for the gateway JVM: inherit everything, and add rotated GC
-    logging unless the operator already configured it. The JVM's own output is
-    the only source of truth for GC storms and crash traces — the 2026-09-10
-    incident was undiagnosable because it went to an ephemeral server stdout."""
-    env = dict(os.environ)
-    opts = env.get("ISABELLE_SCALA_JAVA_OPTIONS", "")
-    if "-Xlog:gc" not in opts:
-        gc_log = (log_dir / "gateway-jvm-gc.log").resolve()
-        opts = (
-            opts
-            + f" -Xlog:gc*:file={gc_log}:time,uptime,level,tags:filecount=3,filesize=10M"
-        ).strip()
-        env["ISABELLE_SCALA_JAVA_OPTIONS"] = opts
-    return env
-
-
 EnvStateID = int
 
 
@@ -138,7 +121,6 @@ class ReplBackendGatewayProcess:
             stdout=subprocess.PIPE,
             stderr=self._jvm_log,
             text=True,
-            env=_jvm_env(log_dir),
         )
         if self.process.stdout is None:
             raise RuntimeError(

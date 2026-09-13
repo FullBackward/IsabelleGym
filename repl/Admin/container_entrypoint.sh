@@ -49,6 +49,25 @@ EOF
   echo "container_entrypoint: wrote ML heap cap (--maxheap ${MAXHEAP_MB}) to $SETTINGS"
 fi
 
+# 2b. JVM GC logging for Isabelle-launched JVMs (the gateway in particular).
+# Same trap as ML_OPTIONS: env vars (ISABELLE_TOOL_JAVA_OPTIONS,
+# JAVA_TOOL_OPTIONS) are clobbered/filtered by the isabelle toolchain's
+# settings evaluation, so the only reliable injection point is the user
+# settings file. %p keeps each JVM's log separate (gateway vs build tools).
+if [[ -f "$SETTINGS" ]] && grep -q -- "-Xlog:gc" "$SETTINGS"; then
+  echo "container_entrypoint: JVM GC logging already configured in $SETTINGS, leaving it"
+else
+  mkdir -p "$(dirname "$SETTINGS")" /app/logs
+  cat >> "$SETTINGS" <<'EOF'
+
+# IsabelleGym container_entrypoint: GC logging for every Isabelle-launched
+# JVM (gateway, build tools). The JVM's own output is the only source of
+# truth for GC storms — the 2026-09-10 slowdown was undiagnosable without it.
+ISABELLE_TOOL_JAVA_OPTIONS="$ISABELLE_TOOL_JAVA_OPTIONS -Xlog:gc*:file=/app/logs/isabelle-jvm-gc-%p.log:time,uptime,level,tags:filecount=3,filesize=10M"
+EOF
+  echo "container_entrypoint: wrote JVM GC logging (-Xlog:gc, /app/logs/isabelle-jvm-gc-%p.log) to $SETTINGS"
+fi
+
 # 3. Start the API server in the foreground.
 echo "container_entrypoint: starting IsabelleGym API server"
 exec python -m server.app.main
