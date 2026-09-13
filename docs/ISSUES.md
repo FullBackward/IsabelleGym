@@ -464,6 +464,54 @@ owner-lease DELETE → 200 and the session is gone; 8/8 in-container tests.
 
 ---
 
+### Bug 11: `ISABELLE_SCALA_JAVA_OPTIONS` Is Dead Config — JVM Options Never Reach the Gateway — RESOLVED
+
+**Files:** `.env` / `.env.example` (false claim), `repl/src/python/repl_backend_gateway.py`,
+`repl/Admin/container_entrypoint.sh`
+**Severity:** Medium (silent: a documented memory mitigation never took effect; GC behavior
+invisible during the 2026-09-10 incident)
+**Found:** 2026-09-13, while deploying JVM GC logging (issue 5 rec 1)
+**Status:** ✅ Resolved 2026-09-13 (GC logging now wired via the user settings file).
+
+#### Root cause
+
+`.env` carries `ISABELLE_SCALA_JAVA_OPTIONS="-Dpolybank.heap.percent=20
+-XX:MaxHeapFreeRatio=30 ..."` with a comment claiming it lets the gateway JVM
+shrink its heap. **Nothing consumes this variable** — not the `isabelle scala`
+toolchain, not the Scala REPL sources. The gateway JVM always ran with the
+scala-launcher defaults (`-Xmx4g`, ZGC), so the heap-shrinking mitigation
+never existed. Two other injection channels were verified dead at the same
+time: `JAVA_TOOL_OPTIONS` is filtered out by Isabelle's environment handling,
+and `ISABELLE_TOOL_JAVA_OPTIONS` set in the process env is **clobbered** by
+the settings evaluation (same trap as `ML_OPTIONS`, cf. the heap-cap work).
+
+**The only reliable channel for JVM/ML options is the user settings file**
+(`$ISABELLE_HOME_USER/etc/settings`, evaluated last): `ML_OPTIONS` for poly
+processes, `ISABELLE_TOOL_JAVA_OPTIONS` for Isabelle-launched JVMs.
+
+#### Consequence discovered at the same time
+
+The gateway JVM runs **ZGC with `-Xmx4g`** (launcher defaults). With two
+heavy Analysis-scale sessions in one 4 GB heap, ZGC allocation stalls are the
+prime suspect for the 2026-09-10 64-second accept freeze and the 95-minute
+4–5× slowdown window (issue 5). Next occurrence will be directly visible in
+the GC log instead of guesswork.
+
+#### Fix
+
+- `container_entrypoint.sh` appends
+  `ISABELLE_TOOL_JAVA_OPTIONS="$ISABELLE_TOOL_JAVA_OPTIONS -Xlog:gc*:file=/app/logs/isabelle-jvm-gc-%p.log:...:filecount=3,filesize=10M"`
+  to the user settings (idempotent), so every Isabelle-launched JVM writes a
+  rotated, per-PID GC log. Verified live: `isabelle-jvm-gc-<pid>.log` written
+  from gateway start.
+- JVM stdout/stderr are also durably captured (`logs/gateway-jvm.log`) —
+  previously the stdout pipe was closed after the port line and stderr went
+  to the ephemeral server stdout, which is why 06:21 was undiagnosable.
+- `.env.example` corrected: the `ISABELLE_SCALA_JAVA_OPTIONS` block is
+  labelled known-dead instead of claiming it shrinks the gateway heap.
+
+---
+
 ### [To-do]Issue 1: How Isabelle do parallel
 When have parallel "have x" statements, can we do this in step. And how do we retrive information when one line is stucked in loop. That is, we need error retrieval for a proof chunk, the server should not just return a timeout error, it should tell, when we build the MCP server, the agent what part of that proof chunk just went wrong.
 
