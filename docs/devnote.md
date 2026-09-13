@@ -979,8 +979,8 @@ Target theorem:
 - **已知残余不对称**：Isabelle-MCP 没有一等 sledgehammer 工具（唯一系统），其
   "写 sledgehammer 命令进文件→评估→读输出→删除"流程摩擦最大，直接导致 solver
   rule 违规率最高（general 档 rep3 单次 21 次直接 metis）。这是接口属性而非 harness 缺陷。
-- **可复现**：分析入口 `python MCP-comparison/analyze.py`（按 system/variant 分行 +
-  sledgehammer 使用计数）；运行方式与容器构建见 `MCP-comparison/README.md`（2026-07-30 重写）。
+- **可复现**：分析入口 `python evaluation/MCP-comparison/analyze.py`（按 system/variant 分行 +
+  sledgehammer 使用计数）；运行方式与容器构建见 `evaluation/MCP-comparison/README.md`（2026-07-30 重写）。
 
 ---
 
