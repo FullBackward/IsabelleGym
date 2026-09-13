@@ -4,7 +4,7 @@ import concurrent.futures
 import os
 import signal
 import subprocess
-import sys
+import threading
 import time
 from pathlib import Path
 from typing import Protocol
@@ -13,11 +13,37 @@ import py4j
 import py4j.java_collections
 from py4j.java_gateway import GatewayParameters, JavaGateway
 
-from server.app.core.config import Repl
+from server.app.core.config import Logging, Repl
+from server.app.core.logging import get_logger
+
+logger = get_logger(__name__)
 
 REPO_ROOT = Path(__file__).parent.parent.parent.parent.parent
 repl_gateway_path = REPO_ROOT / "app/repl/src/main/scala/repl/repl_backend_gateway.scala"
 isabelle_executable = REPO_ROOT / "opt" / "isabelle" / "bin" / "isabelle"
+
+
+def _gateway_log_dir() -> Path:
+    d = Path(Logging.LOG_DIR)
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _jvm_env(log_dir: Path) -> "dict[str, str]":
+    """Process env for the gateway JVM: inherit everything, and add rotated GC
+    logging unless the operator already configured it. The JVM's own output is
+    the only source of truth for GC storms and crash traces — the 2026-09-10
+    incident was undiagnosable because it went to an ephemeral server stdout."""
+    env = dict(os.environ)
+    opts = env.get("ISABELLE_SCALA_JAVA_OPTIONS", "")
+    if "-Xlog:gc" not in opts:
+        gc_log = (log_dir / "gateway-jvm-gc.log").resolve()
+        opts = (
+            opts
+            + f" -Xlog:gc*:file={gc_log}:time,uptime,level,tags:filecount=3,filesize=10M"
+        ).strip()
+        env["ISABELLE_SCALA_JAVA_OPTIONS"] = opts
+    return env
 
 
 EnvStateID = int
@@ -97,25 +123,48 @@ class ReplBackendGatewayProcess:
 
     def __init__(self) -> None:
         # pylint: disable=consider-using-with, subprocess-popen-preexec-fn
+        log_dir = _gateway_log_dir()
+        # JVM stderr goes straight to a durable append log; JVM stdout is
+        # pumped there too once the Py4J port line has been consumed. This
+        # survives server restarts (unlike the server's own stdout file).
+        self._jvm_log = open(  # noqa: SIM115 — lives as long as the process
+            log_dir / "gateway-jvm.log", "a", buffering=1, encoding="utf-8"
+        )
         self.process = subprocess.Popen(
             [isabelle_executable, "scala", str(repl_gateway_path)],
             # Isabelle uses many child processes, so we start a new process group
             preexec_fn=os.setsid,
             # Port number will be passed via stdout
             stdout=subprocess.PIPE,
-            stderr=sys.stderr,
+            stderr=self._jvm_log,
             text=True,
+            env=_jvm_env(log_dir),
         )
         if self.process.stdout is None:
             raise RuntimeError(
                 "Scala REPL gateway process failed to start (stdout is None)."
             )
         port = int(self.process.stdout.readline().strip())
-        # Close the pipe now that the port has been read — assigning
-        # sys.stdout was a bug (it doesn't redirect the subprocess).
-        self.process.stdout.close()
+        # Keep the pipe open and pump the JVM's remaining stdout into the
+        # durable log — closing it here (the old behavior) silently discarded
+        # everything the JVM printed after startup.
+        threading.Thread(
+            target=self._pump_stdout, args=(self.process.stdout,),
+            name="gateway-jvm-stdout-pump", daemon=True,
+        ).start()
         self.process.stdout = None
-        self.gateway = JavaGateway(gateway_parameters=GatewayParameters(port=port))
+        self.gateway = JavaGateway(
+            gateway_parameters=GatewayParameters(
+                port=port, read_timeout=Repl.PY4J_READ_TIMEOUT
+            )
+        )
+
+    def _pump_stdout(self, stream) -> None:
+        try:
+            for line in stream:
+                self._jvm_log.write(line)
+        except (ValueError, OSError):
+            pass  # stream closed during shutdown
 
     def has_terminated(self) -> bool:
         """Check if the Scala REPL gateway process has terminated."""
@@ -134,6 +183,11 @@ class ReplBackendGatewayProcess:
         as not-alive, so recovery replaces the gateway with one that has it.
         """
         if self.has_terminated():
+            logger.error(
+                "gateway JVM terminated exit_code=%s (see logs/gateway-jvm.log "
+                "and gateway-jvm-gc.log for the cause)",
+                self.process.returncode,
+            )
             return False
         pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         try:
@@ -141,7 +195,10 @@ class ReplBackendGatewayProcess:
                 self.gateway.jvm.repl.ReplBackendGateway.alive
             )
             return bool(future.result(timeout=self.PROBE_TIMEOUT))
-        except Exception:
+        except Exception as e:
+            logger.warning(
+                "gateway liveness probe failed: %s: %s", type(e).__name__, e
+            )
             return False
         finally:
             pool.shutdown(wait=False, cancel_futures=True)

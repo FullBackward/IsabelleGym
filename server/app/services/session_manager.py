@@ -240,7 +240,23 @@ class SessionManager(SessionManagerHelpersMixin):
                             session_dirs=java_dirs,
                         )
 
-                raw_backend = await asyncio.to_thread(_create_backend)
+                raw_backend = await asyncio.wait_for(
+                    asyncio.to_thread(_create_backend),
+                    timeout=Timeouts.SESSION_CREATE,
+                )
+            except TimeoutError:
+                # asyncio.TimeoutError alias (3.11+): the request must not
+                # outlive a wedged gateway — fail fast with a clean error.
+                # The worker thread itself unblocks when the Py4J
+                # read_timeout (Repl.PY4J_READ_TIMEOUT) fires.
+                logger.error(
+                    "session backend creation timed out after %.0fs (gateway wedged?)",
+                    Timeouts.SESSION_CREATE,
+                )
+                raise GatewayUnavailable(
+                    f"{where}: session creation timed out after "
+                    f"{Timeouts.SESSION_CREATE:.0f}s — gateway unresponsive"
+                ) from None
             except Exception as e:
                 logger.exception("failed to create raw backend for session_id=%s", session_id)
                 raise RuntimeError(f"{where}: failed to create raw backend for session {session_id}: {e}") from e

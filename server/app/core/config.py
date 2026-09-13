@@ -80,6 +80,15 @@ class Repl:
     BACKEND_JOIN_TIMEOUT: Final     = float(os.getenv("ISABELLE_BACKEND_JOIN_TIMEOUT", "5.0"))
     BACKEND_QUEUE_POLL: Final       = float(os.getenv("ISABELLE_BACKEND_QUEUE_POLL", "0.1"))
 
+    # Socket-level read timeout for EVERY Py4J call. Caller-side
+    # future.result(timeout=...) abandons a future but leaves the worker
+    # thread blocked on the Py4J read — a wedged JVM (alive, accepts, never
+    # answers) then pins that thread forever and every later job queues
+    # behind it (the 2026-09-10 57-minute acquire hang). A generous bound
+    # unblocks the thread with a proper exception. Must exceed the slowest
+    # legitimate call (load_document under GC distress was ~500 s).
+    PY4J_READ_TIMEOUT: Final        = float(os.getenv("ISABELLE_PY4J_READ_TIMEOUT", "900.0"))
+
 
 class Memory:
     # Python/cgroup-based memory management (server-side). The pressure %, the
@@ -106,6 +115,11 @@ class Timeouts:
     CHECKPOINT_RESTORE: Final   = float(os.getenv("ISABELLE_TIMEOUT_CHECKPOINT_RESTORE", "30.0"))
     CLEANUP_INTERVAL: Final     = int(os.getenv("ISABELLE_CLEANUP_INTERVAL", "60"))
     SESSION_IDLE_TIMEOUT: Final = int(os.getenv("ISABELLE_IDLE_TIMEOUT", "1800"))
+    # Wall budget for creating a session's backend (acquire/create). Without
+    # it a wedged gateway holds the request for as long as the Py4J read
+    # blocks (2026-09-10: 57-minute hung acquire). Must stay below
+    # Repl.PY4J_READ_TIMEOUT so the client gets the clean timeout error.
+    SESSION_CREATE: Final       = float(os.getenv("ISABELLE_TIMEOUT_SESSION_CREATE", "600.0"))
 
 class RegularExp:
     IMPORT_RE = re.compile(r'(?ms)\bimports\b(?P<imports>.*?)\bbegin\b')
