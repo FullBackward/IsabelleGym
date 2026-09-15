@@ -220,6 +220,64 @@ class Repl_Session(session_manager: Session_Manager, initial_thys: List[String] 
     current_thy_info.foreach(_ =>
       Document_Utils.output_command_at_offset(session, current_thy_node_name, offset))
 
+  /** INCREMENTAL whole-document replacement (jEdit-style file sync, Phase B1):
+   *  diff `new_text` against the node's CURRENT source (spliff, the same
+   *  mechanism as Thy_Status.difference_edits / restore_state) and submit the
+   *  difference as ONE PIDE edit, so PIDE re-processes only from the first
+   *  changed command onward — instead of reset + re-elaboration from line 1.
+   *
+   *  Returns Left(reason) when no incremental edit may be attempted — the
+   *  caller MUST fall back to the reset path:
+   *    - "no_begun_theory": no theory entered, or the header was never
+   *      processed (there is no stable document base to diff against);
+   *    - "header_changed": the FIRST diff hunk touches the theory header
+   *      (the `theory … begin` command span of the OLD text) — includes a
+   *      theory-name change. Header edits are not applied incrementally.
+   *
+   *  Otherwise the node text becomes exactly `new_text + "\n"` (mirroring
+   *  send_edit's trailing newline, so the fast path and the reset path
+   *  converge to the same node text), the Thy_Info bookkeeping is re-based to
+   *  a fresh append-only base (Thy_Info.reset_to_fresh_base — the old
+   *  rollback/checkpoint chain is CUT: pre-replace checkpoints are unsound),
+   *  and Right(report) carries a wall-bounded status report covering only the
+   *  re-processed tail (commands starting at/after first_changed_line - 1)
+   *  with ABSOLUTE node lines. On budget expiry the replace edit is NOT
+   *  discarded (a replace is an interleaved insert/remove sequence with no
+   *  single insert to discard) — timed_out=true and the partial state stays
+   *  for inspection (LSP-style, intentionally unlike verify_chunk). */
+  def replace_document(new_text: String, wall_budget_ms: Long): Either[String, Chunk_Report] =
+    current_thy_info match {
+      case Some(thy_info) if thy_info.header_processed =>
+        val node_name = current_thy_node_name
+        val old_text = Document_Utils.node_source(session, node_name)
+        Document_Utils.header_end_offset(session, node_name) match {
+          case None => Left("no_begun_theory")
+          case Some(header_end) =>
+            val target_text = new_text + "\n"
+            val (text_edits, first_change) =
+              Edit_Utils.text_diff_edits(old_text, target_text)
+            if (first_change.exists(_ < header_end)) Left("header_changed")
+            else {
+              if (text_edits.nonEmpty)
+                update_session_with_edits(List(Edit_Utils.edit_from_text_edits(text_edits)))
+              thy_info.reset_to_fresh_base(target_text)
+              // Lines at/above the first change are byte-identical in old and
+              // new text, so the OLD-text line of the first change is also its
+              // line in the new node. since_line = first_changed_line - 1 also
+              // catches a multi-line command whose span starts one line above
+              // the change; an empty diff reports the whole (unchanged) node.
+              val first_changed_line = first_change match {
+                case Some(offset) => old_text.take(offset).count(_ == '\n') + 1
+                case None         => 1
+              }
+              val since_line = if (first_change.isDefined) first_changed_line - 1 else 1
+              Right(Document_Utils.node_status_report(
+                session, node_name, since_line, wall_budget_ms, absolute_lines = true))
+            }
+        }
+      case _ => Left("no_begun_theory")
+    }
+
   def send_edit(isar_string: String, node: Option[Document.Node.Name] = None): Unit = {
     val edits = current_thy_info match {
       case None =>

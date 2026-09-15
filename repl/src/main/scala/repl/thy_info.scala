@@ -67,6 +67,24 @@ class Thy_Info(val name: String, status: Option[Thy_Status] = None) {
   def rollback_last_text_edit_if_exists(): Unit =
     current_status = current_status.parent.getOrElse(current_status)
 
+  /** Re-base the append-only bookkeeping after a wholesale incremental REPLACE
+   *  (Repl_Session.replace_document): the parent/rollback chain and the saved
+   *  states encode the OLD text, so both are cut (unsound after a replace); the
+   *  fresh base describes a document consisting of `text` alone, ready for
+   *  further tip appends. This is the targeted equivalent of starting a new
+   *  Thy_Info on reset — deliberately NOT a generalization of the insert-only
+   *  update_given_text_edit chain. */
+  def reset_to_fresh_base(text: String): Unit = {
+    current_status = Thy_Status(
+      accumulated_thy_header_tokens = current_status.accumulated_thy_header_tokens,
+      input_thy_name_verified = current_status.input_thy_name_verified,
+      header_processed = current_status.header_processed,
+      insertion_point = text.length,
+      insertion_line = text.count(_ == '\n') + 1
+    )
+    saved_states.clear()
+  }
+
   def save_current_state(state_id: EnvStateID): Unit =
     saved_states.addOne((state_id, current_status))
 

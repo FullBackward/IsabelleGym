@@ -28,6 +28,7 @@ from .internal_models import (
     SmallStepExecuteResult,
 )
 from .theory_chunks import preview_text
+from .theory_parsing import parse_theory_header
 from .session_bigstep import BigStepMixin
 
 logger = get_logger(__name__)
@@ -63,6 +64,10 @@ class _Isabelle_Session(BigStepMixin):
         # Report of the most recent verify_chunk call (None until the first
         # one). Cleared by load_document; NOT by rollback/restore.
         self.last_chunk_report: Optional[Dict[str, Any]] = None
+        # Full text of the most recent successful load_document (either path).
+        # Gates the INCREMENTAL sync fast path: a load can diff against the
+        # live node only if a previous full-file load established the base.
+        self._loaded_text: Optional[str] = None
         # Free-form observability label (e.g. the file path a file-synced
         # client is mirroring). Set at creation; no pooling behavior change.
         self.label: Optional[str] = None
@@ -362,6 +367,7 @@ class _Isabelle_Session(BigStepMixin):
         self.verified_theories.clear()
         self.entered_thy = ""
         self.last_chunk_report = None
+        self._loaded_text = None
 
     @staticmethod
     def _ends_with_theory_end(text: str) -> bool:
@@ -371,22 +377,12 @@ class _Isabelle_Session(BigStepMixin):
         lines = [ln.strip() for ln in text.strip().splitlines() if ln.strip()]
         return bool(lines) and lines[-1] == "end"
 
-    def _step_with_report(self, text: str, timeout: float):
-        """Issue ``text`` as one edit and return (success, error, output) together
-        with a per-command status report, WITHOUT rolling back ordinary failures
-        (backend ``step_chunk_report``; the dual of verify_chunk's transactional
-        semantics). The report is stored in ``last_chunk_report``. On budget
-        timeout the backend discards the edit to cancel runaway commands."""
-        budget_ms = int(max(0.0, timeout) * 1000)
-        probe_state = not self._ends_with_theory_end(text)
-        start_time = time.time()
-        # Backend bounds the work at budget_ms; give the Python call extra grace
-        # so the Python side never times out before the backend returns its report.
-        report_json = self._call_backend(
-            lambda: self.backend.raw.step_chunk_report(text, budget_ms, probe_state),
-            timeout=timeout + Timeouts.COMMAND_DEFAULT,
-        )
-        execution_time = time.time() - start_time
+    def _store_and_interpret_report(
+        self, report_json, execution_time: float, start_time: float
+    ):
+        """Parse a backend chunk-status report JSON (verify_chunk /
+        step_chunk_report / sync_document share the shape), store it in
+        ``last_chunk_report``, and derive (report, success, error_message)."""
         try:
             report = json.loads(report_json) if report_json else {}
         except (ValueError, TypeError):
@@ -413,7 +409,90 @@ class _Isabelle_Session(BigStepMixin):
                     if msg:
                         error_message = f"line {c.get('line')}: {msg}"
                         break
+        return report, success, error_message
+
+    def _step_with_report(self, text: str, timeout: float):
+        """Issue ``text`` as one edit and return (success, error, output) together
+        with a per-command status report, WITHOUT rolling back ordinary failures
+        (backend ``step_chunk_report``; the dual of verify_chunk's transactional
+        semantics). The report is stored in ``last_chunk_report``. On budget
+        timeout the backend discards the edit to cancel runaway commands."""
+        budget_ms = int(max(0.0, timeout) * 1000)
+        probe_state = not self._ends_with_theory_end(text)
+        start_time = time.time()
+        # Backend bounds the work at budget_ms; give the Python call extra grace
+        # so the Python side never times out before the backend returns its report.
+        report_json = self._call_backend(
+            lambda: self.backend.raw.step_chunk_report(text, budget_ms, probe_state),
+            timeout=timeout + Timeouts.COMMAND_DEFAULT,
+        )
+        execution_time = time.time() - start_time
+        _, success, error_message = self._store_and_interpret_report(
+            report_json, execution_time, start_time)
         return success, error_message, ""
+
+    def _sync_document(self, text: str, timeout: float):
+        """INCREMENTAL fast path of ``load_document`` (Phase B1): the backend
+        diffs ``text`` against the live node and submits ONE PIDE replace edit,
+        so PIDE re-processes only from the first changed command onward
+        (backend ``sync_document``).
+
+        Returns (success, error, output) like ``_step_with_report``, or None
+        when the backend's report carries the ``fallback`` marker
+        (no begun theory / header changed) — the caller then uses the reset
+        path. On success this updates ``last_chunk_report`` and
+        ``_loaded_text``, and INVALIDATES all checkpoints: pre-replace
+        checkpoints reconstruct text from the insert-only chain and are
+        unsound after a replace edit. On budget timeout the backend does NOT
+        discard the replace (no single insert to discard) — the partial state
+        stays for inspection (LSP-style)."""
+        budget_ms = int(max(0.0, timeout) * 1000)
+        probe_state = not self._ends_with_theory_end(text)
+        start_time = time.time()
+        # Backend bounds the work at budget_ms; give the Python call extra grace
+        # so the Python side never times out before the backend returns its report.
+        report_json = self._call_backend(
+            lambda: self.backend.raw.sync_document(text, budget_ms, probe_state),
+            timeout=timeout + Timeouts.COMMAND_DEFAULT,
+        )
+        execution_time = time.time() - start_time
+        try:
+            report = json.loads(report_json) if report_json else {}
+        except (ValueError, TypeError):
+            report = {"timed_out": False, "commands": [],
+                      "error": "unparseable backend report"}
+        if report.get("fallback"):
+            logger.info(
+                "document sync declined by backend, falling back to reset reason=%s",
+                report.get("fallback"),
+            )
+            return None
+        _, success, error_message = self._store_and_interpret_report(
+            report_json, execution_time, start_time)
+        self._loaded_text = text
+        if self.checkpoints:
+            logger.info(
+                "document sync invalidating %s checkpoint(s) (unsound after a replace edit)",
+                len(self.checkpoints),
+            )
+            self.checkpoints.clear()
+        return success, error_message, ""
+
+    def _sync_candidate(self, text: str, thy_name: Optional[str],
+                        imports: Optional[List[str]], report: bool) -> bool:
+        """True when ``load_document`` may attempt the incremental sync path:
+        report mode on a full-file load (imports mode builds the header
+        server-side and keeps the reset path), a previous full-file load left
+        a base text, and the entered theory name matches the incoming text's
+        header theory name (canonical parse)."""
+        if not report or imports is not None:
+            return False
+        if self._loaded_text is None or not self.entered_thy:
+            return False
+        name = thy_name
+        if not name:
+            name, _ = parse_theory_header(text)
+        return bool(name) and name == self.entered_thy
 
     def load_document(self, text: str, thy_name: Optional[str] = None,
                       imports: Optional[List[str]] = None,
@@ -421,20 +500,32 @@ class _Isabelle_Session(BigStepMixin):
                       report: bool = False) -> SmallStepExecuteResult:
         """Replace the session's whole document with ``text`` (the file-sync primitive).
 
-        Resets the backend (the document model is append-only, so wholesale
-        replacement = fresh Repl_Session), clears all bookkeeping, then re-enters
-        the theory and issues ``text`` as a single edit. Two modes, mirroring
-        ``enter_thy``: if ``imports`` is given the server builds the
-        ``theory ... begin`` header and ``text`` is the body after ``begin``;
-        otherwise ``text`` must be a full .thy source including its own header
-        (the file-sync case), and ``thy_name`` defaults to the header's name.
+        Two paths. The RESET path (always used for a first load, for
+        ``imports`` mode, and whenever the incremental path declines): resets
+        the backend (the document model is append-only, so wholesale
+        replacement = fresh Repl_Session), clears all bookkeeping, then
+        re-enters the theory and issues ``text`` as a single edit. The
+        INCREMENTAL path (Phase B1, ``report=True`` full-file re-loads of the
+        same theory): the backend diffs ``text`` against the live node and
+        submits ONE PIDE replace edit, so PIDE re-processes only from the
+        first changed command onward (``_sync_candidate`` /
+        ``_sync_document``); a ``fallback`` marker in the backend's reply
+        (header changed / no begun theory) drops back to the reset path.
+
+        Two modes, mirroring ``enter_thy``: if ``imports`` is given the server
+        builds the ``theory ... begin`` header and ``text`` is the body after
+        ``begin``; otherwise ``text`` must be a full .thy source including its
+        own header (the file-sync case), and ``thy_name`` defaults to the
+        header's name.
 
         With ``report=True`` the text is issued via the backend's
-        ``step_chunk_report``: a per-command status report (same shape as
-        verify_chunk's) is produced and stored in ``last_chunk_report``, WITHOUT
-        rolling back ordinary failures (LSP-style: broken state stays for
-        inspection). On budget timeout the backend still discards the edit to
-        cancel runaway commands.
+        ``step_chunk_report`` (reset path) or ``sync_document`` (incremental
+        path): a per-command status report (same shape as verify_chunk's) is
+        produced and stored in ``last_chunk_report``, WITHOUT rolling back
+        ordinary failures (LSP-style: broken state stays for inspection). On
+        budget timeout the reset path still discards the edit to cancel
+        runaway commands; the incremental path keeps the replace (no single
+        insert to discard) and reports timed_out.
         """
         self.update_activity()
         self._acquire_request()
@@ -445,32 +536,41 @@ class _Isabelle_Session(BigStepMixin):
                     "load_document started thy_name=%s imports=%s report=%s preview=%s",
                     thy_name, imports, report, preview_text(text, Logging.COMMAND_PREVIEW_CHARS),
                 )
+                sync_used = False
                 try:
-                    self._call_backend(lambda: self.backend.raw.reset(), timeout=timeout)
-                    self._reset_bookkeeping()
+                    if self._sync_candidate(text, thy_name, imports, report):
+                        sync_result = self._sync_document(text, timeout)
+                        if sync_result is not None:
+                            success, error_message, output = sync_result
+                            sync_used = True
+                            execution_time = time.time() - start_time
+                    if not sync_used:
+                        self._call_backend(lambda: self.backend.raw.reset(), timeout=timeout)
+                        self._reset_bookkeeping()
 
-                    name = thy_name
-                    if not name and not imports:
-                        m = RegularExp.THEORY_RE.search(text)
-                        if m:
-                            name = m.group(1) or m.group(2)
-                    if not name:
-                        raise SessionError(
-                            error="load_document: could not determine theory name — "
-                                  "pass thy_name, or include a 'theory ... imports ... begin' "
-                                  "header in text",
-                            execution_time=time.time() - start_time,
-                        )
+                        name = thy_name
+                        if not name and not imports:
+                            m = RegularExp.THEORY_RE.search(text)
+                            if m:
+                                name = m.group(1) or m.group(2)
+                        if not name:
+                            raise SessionError(
+                                error="load_document: could not determine theory name — "
+                                      "pass thy_name, or include a 'theory ... imports ... begin' "
+                                      "header in text",
+                                execution_time=time.time() - start_time,
+                            )
 
-                    self.enter_thy(name, timeout=timeout, imports=imports)
-                    if report:
-                        success, error_message, output = self._step_with_report(text, timeout)
-                    else:
-                        result = self.step(text, timeout=timeout)
-                        success = is_syntax_successful(result)
-                        error_message = self._result_error(result)
-                        output = self._result_output(result)
-                    execution_time = time.time() - start_time
+                        self.enter_thy(name, timeout=timeout, imports=imports)
+                        if report:
+                            success, error_message, output = self._step_with_report(text, timeout)
+                        else:
+                            result = self.step(text, timeout=timeout)
+                            success = is_syntax_successful(result)
+                            error_message = self._result_error(result)
+                            output = self._result_output(result)
+                        execution_time = time.time() - start_time
+                        self._loaded_text = text
                 except SessionError:
                     raise  # already typed (e.g. SessionNotFound) — keep its HTTP mapping
                 except Exception as e:
@@ -483,7 +583,7 @@ class _Isabelle_Session(BigStepMixin):
 
                 self.command_history.append(
                     {
-                        "type": "document_load",
+                        "type": "document_sync" if sync_used else "document_load",
                         "command": preview_text(text, Logging.COMMAND_PREVIEW_CHARS),
                         "timestamp": start_time,
                         "success": success,
@@ -492,8 +592,8 @@ class _Isabelle_Session(BigStepMixin):
                     }
                 )
                 logger.info(
-                    "load_document finished theory=%s success=%s execution_time=%s",
-                    self.entered_thy, success, round(execution_time, 3),
+                    "load_document finished theory=%s sync=%s success=%s execution_time=%s",
+                    self.entered_thy, sync_used, success, round(execution_time, 3),
                 )
                 return SmallStepExecuteResult(
                     success=success,
