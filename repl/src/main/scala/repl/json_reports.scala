@@ -39,4 +39,20 @@ object Json_Reports {
    *  (command_at_line / goals_at_line): no theory entered, or line out of range. */
   def line_query_not_found(error: String): String =
     JSON.Format(JSON.Object("found" -> false, "error" -> error))
+
+  /** The FALLBACK reply of sync_document (incremental file sync): no
+   *  incremental edit was attempted and the caller MUST use the reset path.
+   *  Keeps the chunk-report field set (as a failing report) so the server's
+   *  report parser sees a well-formed shape; the `"fallback"` marker is what
+   *  the server keys on. Reasons: "no_begun_theory" | "header_changed". */
+  def sync_fallback_report(reason: String): String =
+    JSON.Format(JSON.Object(
+      "fallback" -> reason,
+      "timed_out" -> false,
+      "success" -> false,
+      "proof_open" -> false,
+      "pending_qed" -> false,
+      "used_sorry" -> false,
+      "elapsed_ms" -> 0,
+      "commands" -> List.empty[JSON.T]))
 }

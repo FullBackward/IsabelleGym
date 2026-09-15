@@ -9,6 +9,12 @@ import isabelle._
  *  PUT /api/v1/sessions/{id}/document with report=true — the file-sync
  *  primitive of the planned LSP-like read-only MCP.
  *
+ *  Also hosts the INCREMENTAL file-sync primitive `sync_document` (Phase B1):
+ *  a spliff-diffed PIDE replace edit against the live node, so re-syncs after
+ *  small agent edits re-process only the changed tail instead of resetting
+ *  and re-elaborating the whole file (see its Scaladoc for the fallback
+ *  contract and the divergent timeout semantics).
+ *
  *  Also hosts the LSP-like READ-ONLY line queries (`command_at_line`,
  *  `goals_at_line`): snapshot-based, no edits and no ML probes, so they work at
  *  any document position — including past a trailing theory `end`, where the
@@ -59,6 +65,47 @@ trait Backend_File_Ops { this: ReplBackend =>
         else probe_state && in_proof()
       val pending_qed = proof_open && open_subgoals().isEmpty
       JSON.Format(report.fields + ("proof_open" -> proof_open) + ("pending_qed" -> pending_qed))
+    }
+  }
+
+  /** INCREMENTAL counterpart of step_chunk_report (Phase B1): diff `text`
+   *  against the live node and submit the difference as ONE PIDE edit, so PIDE
+   *  re-processes only from the first changed command onward (jEdit-style),
+   *  instead of the caller resetting and re-elaborating from line 1.
+   *
+   *  Returns the same JSON per-command report shape as step_chunk_report, with
+   *  two contract additions:
+   *   - `"line_semantics": "absolute"` — command `line` fields are ABSOLUTE
+   *     node lines (the replace diff has no contiguous chunk to relativize
+   *     against), and the report covers only the re-processed tail (commands
+   *     starting at/after first_changed_line - 1).
+   *   - `"fallback": "no_begun_theory" | "header_changed"` INSTEAD of a report
+   *     when no incremental edit may be attempted (no begun theory, or the
+   *     first diff hunk touches the `theory … begin` span — includes a
+   *     theory-name change). The caller MUST fall back to the reset path.
+   *
+   *  TIMEOUT SEMANTICS differ from step_chunk_report ON PURPOSE: on budget
+   *  expiry the replace edit is NOT discarded — a replace is an interleaved
+   *  insert/remove sequence with no single insert to discard, unlike the
+   *  append-only chunk step_chunk_report can drop via discard_last_edit. The
+   *  report carries timed_out=true and the partial state stays for inspection
+   *  (LSP-style). probe_state has the same meaning as in step_chunk_report. */
+  def sync_document(text: String, wall_budget_ms: Long, probe_state: Boolean): String = {
+    Repl_Output.reset()
+    repl_session.replace_document(text, wall_budget_ms) match {
+      case Left(reason) => Json_Reports.sync_fallback_report(reason)
+      case Right(report) =>
+        val proof_open =
+          if (report.timed_out) false  // replace kept (no discard) — see scaladoc
+          else if (!report.success) false
+          else if (repl_session.current_thy_ended) false  // trailing `end`: theory closed
+          else probe_state && in_proof()
+        val pending_qed = proof_open && open_subgoals().isEmpty
+        JSON.Format(
+          report.fields
+            + ("proof_open" -> proof_open)
+            + ("pending_qed" -> pending_qed)
+            + ("line_semantics" -> "absolute"))
     }
   }
 

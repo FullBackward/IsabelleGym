@@ -2,6 +2,8 @@ package repl
 
 import isabelle._
 
+import io.bullet.spliff.Diff
+
 /** Construction of PIDE document edits: text insert/remove edits, node
  *  perspective edits, and theory-header processing (parsing the accumulated
  *  header, importing its dependencies, emulating the REPL helper import).
@@ -28,6 +30,40 @@ object Edit_Utils {
     Document.Node.Edits[Text.Edit, Text.Perspective](
       text_edits
     )
+
+  /** Minimal insert/remove edit sequence transforming `old_text` into
+   *  `new_text`, computed with the bundled spliff diff — the SAME mechanism as
+   *  Thy_Status.difference_edits (offsets are adjusted cumulatively, so the
+   *  edits apply in list order against the evolving text). Also returns the
+   *  base offset of the FIRST change (None when the texts are identical); ops
+   *  are emitted in ascending offset order, so this is the minimum offset any
+   *  edit touches. (The trailing `.nn` mirrors Thy_Status.difference_edits:
+   *  the RC0 track's compiler flags type String.substring results as
+   *  nullable.) Backs Repl_Session.replace_document (incremental PIDE
+   *  document sync). */
+  def text_diff_edits(
+      old_text: String,
+      new_text: String
+  ): (List[Text.Edit], Option[Text.Offset]) =
+    if (old_text == new_text) (List(), None)
+    else {
+      val diff = Diff(old_text, new_text)
+      var base_offset = 0
+      var first_change: Option[Text.Offset] = None
+      val edits = diff.delInsOpsSorted.map {
+        case Diff.Op.Insert(baseIx, targetIx, count) =>
+          val offset = base_offset + baseIx
+          if (first_change.isEmpty) first_change = Some(offset)
+          base_offset += count
+          Text.Edit.insert(offset, new_text.substring(targetIx, targetIx + count).nn)
+        case Diff.Op.Delete(baseIx, count) =>
+          val offset = base_offset + baseIx
+          if (first_change.isEmpty) first_change = Some(offset)
+          base_offset -= count
+          Text.Edit.remove(offset, old_text.substring(baseIx, baseIx + count).nn)
+      }.toList
+      (edits, first_change)
+    }
 
   def set_required_edit(required: Boolean): Edit =
     Document.Node.Perspective[Text.Edit, Text.Perspective](

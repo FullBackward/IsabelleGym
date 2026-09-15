@@ -148,6 +148,18 @@ object Document_Utils {
       .lastOption
   }
 
+  /** End offset (exclusive) of the node's theory-HEADER command (`theory …
+   *  begin` is ONE command span named "theory"), if the node has one. Used by
+   *  Repl_Session.replace_document to detect diffs that touch the header —
+   *  those are NOT applied incrementally (the caller falls back to reset). */
+  def header_end_offset(session: Headless.Session, node_name: Document.Node.Name): Option[Text.Offset] = {
+    val snapshot = stable_node_snapshot(session, node_name)
+    snapshot.node.command_iterator().toList
+      .collectFirst { case (command, offset) if command.span.name == "theory" =>
+        offset + command.length
+      }
+  }
+
   /** True when the node's LAST non-ignored command is `end` (theory or block end —
    *  either way no proof can be open immediately after it, and commands appended past
    *  a trailing theory `end` never execute). Drives the post-`end` probe handling in
@@ -200,12 +212,18 @@ object Document_Utils {
    *                "kind":str,"status":str,
    *                "range":{"start":{"line":int,"col":int},"end":{"line":int,"col":int}},
    *                "messages":[{"sev":"error|warning","text":str}]}]}
+   *
+   * With `absolute_lines = true` (Repl_Session.replace_document's incremental
+   * sync) the `line` field is the ABSOLUTE node line instead of chunk-relative —
+   * the sync has no contiguous "chunk" to relativize against. The backend caller
+   * marks such reports with "line_semantics": "absolute".
    */
   def node_status_report(
       session: Headless.Session,
       node_name: Document.Node.Name,
       since_line: Int,
-      wall_budget_ms: Long
+      wall_budget_ms: Long,
+      absolute_lines: Boolean = false
   ): Chunk_Report = {
     val start_ms = System.currentTimeMillis()
     val deadline = start_ms + wall_budget_ms
@@ -286,9 +304,11 @@ object Document_Utils {
           val base_fields: JSON.Object.T = JSON.Object(
             // chunk-relative line (1-based within the submitted chunk), so stuck_line /
             // failed line maps to the text the caller sent — not the absolute line in the
-            // accumulated node. `node_line` keeps the absolute line for debugging.
+            // accumulated node. `node_line` keeps the absolute line for debugging. With
+            // absolute_lines (incremental document sync), `line` IS the absolute line:
+            // the replace diff has no contiguous chunk to relativize against.
             "i" -> i,
-            "line" -> (start_line - since_line + 1),
+            "line" -> (if (absolute_lines) start_line else start_line - since_line + 1),
             "node_line" -> start_line,
             "kind" -> command.span.name,
             "status" -> status,
